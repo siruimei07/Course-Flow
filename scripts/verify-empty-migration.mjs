@@ -11,7 +11,7 @@ if (configuredUrl === undefined) {
 }
 
 const adminUrl = new URL(configuredUrl);
-const databaseName = `courseflow_p0_${randomUUID().replaceAll("-", "")}`;
+const databaseName = `courseflow_p1_${randomUUID().replaceAll("-", "")}`;
 const testUrl = new URL(configuredUrl);
 testUrl.pathname = `/${databaseName}`;
 
@@ -30,14 +30,24 @@ try {
     const migration = await verification.query(
       "select count(*)::text as count from drizzle.__drizzle_migrations",
     );
-    if (schema.rows[0]?.exists !== true || migration.rows[0]?.count !== "1") {
-      throw new Error("The empty database did not reach the expected P0 migration state.");
+    const tables = await verification.query(
+      `select count(*)::text as count from information_schema.tables
+       where table_schema = 'courseflow' and table_name in
+         ('user_profiles','academic_terms','courses','meeting_patterns','meeting_exceptions',
+          'course_items','task_labels','grading_schemes','grade_components','grade_results')`,
+    );
+    if (
+      schema.rows[0]?.exists !== true ||
+      migration.rows[0]?.count !== "3" ||
+      tables.rows[0]?.count !== "10"
+    ) {
+      throw new Error("The empty database did not reach the expected P1 migration state.");
     }
   } finally {
     await verification.end();
   }
 
-  process.stdout.write("Empty PostgreSQL database migrated to the P0 baseline.\n");
+  process.stdout.write("Empty PostgreSQL database migrated through the P1 schema.\n");
 } finally {
   await admin.query(
     "select pg_terminate_backend(pid) from pg_stat_activity where datname = $1 and pid <> pg_backend_pid()",

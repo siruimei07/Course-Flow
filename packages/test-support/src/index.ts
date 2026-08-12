@@ -33,3 +33,5 @@ export class SequenceIdGenerator implements IdGenerator {
     return id;
   }
 }
+
+export { MemoryCourseFlowRepository } from "./memory-repositories";

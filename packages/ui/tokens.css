@@ -1,15 +1,143 @@
 :root {
+  color-scheme: light;
+
+  /* UI-0001 / ui-v1 color fingerprint. */
   --surface-outer: #aeb7c3;
+  --surface-canvas: #fafaf8;
   --surface-raised: #ffffff;
+  --surface-soft: #f3f3ef;
+  --surface-warm: #fff7da;
+  --surface-overlay: #ffffff;
+  --surface-sunken: #f7f7f3;
+  --surface-header: rgb(250 250 248 / 86%);
+  --surface-dark: #2a2b28;
   --text-primary: #171816;
   --text-secondary: #2a2b28;
+  --text-muted: #62645f;
+  --text-faint: #aeb1aa;
+  --text-inverse: #ffffff;
+  --text-inverse-muted: #c6c8c2;
+  --text-danger: #9b3027;
   --border-subtle: #dedfd9;
+  --border-strong: #c6c8c1;
   --focus-ring: #235ee7;
   --accent-primary: #ffcc3d;
+  --accent-primary-strong: #e3a900;
   --text-on-accent: #171816;
-  --radius-control: 0.875rem;
+
+  /* Status triples keep meaning available without relying on color alone. */
+  --status-info-surface: #edf4ff;
+  --status-info-text: #2458a9;
+  --status-info-border: #b9cff4;
+  --status-success-surface: #edf8ef;
+  --status-success-text: #2f7338;
+  --status-success-border: #b9dfbe;
+  --status-warning-surface: #fff7da;
+  --status-warning-text: #755600;
+  --status-warning-border: #f0dda2;
+  --status-danger-surface: #fff0ed;
+  --status-danger-text: #9b3027;
+  --status-danger-border: #edc0ba;
+
+  /* Accessible fixed course palette; persisted records store these keys. */
+  --course-blue: #5a92ee;
+  --course-green: #70b778;
+  --course-purple: #865ddd;
+  --course-orange: #ef7e34;
+  --course-red: #bd4438;
+  --course-blue-soft: #edf4ff;
+  --course-green-soft: #edf8ef;
+  --course-purple-soft: #f2edff;
+  --course-orange-soft: #fff1e7;
+  --course-red-soft: #fff0ed;
+
+  /* Geometry and depth are direct extractions from ui-v1. */
+  --radius-shell: 2.25rem;
   --radius-panel: 1.5rem;
-  --shadow-panel: 0 1rem 2.5rem rgb(35 35 31 / 12%);
-  --font-display: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --font-body: "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --radius-dialog: 1.5rem;
+  --radius-control: 0.875rem;
+  --radius-compact: 0.75rem;
+  --radius-pill: 999px;
+  --control-height: 2.75rem;
+  --shadow-shell: 0 2rem 5rem rgb(38 45 54 / 22%);
+  --shadow-float: 0 1rem 2.5rem rgb(35 35 31 / 12%);
+  --shadow-panel:
+    0.72rem 0.72rem 1.6rem rgb(174 177 170 / 24%), -0.58rem -0.58rem 1.3rem rgb(255 255 255 / 82%),
+    inset 0 1px 0 rgb(255 255 255 / 72%);
+
+  /* Type and spacing remain semantic so a future ui-vN can replace values. */
+  --font-display:
+    "Poppins", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui,
+    sans-serif;
+  --font-body:
+    "Poppins", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", ui-sans-serif, system-ui,
+    sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  --space-1: 0.5rem;
+  --space-2: 0.6rem;
+  --space-3: 0.75rem;
+  --space-4: 0.875rem;
+  --space-5: 1rem;
+  --space-6: 1.15rem;
+  --space-7: 1.5rem;
+  --space-8: 2rem;
+
+  /* Motion communicates state and spatial continuity, never business truth. */
+  --motion-fast: 160ms;
+  --motion-view: 220ms;
+  --motion-page: 280ms;
+  --motion-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-distance: 0.4rem;
+  --z-header: 20;
+  --z-feedback: 100;
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-outer: #9da9a5;
+  --surface-canvas: #11110f;
+  --surface-raised: #242321;
+  --surface-soft: #302f2c;
+  --surface-warm: #343020;
+  --surface-overlay: #292826;
+  --surface-sunken: #1b1a18;
+  --surface-header: rgb(18 18 16 / 84%);
+  --surface-dark: #0e0e0d;
+  --text-primary: #f4f3ee;
+  --text-secondary: #f4f3ee;
+  --text-muted: #c0bfb9;
+  --text-faint: #93928c;
+  --text-inverse: #f8f7f2;
+  --text-inverse-muted: #c8c7c1;
+  --border-subtle: #3f3e3a;
+  --border-strong: #7b7972;
+  --focus-ring: #9bc0ff;
+  --accent-primary: #f6d85b;
+  --accent-primary-strong: #f2c940;
+  --text-on-accent: #171816;
+  --course-blue: #75a7ff;
+  --course-green: #7bd38b;
+  --course-purple: #a98aff;
+  --course-orange: #ff9b58;
+  --course-red: #ff7b70;
+  --shadow-shell: 0 2rem 5rem rgb(0 0 0 / 48%);
+  --shadow-float: 0 1rem 2.5rem rgb(0 0 0 / 36%);
+  --shadow-panel:
+    0.65rem 0.65rem 1.4rem rgb(0 0 0 / 24%), -0.35rem -0.35rem 1rem rgb(255 255 255 / 3%),
+    inset 0 1px 0 rgb(255 255 255 / 5%);
+}
+
+@media (prefers-contrast: more) {
+  :root {
+    --border-subtle: var(--border-strong);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0.01ms;
+    --motion-view: 0.01ms;
+    --motion-page: 0.01ms;
+    --motion-distance: 0;
+  }
 }

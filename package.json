@@ -9,6 +9,7 @@
     "pnpm": ">=11.16.0 <12"
   },
   "devDependencies": {
+    "@courseflow/core": "workspace:*",
     "@courseflow/infrastructure": "workspace:*",
     "@courseflow/test-support": "workspace:*",
     "@eslint/js": "^9.39.0",
@@ -35,7 +36,7 @@
     "vitest": "^4.0.0"
   },
   "scripts": {
-    "build": "pnpm --filter @courseflow/core build && pnpm --filter @courseflow/infrastructure build && pnpm --filter @courseflow/test-support build && pnpm --filter @courseflow/worker build && pnpm --filter @courseflow/web build",
+    "build": "pnpm --filter @courseflow/core build && pnpm --filter @courseflow/contracts build && pnpm --filter @courseflow/infrastructure build && pnpm --filter @courseflow/test-support build && pnpm --filter @courseflow/worker build && pnpm --filter @courseflow/web build",
     "db:migrate": "pnpm --filter @courseflow/infrastructure build:cli && dotenv -e .env -- node packages/infrastructure/dist/migrate.cjs",
     "deps:down": "docker compose down",
     "deps:prepare": "pnpm --filter @courseflow/infrastructure build:cli && dotenv -e .env -- node packages/infrastructure/dist/ensure-object-store.cjs",
@@ -44,6 +45,7 @@
     "format": "prettier --config prettier.config.mjs --write .",
     "format:check": "prettier --config prettier.config.mjs --check .",
     "gate:p0": "pnpm install --frozen-lockfile && pnpm deps:up && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:migration && pnpm build && pnpm test:e2e && pnpm security",
+    "gate:p1": "pnpm install --frozen-lockfile && pnpm deps:up && pnpm db:migrate && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:migration && pnpm test:p1:postgres && pnpm build && pnpm test:e2e && pnpm security",
     "lint": "eslint .",
     "security": "pnpm security:secrets && pnpm security:licenses && pnpm security:audit",
     "security:audit": "pnpm audit --audit-level high",
@@ -51,6 +53,7 @@
     "security:secrets": "node scripts/check-secrets.mjs",
     "test:e2e": "dotenv -e .env -- playwright test",
     "test:migration": "pnpm --filter @courseflow/infrastructure build:cli && dotenv -e .env -- node scripts/verify-empty-migration.mjs",
+    "test:p1:postgres": "dotenv -e .env -- tsx scripts/verify-p1-postgres-contract.ts",
     "test:unit": "vitest run",
     "typecheck": "pnpm --recursive --if-present typecheck"
   }

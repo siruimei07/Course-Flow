@@ -10,11 +10,14 @@
     "lint": "eslint . --max-warnings=0"
   },
   "dependencies": {
+    "@courseflow/contracts": "workspace:*",
+    "@courseflow/core": "workspace:*",
     "@courseflow/infrastructure": "workspace:*",
     "@courseflow/ui": "workspace:*",
     "next": "16.2.11",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "zod": "^4.1.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -22,7 +25,6 @@
     "@types/react-dom": "^19.2.0",
     "eslint": "^9.0.0",
     "eslint-config-next": "16.2.11",
-    "typescript": "^5.9.0",
-    "zod": "^4.1.0"
+    "typescript": "^5.9.0"
   }
 }

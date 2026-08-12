@@ -14,7 +14,7 @@
 
 | ID      | 页面/功能                   | 输入形式           | 状态       | 目标位置                                                           | 条目                                   |
 | ------- | --------------------------- | ------------------ | ---------- | ------------------------------------------------------------------ | -------------------------------------- |
-| UI-0001 | CourseFlow 多页面视觉实验室 | 单文件 HTML/CSS/JS | frozen | 全局 shell、dashboard、courses、calendar、tasks、sources、insights | [条目](#ui-0001-courseflow-visual-lab) |
+| UI-0001 | CourseFlow 多页面视觉实验室 | 单文件 HTML/CSS/JS | verified | 全局 shell、dashboard、courses、calendar、tasks、sources、insights | [条目](#ui-0001-courseflow-visual-lab) |
 
 ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/integrated/verified/superseded`。`frozen` 表示已经建立用户确认、Git 可追踪的设计基线，但尚不表示生产 route 已接入；被替代条目保留并指向新 ID，避免未来 agent 又恢复旧实现。
 
@@ -25,14 +25,29 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 - 用户明确要求：不改变已有 UI 设计；先登记并拆分视觉/交互/数据职责，再判断原型或接入；HTML/CSS 迁移为 CourseFlow React/Next.js、semantic token 与最小 Client island；原稿未覆盖的页面和状态只按同一风格推导；不把 mock 或页面自带规则写入正式模型；只有新增产品行为才请求确认。冻结期间补充确认：产品不承诺移动端或窄屏应用布局，只验收 768/1280 桌面参考 viewport 与 200% browser zoom。
 - 版本证据：[ui-v1 基线](./baselines/ui-v1/BASELINE.md)；`207974` bytes；SHA-256 `88A968C3241AE704E23CFE1F531A2D4AC10806AC89D8DE4A2C6BE150B33A991A`；冻结时间 `2026-08-12T18:03:02+08:00`
 - 目标 route/feature：全局 app shell；`/dashboard`；`/courses` 与课程支持 route；`/calendar`；`/tasks`；`/sources`、`/courses/[courseId]/sources` 与 `/imports/[runId]`；`/insights`
-- 当前状态：frozen
+- 当前状态：verified（P1 范围；P2–P6 页面仍按各自阶段接入）
+
+### 生产映射与未来替换通道
+
+- P1 生产实现以本条目的不可变 `ui-v1` 快照为源码素材：保留 app shell、导航、panel、表单、课程列表/详情和任务行的 HTML/CSS family，改写为 React/Next.js route、feature 与最小 Client island；只替换 fixture、hash 导航和内联脚本，不重新选择视觉方向。
+- 生产 CSS 只消费 `packages/ui/tokens.css` 的语义 token。`ui-v1` 的颜色、字体、圆角、阴影与 motion 已在 P1 开始前完整落入该文件；页面独特构图留在对应 feature，不另建第二套 token。
+- 未来设计替换不得修改 `docs/design/baselines/ui-v1/`。流程固定为：冻结新的 `ui-vN` → 在新基线写相对 `ui-v1` 的 change/deviation ledger → 只调整语义 token、primitive 或明确受影响的 feature → 在相同 route/state/viewport 做新旧参考与生产截图比对 → 用户确认后更新本条目指向并保留旧版本。
+- 领域 contract、PostgreSQL schema 和 view model 不依赖具体基线版本；因此未来视觉替换可以更换 presentation，而不迁移正式课程记录或复制业务规则。
 
 ### 当前阶段判定
 
-- 结论：**`ui-v1` 已冻结，仍不接生产 route**。route/状态矩阵与冻结前审计见 [SCREEN_MATRIX](./baselines/ui-v1/SCREEN_MATRIX.md) 和 [BASELINE](./baselines/ui-v1/BASELINE.md)。实施计划仍以 P0 为 `next`，仓库当前没有可供页面接入的正式 query/command/view model；此时接生产只能依赖 fixture，违反“生产页面无 mock”门禁。
-- 当前允许：后续到对应实施阶段后，把冻结快照迁移为语义 token、feature presentation 与最小 Client island；fixture 只留在原型/测试边界。任何 fidelity 工作以 `ui-v1` 为只读权威，偏差进入 deviation ledger。
-- 当前禁止：把视觉稿中的课程、日期、百分比、倒计时、热力图或审核结果写入 `packages/core`、数据库、production composition 或正式 route；不得因原稿画出了某个按钮就新增 command 或领域状态。
-- 进入生产接入的前提：冻结门禁已经完成；仍须按 P0→P1… 的阶段顺序获得真实 contract，到对应阶段后从 `contract -> feature props` 接入并移除 production hard-code。本次任务明确不开始生产页面实现。
+- 结论：**`ui-v1` 保持冻结且 P1 范围已完成生产接入与验证**。route/状态矩阵与冻结前审计见 [SCREEN_MATRIX](./baselines/ui-v1/SCREEN_MATRIX.md) 和 [BASELINE](./baselines/ui-v1/BASELINE.md)；生产实现不修改该只读目录。
+- P1 映射：全局 shell、主题、课程列表/详情、任务行和表单 family 已迁移到真实 route；`/terms`、课程向导、课节例外、Timeline 与 Gradebook 是按同一 token family 推导的新增 surface。所有正式数字来自 auth-scoped view model/PostgreSQL，不迁移原稿 fixture。
+- 阶段边界：P2–P6 的派生任务分组、日历实例、导入与 Insight 仍显示诚实的阶段状态，不为追求视觉填充而迁移原稿 mock。它们在各自 contract 解锁后沿同一替换流程接入。
+- 偏差：参考稿的搜索、通知、近期事项和候选统计不属于 P1 contract，未伪造；真实验收数据只有 1 门课程，因此列表密度低于参考稿；英文课程名和 Gradebook 标签保留领域术语。以上均为范围/数据真实性偏差，不是新视觉方向。
+
+### P1 视觉验证（2026-08-13）
+
+- 概念权威：`docs/design/baselines/ui-v1/reference/courseflow.html`；对照截图为 `1280x900/courses--selected-course--light.png`、`768x1024/courses--selected-course--light.png` 与任务页对应状态。
+- 最新实现：Playwright 在生产构建、真实 PostgreSQL journey 完成后，以原生 viewport 生成截图，并固化为 `docs/design/verification/p1/courses--selected-course--light--1280x900.png` 与 `docs/design/verification/p1/tasks--manual-item--light--768x1024.png`；另由 Codex In-app Browser 在 768×1024/1280×900 做交互与控制台检查。
+- 五点比对：胶囊顶栏与六入口导航一致；暖白画布/黄色主操作和深色主题一致；shell/panel/control 圆角层级一致；课程色轨、列表—深色详情卡关系一致；标题/元数据/状态标签的层级与中等密度一致。768 下栅格顺序改为纵向但无横向溢出，1280 下保留左右主从结构。
+- 文案差异：参考稿 fixture 的 `CSC258H5`、候选数、近期事项与模拟百分比全部替换为 canonical journey 的 `CSC-P1`、三类真实课节、Reading Week、手工事项和成绩口径；没有把 copy diff 写回领域规则。
+- 验证结论：P1 可见范围对 `ui-v1` 达到高保真；差异均来自真实 contract、可访问性或阶段范围。Browser 最终 console 为 0 error/0 warn，skip link 可聚焦，主题切换成功；视觉替换 seam 保持可用。
 
 ### 视觉意图
 
@@ -81,8 +96,8 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 - [x] loading/empty/partial/error/success 等适用状态已在矩阵标为 covered/derived/pending
 - [x] 768/1280 桌面参考 viewport 与 200% zoom
 - [x] 键盘、focus、语义和非颜色表达
-- [ ] 中文/英文、长文本和真实 contract
-- [ ] 视觉回归、测试和旧实现清理
+- [x] P1 中文/英文、长文本和真实 contract
+- [x] P1 视觉回归、测试和被替换生产实现清理
 
 ## 条目模板
 

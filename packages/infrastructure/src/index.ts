@@ -5,3 +5,9 @@ export type { DependencyName, ReadinessReport } from "./dependencies";
 export { createLogger } from "./logger";
 export type { AppLogger, LogContext, LogLevel } from "./logger";
 export { getOrCreateRequestId } from "./request-id";
+export {
+  createPostgresCourseFlowRepository,
+  PostgresCourseFlowRepository,
+  type UserProfileSeed,
+} from "./postgres-courseflow-repository";
+export * from "./schema";

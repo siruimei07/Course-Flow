@@ -7,8 +7,8 @@
 | 阶段                                   | 状态     | 解锁条件                                  |
 | -------------------------------------- | -------- | ----------------------------------------- |
 | P0：仓库与质量骨架                     | `done`   | 全部门禁已通过                            |
-| P1：学期、课程、课表、任务与成绩闭环   | `next`   | P0 为 `done`                              |
-| P2：总览、任务分组、热力图、冲突和 ICS | `locked` | P1 为 `done`                              |
+| P1：学期、课程、课表、任务与成绩闭环   | `done`   | P0 为 `done`                              |
+| P2：总览、任务分组、热力图、冲突和 ICS | `next`   | P1 为 `done`                              |
 | P3：上传与确定性导入骨架               | `locked` | P2 为 `done`                              |
 | P4：真实 PDF/图片与 AI 提取            | `locked` | P3 为 `done`，且 MVP UI 硬门禁通过        |
 | P5：UI 整合与体验打磨                  | `locked` | P4 为 `done`                              |
@@ -21,6 +21,14 @@
 P0 标为 `done`，P1 解锁为 `next`。在 Node 24.14.0、pnpm 11.16.0、Docker Engine 29.1.3、Compose 2.40.3、PostgreSQL 17.10、LocalStack Community 4.14.0 和 Chrome 151.0.7922.110 环境中，`pnpm gate:p0` 以退出码 0 完整通过。
 
 实际证明：frozen install 与 S3 bucket 准备通过；format、lint、strict typecheck 通过；Vitest 3 个测试文件/3 个测试通过；全新 PostgreSQL 数据库迁移到 P0 baseline；worker 与 Next.js production build 通过；Playwright 1 条 canonical smoke 通过，覆盖首屏、键盘焦点、request ID、Web/Worker liveness 与 PostgreSQL/S3 readiness；秘密扫描 104 个源码文件、生产依赖许可证 68 个包通过，`pnpm audit --audit-level high` 通过（仍报告 1 low、1 moderate，不触发 high 阈值）。此前缺少容器运行时、锁定 Chromium 下载超时和依赖不可达的阻塞均已解除；P0 无未满足完成项。
+
+### P1 门禁记录（2026-08-13）
+
+P1 标为 `done`，P2 解锁为 `next`。P0 证据先经复核：阶段记录与同一基线的 format、lint、strict typecheck、unit、production build 门禁均保持通过，故 P1 开工条件成立。
+
+P1 实际证明：先把 `ui-v1` 的全局风格指纹及颜色、字体、圆角、阴影、motion/reduced-motion 固化到 `packages/ui/tokens.css`，再以真实 auth scope、PostgreSQL repository、Zod HTTP contract 和 React/Next.js 页面完成纵向切片。全新数据库可迁移到 14 张 P1 表；PostgreSQL contract 在断开并重连后验证 owner/stranger 隔离、版本冲突、Lecture/TUT/PRA、Reading Week、四种事项时间语义、标签、评分方案与手工结果持久化；其中纯日期保持 `2026-09-30`，不经 UTC 午夜转换。Vitest 6 个文件/13 个最小测试通过，覆盖权限、同源写入边界、DST/课节语义、Reading Week 保留例外、成绩整数不变量/未知权重及版本冲突。
+
+生产构建 Playwright canonical journey 通过 1/1：创建学期和 Reading Week → 创建含 3 条 Lecture/TUT/PRA 周期规则的课程 → 创建学期标签和手工事项 → 从 Timeline 回读 → 创建 20%/80% 评分方案并录入 `80/100` → Gradebook 显示已获总评 `16%`、已出分部分 `80%`、覆盖权重 `20%` → 刷新后仍存在；同时验证 health/readiness、键盘 skip link、768/1280 截图和 640 CSS px（1280 在 200% zoom 的等价宽度）无横向溢出。内置 Browser 在 768 与 1280 下复核真实 contract 页面、浅深主题、焦点和控制台，最终无 error/warn。production build、frozen install、format、lint、typecheck、秘密扫描 180 个源码文件、69 个生产依赖许可证和 `pnpm audit --audit-level high` 均通过（仍仅 1 low、1 moderate）。P1 明确未实现 GPA 或最终成绩预测；无未满足完成项。
 
 ## 阶段 0：仓库与质量骨架
 

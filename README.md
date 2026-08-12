@@ -2,7 +2,7 @@
 
 CourseFlow 把学期课表、课程事项、资料证据与手工成绩整理成一套可核对的个人课程计划。自动抽取只产生候选；只有用户作出审核决定后，候选才可以进入正式课程记录。
 
-当前仓库提供 P0 的可运行质量骨架：Next.js web、常驻 Node worker、PostgreSQL、S3-compatible 本地对象存储、迁移、健康检查和统一质量门。业务功能从 P1 开始，当前应用壳不使用课程 mock 冒充已完成功能。实际阶段状态以 [实施计划](./docs/architecture/IMPLEMENTATION_PLAN.md) 为准。
+当前仓库已完成 P1：在 P0 的 Next.js、Node worker、PostgreSQL、S3-compatible 本地对象存储和统一质量门上，提供 auth-scoped 的学期、Reading Week、课程/多课节、手工事项/标签与 Gradebook 闭环。生产页面只读取正式 contract，不用课程 mock 冒充功能；不计算 GPA 或预测最终成绩。实际阶段状态以 [实施计划](./docs/architecture/IMPLEMENTATION_PLAN.md) 为准。
 
 ## 本地启动
 
@@ -28,15 +28,15 @@ pnpm dev
 
 停止应用使用 `Ctrl+C`；本地依赖可用 `pnpm deps:down` 停止。该命令不会删除数据卷。
 
-## P0 质量门
+## P1 质量门
 
 本地与 CI 使用同一个阶段门禁：
 
 ```powershell
-pnpm gate:p0
+pnpm gate:p1
 ```
 
-它依次验证 frozen install、格式、ESLint/模块边界、TypeScript strict、Vitest、空库 migration、production build、web/worker health 与唯一 Playwright 启动 smoke，并执行依赖漏洞、许可证和秘密扫描。需要只运行某一层时，以根 `package.json` 中的脚本为准。
+它依次验证 frozen install、依赖与 bucket 准备、当前库和空库 migration、格式、ESLint/模块边界、TypeScript strict、最小 Vitest 集、P1 PostgreSQL 权限/持久化/版本契约、production build，以及唯一 Playwright canonical journey，并执行依赖漏洞、许可证和秘密扫描。需要只运行某一层时，以根 `package.json` 中的脚本为准。
 
 ## 文档入口
 

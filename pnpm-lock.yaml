@@ -12,6 +12,9 @@ importers:
 
   .:
     devDependencies:
+      '@courseflow/core':
+        specifier: workspace:*
+        version: link:packages/core
       '@courseflow/infrastructure':
         specifier: workspace:*
         version: link:packages/infrastructure
@@ -87,6 +90,12 @@ importers:
 
   apps/web:
     dependencies:
+      '@courseflow/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@courseflow/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@courseflow/infrastructure':
         specifier: workspace:*
         version: link:../../packages/infrastructure
@@ -102,6 +111,9 @@ importers:
       react-dom:
         specifier: 19.2.8
         version: 19.2.8(react@19.2.8)
+      zod:
+        specifier: ^4.1.0
+        version: 4.4.3
     devDependencies:
       '@types/node':
         specifier: ^24.0.0
@@ -121,9 +133,6 @@ importers:
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
-      zod:
-        specifier: ^4.1.0
-        version: 4.4.3
 
   apps/worker:
     dependencies:
@@ -153,6 +162,16 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  packages/contracts:
+    dependencies:
+      zod:
+        specifier: ^4.1.0
+        version: 4.4.3
+    devDependencies:
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   packages/core:
     devDependencies:
       typescript:
@@ -164,6 +183,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.900.0
         version: 3.1107.0
+      '@courseflow/core':
+        specifier: workspace:*
+        version: link:../core
       drizzle-orm:
         specifier: 0.45.2
         version: 0.45.2(@types/pg@8.21.0)(pg@8.23.0)
