@@ -1,0 +1,15 @@
+:root {
+  --surface-outer: #aeb7c3;
+  --surface-raised: #ffffff;
+  --text-primary: #171816;
+  --text-secondary: #2a2b28;
+  --border-subtle: #dedfd9;
+  --focus-ring: #235ee7;
+  --accent-primary: #ffcc3d;
+  --text-on-accent: #171816;
+  --radius-control: 0.875rem;
+  --radius-panel: 1.5rem;
+  --shadow-panel: 0 1rem 2.5rem rgb(35 35 31 / 12%);
+  --font-display: "Segoe UI Variable Display", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-body: "Segoe UI Variable Text", "PingFang SC", "Microsoft YaHei", sans-serif;
+}

@@ -1,0 +1,11 @@
+courseflow-visual-lab.html
+.next
+coverage
+dist
+node_modules
+playwright-report
+test-results
+pnpm-lock.yaml
+docs
+node_modules.p0-recovery
+.p0-tmp
