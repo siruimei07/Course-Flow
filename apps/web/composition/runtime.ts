@@ -2,8 +2,10 @@ import {
   asUserId,
   createAcademics,
   createPlanning,
+  createSchedule,
   type Academics,
   type Planning,
+  type Schedule,
   type UserScope,
 } from "@courseflow/core";
 import {
@@ -46,6 +48,7 @@ type WebRuntime = Readonly<{
   auth?: AuthSessionPort;
   configError?: ConfigError;
   planning?: Planning;
+  schedule?: Schedule;
   readiness: () => Promise<ReadinessReport>;
 }>;
 
@@ -67,8 +70,12 @@ function createWebRuntime(): WebRuntime {
         "No production auth adapter is configured. Set AUTH_MODE=development only for local development and tests.",
       );
     }
+    const fixedNow = process.env.COURSEFLOW_NOW;
+    const clock = {
+      now: () => (fixedNow === undefined ? new Date() : new Date(fixedNow)),
+    };
     const repository = createPostgresCourseFlowRepository({
-      clock: { now: () => new Date() },
+      clock,
       databaseUrl: config.DATABASE_URL,
       ids: { nextId: randomUUID },
     });
@@ -77,6 +84,7 @@ function createWebRuntime(): WebRuntime {
       academics: createAcademics(repository),
       auth: new DevelopmentIdentityAdapter(repository),
       planning: createPlanning(repository),
+      schedule: createSchedule(repository, { clock }),
       readiness: dependencies.readiness,
     };
   } catch (error) {
@@ -100,6 +108,7 @@ export async function getScopedCourseFlow(): Promise<
   Readonly<{
     academics: Academics;
     planning: Planning;
+    schedule: Schedule;
     scope: UserScope;
   }>
 > {
@@ -108,13 +117,15 @@ export async function getScopedCourseFlow(): Promise<
     runtime.configError !== undefined ||
     runtime.academics === undefined ||
     runtime.auth === undefined ||
-    runtime.planning === undefined
+    runtime.planning === undefined ||
+    runtime.schedule === undefined
   ) {
     throw runtime.configError ?? new Error("CourseFlow runtime is unavailable.");
   }
   return {
     academics: runtime.academics,
     planning: runtime.planning,
+    schedule: runtime.schedule,
     scope: await runtime.auth.getUserScope(),
   };
 }

@@ -11,22 +11,36 @@ export const dynamic = "force-dynamic";
 export default async function CoursesPage({
   searchParams,
 }: Readonly<{ searchParams: Promise<{ courseId?: string }> }>) {
-  const { academics, planning, scope } = await getScopedCourseFlow();
+  const { academics, planning, schedule, scope } = await getScopedCourseFlow();
   const [terms, courses, params] = await Promise.all([
     academics.listTerms(scope),
     academics.listCourses(scope),
     searchParams,
   ]);
-  const visible = courses.filter((setup) => setup.course.archivedAt === null);
+  const active =
+    terms.find((term) => term.isActive && term.archivedAt === null) ??
+    terms.find((term) => term.archivedAt === null) ??
+    null;
+  const visible = courses.filter(
+    (setup) =>
+      setup.course.archivedAt === null && (active === null || setup.course.termId === active.id),
+  );
   const requested =
     params.courseId === undefined
       ? null
       : await academics.getCourse(scope, asCourseId(params.courseId));
-  const selected = requested ?? visible[0] ?? null;
-  const planningDetail =
-    selected === null ? null : await planning.getCoursePlanning(scope, selected.course.id);
+  const selected =
+    requested !== null && visible.some((setup) => setup.course.id === requested.course.id)
+      ? requested
+      : (visible[0] ?? null);
+  const snapshot =
+    active === null ? null : await schedule.getScheduleSnapshot(scope, { termId: active.id });
   const gradebook =
     selected === null ? null : await planning.getGradebook(scope, selected.course.id);
+  const selectedItems =
+    selected === null
+      ? []
+      : (snapshot?.items.filter((item) => item.course.id === selected.course.id) ?? []);
   return (
     <section className="page">
       <PageHeading
@@ -36,7 +50,7 @@ export default async function CoursesPage({
             添加课程
           </Link>
         }
-        context={`${terms.find((term) => term.isActive)?.name ?? "全部学期"} · ${visible.length} 门进行中`}
+        context={`${active?.name ?? "当前学期"} · ${visible.length} 门进行中`}
         title="课程"
       />
       {visible.length === 0 ? (
@@ -59,39 +73,51 @@ export default async function CoursesPage({
                 </div>
               </div>
               <div aria-label="课程列表" className="course-list" role="listbox">
-                {visible.map((setup) => (
-                  <Link
-                    aria-selected={setup.course.id === selected!.course.id}
-                    className="course-card"
-                    href={`/courses?courseId=${setup.course.id}`}
-                    key={setup.course.id}
-                    role="option"
-                    style={
-                      { "--course": courseColor(setup.course.colorKey) } as React.CSSProperties
-                    }
-                  >
-                    <span className="course-rail" />
-                    <span>
-                      <span className="course-code-big">{setup.course.code}</span>
-                      <h3>{setup.course.title}</h3>
-                      <p className="course-card-meta">
-                        {setup.meetingPatterns.length} 条课节 · {setup.course.timeZone}
-                      </p>
-                    </span>
-                    <span className="course-card-next">
-                      <span className="next-item-label">课程安排</span>
-                      <span className="next-item-title">
-                        {setup.meetingPatterns.length
-                          ? setup.meetingPatterns
-                              .map((meeting) => meetingKindLabels[meeting.kind])
-                              .join(" · ")
-                          : "尚无周期课节"}
+                {visible.map((setup) => {
+                  const nextItem =
+                    snapshot?.items.find(
+                      (item) =>
+                        item.course.id === setup.course.id &&
+                        item.state === "planned" &&
+                        item.taskGroup !== null,
+                    ) ?? null;
+                  return (
+                    <Link
+                      aria-selected={setup.course.id === selected!.course.id}
+                      className="course-card"
+                      href={`/courses?courseId=${setup.course.id}`}
+                      key={setup.course.id}
+                      role="option"
+                      style={
+                        { "--course": courseColor(setup.course.colorKey) } as React.CSSProperties
+                      }
+                    >
+                      <span className="course-rail" />
+                      <span>
+                        <span className="course-code-big">{setup.course.code}</span>
+                        <h3>{setup.course.title}</h3>
+                        <p className="course-card-meta">
+                          {setup.meetingPatterns.length} 条课节 · {setup.course.timeZone}
+                        </p>
                       </span>
-                      <span className="next-item-meta">Reading Week 保留规则</span>
-                    </span>
-                    <span className="status-label">v{setup.course.version}</span>
-                  </Link>
-                ))}
+                      <span className="course-card-next">
+                        <span className="next-item-label">课程安排</span>
+                        <span className="next-item-title">
+                          {nextItem?.title ??
+                            (setup.meetingPatterns.length
+                              ? setup.meetingPatterns
+                                  .map((meeting) => meetingKindLabels[meeting.kind])
+                                  .join(" · ")
+                              : "尚无周期课节")}
+                        </span>
+                        <span className="next-item-meta">
+                          {nextItem?.temporalLabel ?? "Reading Week 保留规则"}
+                        </span>
+                      </span>
+                      <span className="status-label">v{setup.course.version}</span>
+                    </Link>
+                  );
+                })}
               </div>
             </section>
             <aside className="panel course-detail">
@@ -108,7 +134,7 @@ export default async function CoursesPage({
                     <span>周期课节</span>
                   </div>
                   <div className="detail-stat">
-                    <strong>{planningDetail?.items.length ?? 0}</strong>
+                    <strong>{selectedItems.length}</strong>
                     <span>课程事项</span>
                   </div>
                   <div className="detail-stat">

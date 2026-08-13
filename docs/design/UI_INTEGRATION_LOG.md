@@ -25,7 +25,7 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 - 用户明确要求：不改变已有 UI 设计；先登记并拆分视觉/交互/数据职责，再判断原型或接入；HTML/CSS 迁移为 CourseFlow React/Next.js、semantic token 与最小 Client island；原稿未覆盖的页面和状态只按同一风格推导；不把 mock 或页面自带规则写入正式模型；只有新增产品行为才请求确认。冻结期间补充确认：产品不承诺移动端或窄屏应用布局，只验收 768/1280 桌面参考 viewport 与 200% browser zoom。
 - 版本证据：[ui-v1 基线](./baselines/ui-v1/BASELINE.md)；`207974` bytes；SHA-256 `88A968C3241AE704E23CFE1F531A2D4AC10806AC89D8DE4A2C6BE150B33A991A`；冻结时间 `2026-08-12T18:03:02+08:00`
 - 目标 route/feature：全局 app shell；`/dashboard`；`/courses` 与课程支持 route；`/calendar`；`/tasks`；`/sources`、`/courses/[courseId]/sources` 与 `/imports/[runId]`；`/insights`
-- 当前状态：verified（P1 范围；P2–P6 页面仍按各自阶段接入）
+- 当前状态：verified（P1–P2 范围；P3–P6 页面仍按各自阶段接入）
 
 ### 生产映射与未来替换通道
 
@@ -38,7 +38,7 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 
 - 结论：**`ui-v1` 保持冻结且 P1 范围已完成生产接入与验证**。route/状态矩阵与冻结前审计见 [SCREEN_MATRIX](./baselines/ui-v1/SCREEN_MATRIX.md) 和 [BASELINE](./baselines/ui-v1/BASELINE.md)；生产实现不修改该只读目录。
 - P1 映射：全局 shell、主题、课程列表/详情、任务行和表单 family 已迁移到真实 route；`/terms`、课程向导、课节例外、Timeline 与 Gradebook 是按同一 token family 推导的新增 surface。所有正式数字来自 auth-scoped view model/PostgreSQL，不迁移原稿 fixture。
-- 阶段边界：P2–P6 的派生任务分组、日历实例、导入与 Insight 仍显示诚实的阶段状态，不为追求视觉填充而迁移原稿 mock。它们在各自 contract 解锁后沿同一替换流程接入。
+- 阶段边界：P1–P2 的正式课程与 schedule 投影已接入；P3–P6 的导入、审核与 Insight 仍显示诚实的阶段状态，不为追求视觉填充而迁移原稿 mock。它们在各自 contract 解锁后沿同一替换流程接入。
 - 偏差：参考稿的搜索、通知、近期事项和候选统计不属于 P1 contract，未伪造；真实验收数据只有 1 门课程，因此列表密度低于参考稿；英文课程名和 Gradebook 标签保留领域术语。以上均为范围/数据真实性偏差，不是新视觉方向。
 
 ### P1 视觉验证（2026-08-13）
@@ -48,6 +48,14 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 - 五点比对：胶囊顶栏与六入口导航一致；暖白画布/黄色主操作和深色主题一致；shell/panel/control 圆角层级一致；课程色轨、列表—深色详情卡关系一致；标题/元数据/状态标签的层级与中等密度一致。768 下栅格顺序改为纵向但无横向溢出，1280 下保留左右主从结构。
 - 文案差异：参考稿 fixture 的 `CSC258H5`、候选数、近期事项与模拟百分比全部替换为 canonical journey 的 `CSC-P1`、三类真实课节、Reading Week、手工事项和成绩口径；没有把 copy diff 写回领域规则。
 - 验证结论：P1 可见范围对 `ui-v1` 达到高保真；差异均来自真实 contract、可访问性或阶段范围。Browser 最终 console 为 0 error/0 warn，skip link 可聚焦，主题切换成功；视觉替换 seam 保持可用。
+
+### P2 视觉验证（2026-08-13）
+
+- 概念权威：`ui-v1` 的 `dashboard--success`、`calendar--week`、`calendar--agenda` 与 `tasks--all` 参考截图；最新实现由同一 Playwright canonical journey 在真实 PostgreSQL 数据写入后生成 1280×900 Dashboard/Calendar/Courses 与 768×1024 Tasks 截图，并由 Codex In-app Browser 复核真实生产构建。
+- Fidelity：保留胶囊顶栏与六入口导航、暖白画布和黄色主操作、深色高关注面板、课程色轨、低对比边框、shell/panel/control 圆角层级和 220ms 内的轻量 view motion；Dashboard 保持“今日/下一步/负荷/风险/中长期”的可扫描关系，Calendar 保持周/议程双视图，Tasks 保持行动优先级分区。
+- 正式数据替换：参考稿的专注计时、通知/搜索、候选审核数、mock 课程和模拟负荷没有进入生产；页面显示 canonical `CSC-P1`、正式课节/事项、真实冲突与策略版本。热力图遵守已确认的 `workload-v1` 周粒度而非参考稿演示图形，并补充逐周文字表格；这属于 contract/无障碍必要偏差，不是新视觉方向。
+- 响应与交互：1280 保留 Dashboard 两列和 Calendar 七列结构；768 采用顶部双行导航与纵向 Tasks 分组；640 CSS px 根节点无横向溢出，七日 Calendar 仅在有标签的内部容器滚动。Browser 验证 Calendar 周/议程切换、课程/事件类型筛选、Tasks 标签/分组 URL、浅深主题，热力图有 `role=img` 摘要与 `<table>` 等价表达。
+- 结论：常规 MVP 页面在 P2 结束前完成 `ui-v1` 定型；剩余 Sources/import review 属 P3，Insights 指标属 P6，继续保持诚实空状态。P2 没有 severity 3/4 UI 问题，冻结基线未被修改。
 
 ### 视觉意图
 
@@ -98,6 +106,8 @@ ID 使用 `UI-0001` 递增；状态只用 `received/mapped/prototyped/frozen/int
 - [x] 键盘、focus、语义和非颜色表达
 - [x] P1 中文/英文、长文本和真实 contract
 - [x] P1 视觉回归、测试和被替换生产实现清理
+- [x] P2 Dashboard/Calendar/Tasks/Timeline 真实 snapshot 与视觉回归
+- [x] P2 热力图文字等价、周/议程、浅深主题与 640 CSS px
 
 ## 条目模板
 

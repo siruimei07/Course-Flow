@@ -40,6 +40,9 @@ import {
   type SaveLetterGradeScale,
   type SaveMeetingException,
   type SaveTaskLabel,
+  type ScheduleSnapshotQuery,
+  type ScheduleSnapshotRepository,
+  type ScheduleSourceData,
   type SetCourseArchived,
   type SetCourseLetterGradeScale,
   type SetTermArchived,
@@ -80,7 +83,9 @@ function cloneCourseItem(item: CourseItem): CourseItem {
   return { ...item, labels: [...item.labels] };
 }
 
-export class MemoryCourseFlowRepository implements AcademicsRepository, PlanningRepository {
+export class MemoryCourseFlowRepository
+  implements AcademicsRepository, PlanningRepository, ScheduleSnapshotRepository
+{
   readonly #clock: Clock;
   readonly #ids: IdGenerator;
   readonly #users = new Map<UserId, UserState>();
@@ -387,6 +392,36 @@ export class MemoryCourseFlowRepository implements AcademicsRepository, Planning
       courseId,
       items: [...(state.items.get(courseId)?.values() ?? [])].map(cloneCourseItem),
       labels: [...(state.labels.get(course.course.termId)?.values() ?? [])],
+    };
+  }
+
+  async loadScheduleSource(
+    scope: UserScope,
+    query: ScheduleSnapshotQuery,
+  ): Promise<ScheduleSourceData | null> {
+    const state = this.#state(scope);
+    const term = state.terms.get(query.termId);
+    if (term === undefined) return null;
+    const courseSetups = [...state.courses.values()].filter(
+      (setup) => setup.course.termId === query.termId && setup.course.archivedAt === null,
+    );
+    const courseIds = new Set(courseSetups.map((setup) => setup.course.id));
+    return {
+      calendarExceptions: [...term.exceptions],
+      courseSetups,
+      items: [...state.items.entries()]
+        .filter(([courseId]) => courseIds.has(courseId))
+        .flatMap(([, items]) =>
+          [...items.values()].map((item) => ({
+            item: cloneCourseItem(item),
+            updatedAt: this.#clock.now().toISOString(),
+          })),
+        ),
+      labels: [...(state.labels.get(query.termId)?.values() ?? [])],
+      locale: "zh-CN",
+      term: term.term,
+      timeZone: query.displayTimeZone ?? term.term.timeZone,
+      weekStartsOn: 0,
     };
   }
 

@@ -54,6 +54,9 @@ import {
   type SaveLetterGradeScale,
   type SaveMeetingException,
   type SaveTaskLabel,
+  type ScheduleSnapshotQuery,
+  type ScheduleSnapshotRepository,
+  type ScheduleSourceData,
   type SetCourseArchived,
   type SetCourseLetterGradeScale,
   type SetTermArchived,
@@ -167,6 +170,16 @@ type ItemRow = QueryResultRow & {
   version: number;
 };
 
+type ScheduleItemRow = ItemRow & { updated_at: Date | string };
+
+type ItemLabelRow = LabelRow & { course_item_id: string };
+
+type ProfileDisplayRow = QueryResultRow & {
+  locale: string;
+  time_zone: string;
+  week_starts_on: number;
+};
+
 type SchemeRow = QueryResultRow & {
   condition_text: string | null;
   course_id: string;
@@ -202,6 +215,10 @@ type BandRow = QueryResultRow & {
 
 function asIso(value: Date | string | null): string | null {
   if (value === null) return null;
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function asRequiredIso(value: Date | string): string {
   return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
 }
 
@@ -388,7 +405,9 @@ export type UserProfileSeed = Readonly<{
   userId: UserId;
 }>;
 
-export class PostgresCourseFlowRepository implements AcademicsRepository, PlanningRepository {
+export class PostgresCourseFlowRepository
+  implements AcademicsRepository, PlanningRepository, ScheduleSnapshotRepository
+{
   readonly #clock: Clock;
   readonly #ids: IdGenerator;
   readonly #pool: Pool;
@@ -708,6 +727,141 @@ export class PostgresCourseFlowRepository implements AcademicsRepository, Planni
     const client = await this.#pool.connect();
     try {
       return await this.#loadCourse(client, scope, courseId);
+    } finally {
+      client.release();
+    }
+  }
+
+  async loadScheduleSource(
+    scope: UserScope,
+    query: ScheduleSnapshotQuery,
+  ): Promise<ScheduleSourceData | null> {
+    const client = await this.#pool.connect();
+    try {
+      await client.query("begin isolation level repeatable read read only");
+      const profileResult = await client.query<ProfileDisplayRow>(
+        `select locale,time_zone,week_starts_on
+         from courseflow.user_profiles where id=$1`,
+        [scope.userId],
+      );
+      const profile = profileResult.rows[0];
+      if (profile === undefined) {
+        await client.query("rollback");
+        return null;
+      }
+      const loadedTerm = await this.#loadTerm(client, scope, query.termId);
+      if (loadedTerm === null) {
+        await client.query("rollback");
+        return null;
+      }
+      const courseRows = await client.query<CourseRow>(
+        `select c.archived_at,c.code,c.color_key,c.credit_value_milli,c.id,
+                c.instructor_name,c.letter_grade_scale_id,c.section,c.term_id,
+                c.time_zone,c.title,c.version
+         from courseflow.courses c
+         join courseflow.academic_terms t on t.id=c.term_id
+         where c.term_id=$1 and c.archived_at is null and t.owner_user_id=$2
+         order by c.code,c.id`,
+        [query.termId, scope.userId],
+      );
+      const patternRows = await client.query<MeetingPatternRow>(
+        `select mp.archived_at,mp.course_id,mp.effective_end_date,mp.effective_start_date,
+                mp.id,mp.kind,mp.local_end_time,mp.local_start_time,mp.location_text,
+                mp.section,mp.title,mp.version,mp.weekdays_mask
+         from courseflow.meeting_patterns mp
+         join courseflow.courses c on c.id=mp.course_id
+         join courseflow.academic_terms t on t.id=c.term_id
+         where c.term_id=$1 and c.archived_at is null and t.owner_user_id=$2
+         order by mp.course_id,mp.id`,
+        [query.termId, scope.userId],
+      );
+      const meetingExceptionRows = await client.query<MeetingExceptionRow>(
+        `select me.action,me.id,me.meeting_pattern_id,me.note,me.occurrence_date,
+                me.replacement_date,me.replacement_end_time,me.replacement_location_text,
+                me.replacement_start_time,me.replacement_time_zone,me.version
+         from courseflow.meeting_exceptions me
+         join courseflow.meeting_patterns mp on mp.id=me.meeting_pattern_id
+         join courseflow.courses c on c.id=mp.course_id
+         join courseflow.academic_terms t on t.id=c.term_id
+         where c.term_id=$1 and c.archived_at is null and t.owner_user_id=$2
+         order by me.meeting_pattern_id,me.occurrence_date,me.id`,
+        [query.termId, scope.userId],
+      );
+      const labelRows = await client.query<LabelRow>(
+        `select color_key,display_name,id,normalized_name,term_id,version
+         from courseflow.task_labels where term_id=$1 order by display_name,id`,
+        [query.termId],
+      );
+      const itemRows = await client.query<ScheduleItemRow>(
+        `select i.course_id,i.details,i.due_at,i.ends_at,i.estimate_source,i.estimated_minutes,
+                i.id,i.kind,i.local_date,i.progress_bps,i.starts_at,i.state,i.temporal_note,
+                i.time_kind,i.time_zone,i.title,i.updated_at,i.version
+         from courseflow.course_items i
+         join courseflow.courses c on c.id=i.course_id
+         join courseflow.academic_terms t on t.id=c.term_id
+         where c.term_id=$1 and c.archived_at is null and i.deleted_at is null
+           and t.owner_user_id=$2
+         order by i.id`,
+        [query.termId, scope.userId],
+      );
+      const itemLabelRows = await client.query<ItemLabelRow>(
+        `select il.course_item_id,l.color_key,l.display_name,l.id,l.normalized_name,l.term_id,l.version
+         from courseflow.course_item_labels il
+         join courseflow.task_labels l on l.id=il.label_id
+         join courseflow.course_items i on i.id=il.course_item_id
+         join courseflow.courses c on c.id=i.course_id
+         join courseflow.academic_terms t on t.id=c.term_id
+         where c.term_id=$1 and c.archived_at is null and i.deleted_at is null
+           and t.owner_user_id=$2
+         order by il.course_item_id,l.display_name,l.id`,
+        [query.termId, scope.userId],
+      );
+      const patternsByCourse = new Map<string, MeetingPattern[]>();
+      for (const row of patternRows.rows) {
+        const patterns = patternsByCourse.get(row.course_id) ?? [];
+        patterns.push(mapPattern(row));
+        patternsByCourse.set(row.course_id, patterns);
+      }
+      const patternCourse = new Map(patternRows.rows.map((row) => [row.id, row.course_id]));
+      const exceptionsByCourse = new Map<string, MeetingException[]>();
+      for (const row of meetingExceptionRows.rows) {
+        const courseId = patternCourse.get(row.meeting_pattern_id);
+        if (courseId === undefined) continue;
+        const exceptions = exceptionsByCourse.get(courseId) ?? [];
+        exceptions.push(mapMeetingException(row));
+        exceptionsByCourse.set(courseId, exceptions);
+      }
+      const labelsByItem = new Map<string, TaskLabel[]>();
+      for (const row of itemLabelRows.rows) {
+        const labels = labelsByItem.get(row.course_item_id) ?? [];
+        labels.push(mapLabel(row));
+        labelsByItem.set(row.course_item_id, labels);
+      }
+      const courseSetups = courseRows.rows.map((row): CourseSetupView => ({
+        calendarExceptions: loadedTerm.exceptions,
+        course: mapCourse(row),
+        meetingExceptions: exceptionsByCourse.get(row.id) ?? [],
+        meetingPatterns: patternsByCourse.get(row.id) ?? [],
+        term: loadedTerm.term,
+      }));
+      const source: ScheduleSourceData = {
+        calendarExceptions: loadedTerm.exceptions,
+        courseSetups,
+        items: itemRows.rows.map((row) => ({
+          item: mapItem(row, labelsByItem.get(row.id) ?? []),
+          updatedAt: asRequiredIso(row.updated_at),
+        })),
+        labels: labelRows.rows.map(mapLabel),
+        locale: profile.locale,
+        term: loadedTerm.term,
+        timeZone: query.displayTimeZone ?? profile.time_zone,
+        weekStartsOn: profile.week_starts_on,
+      };
+      await client.query("commit");
+      return source;
+    } catch (error) {
+      await client.query("rollback");
+      throw error;
     } finally {
       client.release();
     }

@@ -8,8 +8,8 @@
 | -------------------------------------- | -------- | ----------------------------------------- |
 | P0：仓库与质量骨架                     | `done`   | 全部门禁已通过                            |
 | P1：学期、课程、课表、任务与成绩闭环   | `done`   | P0 为 `done`                              |
-| P2：总览、任务分组、热力图、冲突和 ICS | `next`   | P1 为 `done`                              |
-| P3：上传与确定性导入骨架               | `locked` | P2 为 `done`                              |
+| P2：总览、任务分组、热力图、冲突和 ICS | `done`   | P1 为 `done`                              |
+| P3：上传与确定性导入骨架               | `next`   | P2 为 `done`                              |
 | P4：真实 PDF/图片与 AI 提取            | `locked` | P3 为 `done`，且 MVP UI 硬门禁通过        |
 | P5：UI 整合与体验打磨                  | `locked` | P4 为 `done`                              |
 | P6：统计扩展 seam                      | `locked` | P5 为 `done`，且首批 Insight 已由产品明确 |
@@ -29,6 +29,14 @@ P1 标为 `done`，P2 解锁为 `next`。P0 证据先经复核：阶段记录与
 P1 实际证明：先把 `ui-v1` 的全局风格指纹及颜色、字体、圆角、阴影、motion/reduced-motion 固化到 `packages/ui/tokens.css`，再以真实 auth scope、PostgreSQL repository、Zod HTTP contract 和 React/Next.js 页面完成纵向切片。全新数据库可迁移到 14 张 P1 表；PostgreSQL contract 在断开并重连后验证 owner/stranger 隔离、版本冲突、Lecture/TUT/PRA、Reading Week、四种事项时间语义、标签、评分方案与手工结果持久化；其中纯日期保持 `2026-09-30`，不经 UTC 午夜转换。Vitest 6 个文件/13 个最小测试通过，覆盖权限、同源写入边界、DST/课节语义、Reading Week 保留例外、成绩整数不变量/未知权重及版本冲突。
 
 生产构建 Playwright canonical journey 通过 1/1：创建学期和 Reading Week → 创建含 3 条 Lecture/TUT/PRA 周期规则的课程 → 创建学期标签和手工事项 → 从 Timeline 回读 → 创建 20%/80% 评分方案并录入 `80/100` → Gradebook 显示已获总评 `16%`、已出分部分 `80%`、覆盖权重 `20%` → 刷新后仍存在；同时验证 health/readiness、键盘 skip link、768/1280 截图和 640 CSS px（1280 在 200% zoom 的等价宽度）无横向溢出。内置 Browser 在 768 与 1280 下复核真实 contract 页面、浅深主题、焦点和控制台，最终无 error/warn。production build、frozen install、format、lint、typecheck、秘密扫描 180 个源码文件、69 个生产依赖许可证和 `pnpm audit --audit-level high` 均通过（仍仅 1 low、1 moderate）。P1 明确未实现 GPA 或最终成绩预测；无未满足完成项。
+
+### P2 门禁记录（2026-08-13）
+
+P2 标为 `done`，P3 解锁为 `next`。开工前复核 P1 的阶段记录、领域测试、真实 PostgreSQL contract 与 canonical journey：正式数据回读、owner/stranger 隔离、Lecture/TUT/PRA、Reading Week、四种事项时间语义、标签与 Gradebook 的 `16% / 80% / 20%` 覆盖口径均保持通过。
+
+P2 以 owner-scoped、单事务 `REPEATABLE READ READ ONLY` 的 `ScheduleSnapshot` repository 作为唯一读取入口；Dashboard、Tasks、Calendar、课程 Timeline、热力图、冲突与 ICS 均由同一 snapshot identity 和 `term-progress-v1`、`task-grouping-v1`、`workload-v1`、`conflict-v1` 投影。正式 PostgreSQL contract 在重连后验证 4 种事项、display timezone、owner 隔离及跨投影 snapshotId；Vitest 10 个文件/28 个测试通过，覆盖 7 天边界、Reading Week 教学周暂停、今日/进行中/跨日/无下一节、半开区间相邻不冲突、hard overlap、deadline cluster、TBA/归档/cancelled、工作量来源与 band、ICS all-day/instant/interval、稳定 UID、UTF-8 75-octet 折行和转义。
+
+原有单条 Playwright canonical journey 扩展后通过 1/1，未新增页面 smoke：在 P1 闭环上追加短期/中长期/TBA、精确截止、占用区间与同日集中事项，验证 Dashboard 学期进度/今日与下一节/热力图/冲突，Tasks 四组，Calendar 周视图与 Reading Week 空周，两个 P2 API 的 snapshotId 与 Dashboard 一致，两次 ICS 字节一致、UID 唯一且 TBA 被计数跳过；同时验证 768/1280、640 CSS px 无根级横向溢出且 Calendar 仅在自身容器内滚动。`ui-v1` 常规 MVP 页面按冻结 token 完成生产接入，Browser 验证周/议程切换、课程/类型筛选、浅深主题和文字等价热力图；视觉偏差仅来自正式数据、周粒度政策与不迁移 mock 的范围约束。frozen install、format、lint、strict typecheck、production build、迁移、PostgreSQL contract、canonical E2E、秘密/许可证扫描及 high-level audit 均通过；P2 无未满足完成项。
 
 ## 阶段 0：仓库与质量骨架
 

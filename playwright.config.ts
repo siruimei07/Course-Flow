@@ -28,11 +28,12 @@ export default defineConfig({
     {
       command: "pnpm --filter @courseflow/web start",
       env: {
-        AUTH_DEVELOPMENT_DISPLAY_NAME: "P1 E2E Student",
-        AUTH_DEVELOPMENT_SUBJECT: "test:p1-e2e-student",
+        AUTH_DEVELOPMENT_DISPLAY_NAME: "Canonical E2E Student",
+        AUTH_DEVELOPMENT_SUBJECT: "test:canonical-e2e-student",
         AUTH_DEVELOPMENT_TIME_ZONE: "Asia/Shanghai",
         AUTH_DEVELOPMENT_USER_ID: e2eUserId,
         AUTH_MODE: "development",
+        COURSEFLOW_NOW: "2026-09-09T01:30:00.000Z",
       },
       name: "web",
       reuseExistingServer: !process.env.CI,

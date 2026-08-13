@@ -46,6 +46,7 @@
     "format:check": "prettier --config prettier.config.mjs --check .",
     "gate:p0": "pnpm install --frozen-lockfile && pnpm deps:up && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:migration && pnpm build && pnpm test:e2e && pnpm security",
     "gate:p1": "pnpm install --frozen-lockfile && pnpm deps:up && pnpm db:migrate && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:migration && pnpm test:p1:postgres && pnpm build && pnpm test:e2e && pnpm security",
+    "gate:p2": "pnpm install --frozen-lockfile && pnpm deps:up && pnpm db:migrate && pnpm format:check && pnpm lint && pnpm typecheck && pnpm test:unit && pnpm test:migration && pnpm test:p2:postgres && pnpm build && pnpm test:e2e && pnpm security",
     "lint": "eslint .",
     "security": "pnpm security:secrets && pnpm security:licenses && pnpm security:audit",
     "security:audit": "pnpm audit --audit-level high",
@@ -54,6 +55,7 @@
     "test:e2e": "dotenv -e .env -- playwright test",
     "test:migration": "pnpm --filter @courseflow/infrastructure build:cli && dotenv -e .env -- node scripts/verify-empty-migration.mjs",
     "test:p1:postgres": "dotenv -e .env -- tsx scripts/verify-p1-postgres-contract.ts",
+    "test:p2:postgres": "dotenv -e .env -- tsx scripts/verify-p1-postgres-contract.ts",
     "test:unit": "vitest run",
     "typecheck": "pnpm --recursive --if-present typecheck"
   }

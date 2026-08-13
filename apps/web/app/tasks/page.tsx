@@ -1,33 +1,85 @@
 import Link from "next/link";
+import { asTaskLabelId, type TaskGroupKey } from "@courseflow/core";
 import { getScopedCourseFlow } from "@/composition/runtime";
-import { courseColor, courseItemKindLabels, formatTemporal } from "@/features/shared/format";
+import { ScheduleTaskRow } from "@/features/schedule/schedule-task-row";
 import { PageHeading } from "@/features/shared/page-heading";
 import { TaskEditor } from "@/features/tasks/task-editor";
-import { TaskActions } from "@/features/tasks/task-actions";
 
 export const dynamic = "force-dynamic";
 
-export default async function TasksPage() {
-  const { academics, planning, scope } = await getScopedCourseFlow();
-  const courses = (await academics.listCourses(scope)).filter(
-    (setup) => setup.course.archivedAt === null,
-  );
-  const plans = await Promise.all(
-    courses.map((setup) => planning.getCoursePlanning(scope, setup.course.id)),
-  );
-  const items = courses.flatMap((setup, index) =>
-    (plans[index]?.items ?? []).map((item) => ({ course: setup.course, item })),
-  );
-  const labels = Array.from(
-    new Map(plans.flatMap((plan) => plan?.labels ?? []).map((label) => [label.id, label])).values(),
-  );
+const groupCopy: Readonly<Record<TaskGroupKey, Readonly<{ description: string; title: string }>>> =
+  {
+    major: { description: "重要考核、里程碑或超过 7 天的事项", title: "持续准备" },
+    near: { description: "未来 7 天内的短期事项", title: "本周推进" },
+    priority: { description: "已逾期、今天或明天需要处理", title: "先完成" },
+    tba: { description: "保留原始 TBA 语义，不进入日历或热力图", title: "时间待确认" },
+  };
+
+function filterHref(
+  current: Readonly<{ group?: string; labelId?: string; q?: string }>,
+  change: Readonly<{ group?: string | null; labelId?: string | null }>,
+): string {
+  const parameters = new URLSearchParams();
+  const group = change.group === undefined ? current.group : change.group;
+  const labelId = change.labelId === undefined ? current.labelId : change.labelId;
+  if (group) parameters.set("group", group);
+  if (labelId) parameters.set("labelId", labelId);
+  if (current.q) parameters.set("q", current.q);
+  const query = parameters.toString();
+  return query === "" ? "/tasks" : "/tasks?" + query;
+}
+
+export default async function TasksPage({
+  searchParams,
+}: Readonly<{
+  searchParams: Promise<{ group?: string; labelId?: string; q?: string }>;
+}>) {
+  const { academics, schedule, scope } = await getScopedCourseFlow();
+  const [terms, parameters] = await Promise.all([academics.listTerms(scope), searchParams]);
+  const active =
+    terms.find((term) => term.isActive && term.archivedAt === null) ??
+    terms.find((term) => term.archivedAt === null) ??
+    null;
+  const validGroups = new Set<TaskGroupKey>(["priority", "near", "major", "tba"]);
+  const selectedGroup =
+    parameters.group !== undefined && validGroups.has(parameters.group as TaskGroupKey)
+      ? (parameters.group as TaskGroupKey)
+      : undefined;
+  const [board, courseSetups] =
+    active === null
+      ? [null, []]
+      : await Promise.all([
+          schedule.getTaskBoard(scope, {
+            ...(selectedGroup === undefined ? {} : { group: selectedGroup }),
+            ...(parameters.labelId === undefined
+              ? {}
+              : { labelIds: [asTaskLabelId(parameters.labelId)] }),
+            ...(parameters.q === undefined ? {} : { search: parameters.q }),
+            termId: active.id,
+          }),
+          academics.listCourses(scope, active.id),
+        ]);
+  const courses = courseSetups.filter((setup) => setup.course.archivedAt === null);
+  const total =
+    board === null ? 0 : Object.values(board.groups).reduce((sum, items) => sum + items.length, 0);
+
   return (
     <section className="page">
       <PageHeading
-        context={`${items.length} 个正式课程事项 · 基础列表（P2 再接派生分组）`}
+        context={
+          active === null ? "还没有当前学期" : active.name + " · " + total + " 个匹配的可行动事项"
+        }
         title="任务"
       />
-      {courses.length === 0 ? (
+      {active === null || board === null ? (
+        <section className="panel empty-state">
+          <h2>先创建当前学期</h2>
+          <p>任务投影只读取当前用户、当前正式学期的数据。</p>
+          <Link className="button button-primary" href="/terms">
+            前往学期
+          </Link>
+        </section>
+      ) : courses.length === 0 ? (
         <section className="panel empty-state">
           <h2>先添加课程</h2>
           <p>课程事项必须属于真实课程；这里不会创建第二套任务真相。</p>
@@ -36,87 +88,122 @@ export default async function TasksPage() {
           </Link>
         </section>
       ) : (
-        <div className="task-layout">
-          <section className="panel">
-            <div className="panel-header">
-              <div>
-                <h2>全部事项</h2>
-                <p className="panel-subtitle">四种时间语义与标签直接来自 Planning query</p>
-              </div>
-            </div>
-            {items.length === 0 ? (
-              <div className="empty-state">
-                <h3>还没有事项</h3>
-                <p>用右侧表单添加第一项；未排期、纯日期、截止与区间都保持原语义。</p>
-              </div>
-            ) : (
-              <div className="task-list">
-                {items.map(({ course, item }) => (
-                  <article className="task-row" key={item.id}>
-                    <span
-                      className="task-kind-rail"
-                      style={{ background: courseColor(course.colorKey) }}
-                    />
-                    <div>
-                      <span className="course-code-big">
-                        {course.code} · {courseItemKindLabels[item.kind]}
-                      </span>
-                      <h3>{item.title}</h3>
-                      <div className="task-badges">
-                        {item.labels.map((label) => (
-                          <span className="meta-label" key={label.id}>
-                            {label.displayName}
-                          </span>
-                        ))}
-                        <span className="meta-label">{item.state}</span>
-                        {item.progressBps === null ? null : (
-                          <span className="meta-label">准备进度 {item.progressBps / 100}%</span>
-                        )}
-                      </div>
-                      <TaskActions
-                        itemId={item.id}
-                        state={item.state}
-                        title={item.title}
-                        version={item.version}
-                      />
-                    </div>
-                    <div className="task-meta">
-                      <strong>{formatTemporal(item.temporal)}</strong>
-                      {item.estimatedMinutes === null
-                        ? "未填写预计投入"
-                        : `预计 ${item.estimatedMinutes} 分钟`}{" "}
-                      · v{item.version}
-                    </div>
-                  </article>
+        <>
+          <section className="panel task-filters" aria-label="任务筛选">
+            <form action="/tasks" className="task-search" role="search">
+              {selectedGroup === undefined ? null : (
+                <input name="group" type="hidden" value={selectedGroup} />
+              )}
+              {parameters.labelId === undefined ? null : (
+                <input name="labelId" type="hidden" value={parameters.labelId} />
+              )}
+              <label className="sr-only" htmlFor="task-search">
+                搜索任务
+              </label>
+              <input
+                defaultValue={parameters.q}
+                id="task-search"
+                name="q"
+                placeholder="搜索课程、标题或说明"
+              />
+              <button className="button button-dark" type="submit">
+                搜索
+              </button>
+            </form>
+            <nav aria-label="任务分组" className="filter-chips">
+              <Link
+                aria-current={selectedGroup === undefined ? "page" : undefined}
+                href={filterHref(parameters, { group: null })}
+              >
+                全部
+              </Link>
+              {(Object.keys(groupCopy) as TaskGroupKey[]).map((group) => (
+                <Link
+                  aria-current={selectedGroup === group ? "page" : undefined}
+                  href={filterHref(parameters, { group })}
+                  key={group}
+                >
+                  {groupCopy[group].title}
+                </Link>
+              ))}
+            </nav>
+            {board.labels.length === 0 ? null : (
+              <nav aria-label="任务标签" className="filter-chips">
+                <Link
+                  aria-current={parameters.labelId === undefined ? "page" : undefined}
+                  href={filterHref(parameters, { labelId: null })}
+                >
+                  全部标签
+                </Link>
+                {board.labels.map((label) => (
+                  <Link
+                    aria-current={parameters.labelId === label.id ? "page" : undefined}
+                    href={filterHref(parameters, { labelId: label.id })}
+                    key={label.id}
+                  >
+                    {label.displayName}
+                  </Link>
                 ))}
-              </div>
+              </nav>
             )}
           </section>
-          <aside className="panel task-form-panel">
-            <div className="panel-header">
-              <div>
-                <h2>添加事项 / 标签</h2>
-                <p className="panel-subtitle">同一 command 服务任务页和课程 Timeline</p>
+
+          <div className="task-layout">
+            <section className="task-board" aria-label="任务分组">
+              {(Object.keys(groupCopy) as TaskGroupKey[]).map((group) =>
+                selectedGroup !== undefined && selectedGroup !== group ? null : (
+                  <section className="panel task-group" key={group}>
+                    <div className="panel-header">
+                      <div>
+                        <h2>{groupCopy[group].title}</h2>
+                        <p className="panel-subtitle">{groupCopy[group].description}</p>
+                      </div>
+                      <span className="metric-small">{board.groups[group].length}</span>
+                    </div>
+                    {board.groups[group].length === 0 ? (
+                      <div className="empty-state compact">
+                        <p>这个分组暂时没有匹配事项。</p>
+                      </div>
+                    ) : (
+                      <div className="task-list">
+                        {board.groups[group].map((item) => (
+                          <ScheduleTaskRow item={item} key={item.id} />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                ),
+              )}
+            </section>
+            <aside className="panel task-form-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>添加事项 / 标签</h2>
+                  <p className="panel-subtitle">保存后由同一正式 snapshot 重新投影</p>
+                </div>
               </div>
-            </div>
-            <div className="panel-body">
-              <TaskEditor
-                courses={courses.map((setup) => ({
-                  id: setup.course.id,
-                  label: `${setup.course.code} · ${setup.course.title}`,
-                  termId: setup.course.termId,
-                  timeZone: setup.course.timeZone,
-                }))}
-                labels={labels.map((label) => ({
-                  colorKey: label.colorKey,
-                  displayName: label.displayName,
-                  id: label.id,
-                  termId: label.termId,
-                }))}
-              />
-            </div>
-          </aside>
-        </div>
+              <div className="panel-body">
+                <TaskEditor
+                  courses={courses.map((setup) => ({
+                    id: setup.course.id,
+                    label: setup.course.code + " · " + setup.course.title,
+                    termId: setup.course.termId,
+                    timeZone: setup.course.timeZone,
+                  }))}
+                  labels={board.labels.map((label) => ({
+                    colorKey: label.colorKey,
+                    displayName: label.displayName,
+                    id: label.id,
+                    termId: label.termId,
+                  }))}
+                />
+              </div>
+            </aside>
+          </div>
+          <p className="snapshot-note page-snapshot">
+            Snapshot {board.snapshotId} · {board.timeZone} · {board.policyVersions.taskGrouping}
+          </p>
+        </>
       )}
     </section>
   );

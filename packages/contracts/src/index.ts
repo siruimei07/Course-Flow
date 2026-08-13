@@ -197,6 +197,25 @@ export const saveMeetingExceptionInputSchema = z.object({
   replacementTimeZone: z.string().max(120).nullable().optional(),
 });
 
+export const scheduleQuerySchema = z.object({
+  displayTimeZone: z.string().trim().min(1).max(120).optional(),
+  from: z.iso.date().optional(),
+  termId: uuid,
+  to: z.iso.date().optional(),
+});
+
+export const taskBoardQuerySchema = scheduleQuerySchema.extend({
+  group: z.enum(["priority", "near", "major", "tba"]).optional(),
+  labelIds: z.array(uuid).max(24).optional(),
+  search: z.string().trim().max(200).optional(),
+});
+
+export const calendarQuerySchema = scheduleQuerySchema.extend({
+  courseIds: z.array(uuid).max(24).optional(),
+  includeItems: z.boolean().optional(),
+  includeMeetings: z.boolean().optional(),
+});
+
 export function toJsonValue<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (_key, current: unknown) =>
@@ -212,3 +231,6 @@ export type SaveTaskLabelInput = z.infer<typeof saveTaskLabelInputSchema>;
 export type SaveGradingSchemeInput = z.infer<typeof saveGradingSchemeInputSchema>;
 export type SaveGradeResultInput = z.infer<typeof saveGradeResultInputSchema>;
 export type SaveMeetingExceptionInput = z.infer<typeof saveMeetingExceptionInputSchema>;
+export type ScheduleQuery = z.infer<typeof scheduleQuerySchema>;
+export type TaskBoardQuery = z.infer<typeof taskBoardQuerySchema>;
+export type CalendarQuery = z.infer<typeof calendarQuerySchema>;

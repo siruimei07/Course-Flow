@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert";
 import { randomUUID } from "node:crypto";
-import { asUserId, createAcademics, createPlanning } from "@courseflow/core";
+import { asUserId, createAcademics, createPlanning, createSchedule } from "@courseflow/core";
 import { createPostgresCourseFlowRepository } from "@courseflow/infrastructure";
 import { migrateDatabase } from "@courseflow/infrastructure/migration";
 import { Client } from "pg";
@@ -43,6 +43,8 @@ try {
   });
   const academics = createAcademics(repository);
   const planning = createPlanning(repository);
+  const clock = { now: () => new Date("2026-09-09T01:30:00.000Z") };
+  const schedule = createSchedule(repository, { clock });
 
   const term = await academics.createTerm(owner, {
     endDate: "2026-12-18",
@@ -146,12 +148,14 @@ try {
   assert.equal(await planning.getCoursePlanning(stranger, course.value.course.id), null);
   assert.equal(await planning.getGradebook(stranger, course.value.course.id), null);
   assert.deepEqual(await academics.listTerms(stranger), []);
+  assert.equal(await schedule.getScheduleSnapshot(stranger, { termId: term.value.id }), null);
 
   await repository.close();
   repository = null;
   repository = makeRepository();
   const reconnectedAcademics = createAcademics(repository);
   const reconnectedPlanning = createPlanning(repository);
+  const reconnectedSchedule = createSchedule(repository, { clock });
   const reloadedCourse = await reconnectedAcademics.getCourse(owner, course.value.course.id);
   assert.equal(reloadedCourse?.meetingPatterns.length, 3);
   assert.deepEqual(
@@ -190,10 +194,20 @@ try {
   assert.equal(gradebook?.components[0]?.result?.earnedMilli, 80_000n);
   assert.equal(gradebook?.components[0]?.result?.possibleMilli, 100_000n);
   assert.equal(gradebook?.components[1]?.result, null);
+  const scheduleSnapshot = await reconnectedSchedule.getScheduleSnapshot(owner, {
+    termId: term.value.id,
+  });
+  assert.equal(scheduleSnapshot?.courses.length, 1);
+  assert.equal(scheduleSnapshot?.items.length, 4);
+  assert.equal(scheduleSnapshot?.taskBoard.snapshotId, scheduleSnapshot?.snapshotId);
+  assert.equal(scheduleSnapshot?.calendar.snapshotId, scheduleSnapshot?.snapshotId);
+  assert.equal(scheduleSnapshot?.dashboard.snapshotId, scheduleSnapshot?.snapshotId);
+  assert.equal(scheduleSnapshot?.calendar.skipped.total, 1);
+  assert.equal(scheduleSnapshot?.timeZone, "America/Toronto");
   await repository.close();
   repository = null;
 
-  process.stdout.write("P1 PostgreSQL ownership, persistence and version contract passed.\n");
+  process.stdout.write("P1/P2 PostgreSQL ownership, persistence and snapshot contract passed.\n");
 } finally {
   await repository?.close();
   await admin.query(

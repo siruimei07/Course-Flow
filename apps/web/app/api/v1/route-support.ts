@@ -88,6 +88,21 @@ function failure(error: unknown, requestId: string): Response {
   return problem(requestId, 500, "INTERNAL_ERROR", "暂时无法完成请求", "请稍后重试。", []);
 }
 
+export async function fileQuery(
+  request: Request,
+  handler: (requestId: string) => Promise<Response>,
+): Promise<Response> {
+  const requestId = getOrCreateRequestId(request.headers.get("x-request-id") ?? undefined);
+  try {
+    const response = await handler(requestId);
+    response.headers.set("cache-control", "no-store");
+    response.headers.set("x-request-id", requestId);
+    return response;
+  } catch (error) {
+    return failure(error, requestId);
+  }
+}
+
 export async function mutation<T>(
   request: Request,
   schema: ZodType<T>,
