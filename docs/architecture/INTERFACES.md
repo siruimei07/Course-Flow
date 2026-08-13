@@ -91,13 +91,20 @@ interface PlanningQueries {
 见 [导入流水线](./INGESTION.md)。额外 query：
 
 ```ts
-interface IngestionQueries {
+interface SourceQueries {
   listSources(scope: UserScope, query: SourceLibraryQuery): Promise<SourceLibrarySnapshot>;
   listCourseSources(scope: UserScope, courseId: CourseId): Promise<SourceSummary[]>;
+  getSourcePreview(scope: UserScope, sourceId: SourceDocumentId): Promise<SourcePreview>;
+}
+
+// 只由 AI_ENABLED composition 导出
+interface AiIngestionQueries {
   getImportRun(scope: UserScope, runId: ImportRunId): Promise<ImportRunView | null>;
   getImportReview(scope: UserScope, runId: ImportRunId): Promise<ImportReviewView | null>;
 }
 ```
+
+所有模式都有 Source list/upload/preview/delete contract；页面用现有 Planning/Academics commands 手工录入。只有 `AI_ENABLED` composition 才装配 `startImport`、Import query 和 review command。`completeUpload` 只把 Source Document 变为 `ready`；`startImport(scope, sourceId)` 在确认用户 AI 凭据可用后才创建 Import Run 和队列任务。`MANUAL_ONLY` 的最终 OpenAPI/route manifest 中不存在这些 AI 端点，而不是返回一个永久 disabled 状态。
 
 ### 2.4 Schedule
 
@@ -132,6 +139,77 @@ interface InsightQueries {
 ```
 
 首版可以返回空数组和 `insufficient` 页面状态。新增 Insight 是在代码中添加一个纯计算器及测试，并由显式 registry 组合；不执行存储在数据库中的代码/SQL，也不建立动态插件系统。
+
+### 2.6 个人 AI
+
+本节 interface 只在 [去留门禁](./AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 签署 `AI_GO` 后存在。`AI_PENDING` 仅允许 test package/隔离 composition；`MANUAL_ONLY` 必须删除本节 interface、route 和依赖，不建立通用 provider abstraction 等待未来模型。
+
+```ts
+interface AssistantCommands {
+  configureDeepSeekCredential(
+    scope: UserScope,
+    input: ConfigureDeepSeekCredential,
+  ): Promise<AiCredentialStatus>;
+  revokeDeepSeekCredential(
+    scope: UserScope,
+    input: RevokeDeepSeekCredential,
+  ): Promise<void>;
+  askPlanningAssistant(
+    scope: UserScope,
+    input: AskPlanningAssistant,
+  ): Promise<AssistantTurnAccepted>;
+  cancelAssistantTurn(scope: UserScope, turnId: AssistantTurnId): Promise<void>;
+}
+
+interface AssistantQueries {
+  getAiAvailability(scope: UserScope): Promise<AiAvailabilityView>;
+  getAssistantTurn(scope: UserScope, turnId: AssistantTurnId): Promise<AssistantTurnView | null>;
+}
+
+interface SecretVaultPort {
+  seal(scope: UserScope, secret: SensitiveString): Promise<SealedSecret>;
+  open(
+    scope: UserScope,
+    sealed: SealedSecret,
+    purpose: "deepseek_call",
+  ): Promise<SensitiveString>;
+}
+
+interface PlanningContextPort {
+  buildAuthorizedContext(scope: UserScope, request: PlanningContextRequest): Promise<PlanningContext>;
+}
+```
+
+`configureDeepSeekCredential` 使用固定 DeepSeek endpoint，验证 bearer key 能列出 `deepseek-v4-pro` 后再密封保存；返回值不含 key。`askPlanningAssistant` 只接受范围、意图和用户文本，不接受 client 提交的课程 snapshot、userId、baseURL、任意 system prompt 或工具定义。服务端通过 `PlanningContextPort` 读取有界正式数据。
+
+`AiAvailabilityView` 在 `available` 时可以包含 server 生成的 `providerDisplayName: "DeepSeek"`、`requestedModelAlias: "deepseek-v4-pro"` 与 `verifiedAt`，用于个人中心展示当前 AI 提供商；这些是非敏感只读元数据，不是 client 配置面。未配置/无效时不得由 UI 猜测 provider，且 contract 不暴露 endpoint、密钥明文、可逆 fingerprint 或 provider SDK 类型。
+
+Assistant adapter 只允许返回 `answer + citations + optional planningDraft`。`planningDraft` 是现有表单可表达的预填值；没有 `applyDraft` 或通用 `executeTool` HTTP 入口。用户从表单提交时走原有 academics/planning command，因此所有权、领域验证、幂等和 `expectedVersion` 不会被模型绕过。
+
+页面与 HTTP contract 不暴露 prompt、schema 或 provider request。暂定内部实现由 `assistant` 依次完成 `PlanningContextPort → AssistantPromptRegistry → DeepSeekResponsesPort → AssistantResultValidator → AssistantTurnView mapper`；`AssistantPromptRegistry` 只按受控 `purpose` 返回代码内版本化完整 spec，不能读取数据库中的可执行 prompt。`DeepSeekResponsesPort` 是内部 seam，只有 deterministic fake 与固定 DeepSeek live adapter 两种实现；它不是多供应商插件接口。
+
+`AssistantTurnView` 必须是可安全渲染的状态 union：
+
+```ts
+type AssistantTurnView =
+  | { status: "queued" | "generating"; question: string; result: null; problem: null }
+  | { status: "completed"; question: string; result: AssistantResultView; problem: null }
+  | { status: "cancelled"; question: string; result: null; problem: null }
+  | { status: "failed"; question: string; result: null; problem: SafeAiProblemView };
+
+type AssistantResultView = {
+  blocks: Array<
+    | { kind: "paragraph"; text: string }
+    | { kind: "list"; items: string[] }
+  >;
+  citations: Array<{ recordId: string; label: string; href: string }>;
+  assumptions: string[];
+  planningDraft: PlanningDraftView | null;
+  generatedByLabel: string;
+};
+```
+
+`blocks` 由 server mapper 从已校验结构生成，不接受 HTML 或任意 Markdown。`SafeAiProblemView` 只含稳定 code、用户语言、恢复操作和 `retryable`；不含供应商正文、prompt、key、stack 或原始 output。失败/取消保留 `question`，以便用户重试或改走手工表单。
 
 ## 3. HTTP 约定
 
@@ -169,13 +247,9 @@ interface InsightQueries {
 | `DELETE /task-labels/:labelId`                              | 删除标签并移除关联，不删除事项      | `204`                            |
 | `PUT /course-items/:itemId/labels`                          | 原子替换事项标签集合                | `200`                            |
 | `POST /courses/:courseId/source-uploads`                    | 获取上传计划                        | `201`                            |
-| `POST /source-documents/:sourceId/complete`                 | 完成上传并排队                      | `202 { data: ImportRunSummary }` |
-| `POST /source-documents/:sourceId/retry`                    | 新建重试 run                        | `202`                            |
-| `DELETE /source-documents/:sourceId`                        | 取消活动 run、撤销预览并排队清理    | `202/204`                        |
-| `GET /import-runs/:runId`                                   | 轻量进度轮询                        | `200`，支持 ETag                 |
-| `POST /import-runs/:runId/cancel`                           | 请求在安全检查点取消                | `202`                            |
-| `GET /import-runs/:runId/review`                            | 候选审核模型                        | `200`                            |
-| `PUT /candidates/:candidateId/decision`                     | 幂等提交审核决定                    | `200/201`                        |
+| `POST /source-documents/:sourceId/complete`                 | 完成上传；资料进入 `ready`          | `200 { data: SourceDocumentView }` |
+| `GET /source-documents/:sourceId/preview`                   | owner-scoped 原文件预览/下载         | `200` 或短期私有 URL             |
+| `DELETE /source-documents/:sourceId`                        | 撤销预览并排队清理；AI 模式另取消 run | `202/204`                      |
 | `GET /dashboard?termId=...`                                 | 雷达 snapshot                       | `200`                            |
 | `GET /calendar?termId=...`                                  | 日历 snapshot                       | `200`                            |
 | `GET /tasks?termId=...`                                     | 短期/中长期任务 snapshot 与标签筛选 | `200`                            |
@@ -183,7 +257,17 @@ interface InsightQueries {
 | `GET /calendar/export.ics?...`                              | ICS                                 | `200 text/calendar`              |
 | `GET /terms/:termId/insights`                               | 统计洞察                            | `200`                            |
 
+以下端点组只在 `AI_ENABLED` 的 route manifest 中安装；`MANUAL_ONLY` 中应为“路由不存在”，而不是假装存在后统一返回 `AI_UNAVAILABLE`：
+
+- `POST /source-documents/:sourceId/import-runs`
+- `POST /source-documents/:sourceId/retry`
+- `GET|POST /import-runs/...` 与 `PUT /candidates/:candidateId/decision`
+- `GET /profile/ai`、`PUT|DELETE /profile/ai/deepseek-credential`
+- `POST|GET /assistant/turns...` 与取消端点
+
 Next.js Server Components 可以在进程内直接调用相同 query interface，避免自请求 HTTP；Client Component、上传和外部集成使用上述 contract。两条路径必须共享同一 mapper/schema，不能返回两种页面模型。
+
+完成上传不隐式排队。`MANUAL_ONLY` 随后只显示预览与手工录入；`AI_ENABLED` 若选择“上传后立即解析”，也必须顺序调用 complete 与 import-runs 两个意图，第二步失败时保留已上传资料并显示手工恢复操作。
 
 ### 3.2 JSON 形状
 
@@ -229,6 +313,11 @@ Next.js Server Components 可以在进程内直接调用相同 query interface�
 | MIME 不支持              | `415`                                                |
 | 限流                     | `429` + `Retry-After`                                |
 | 外部依赖暂不可用         | 同步入口 `503`；异步导入通常记录 run failure/retry   |
+| `AI_ENABLED`：AI 未配置/已撤销 | `409 AI_UNAVAILABLE`，并返回个人中心恢复入口     |
+| `AI_ENABLED`：AI key 无效      | 配置入口 `422 AI_CREDENTIAL_INVALID`             |
+| `AI_ENABLED`：AI 余额不足      | `402 AI_INSUFFICIENT_BALANCE`，不自动重试        |
+
+`MANUAL_ONLY` 没有 AI route，因此不会产生上述业务错误；请求旧 AI URL 按普通不存在处理，不向 UI 暴露被移除能力。
 
 ## 4. 日期 Contract
 

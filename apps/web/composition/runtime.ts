@@ -3,16 +3,20 @@ import {
   createAcademics,
   createPlanning,
   createSchedule,
+  createSourceLibrary,
   type Academics,
   type Planning,
   type Schedule,
+  type SourceLibrary,
   type UserScope,
 } from "@courseflow/core";
 import {
   ConfigError,
   createLogger,
   createPostgresCourseFlowRepository,
+  createPostgresSourceLibraryRepository,
   createRuntimeDependencies,
+  createS3SourceObjectStore,
   loadRuntimeConfig,
   type PostgresCourseFlowRepository,
   type ReadinessReport,
@@ -49,6 +53,7 @@ type WebRuntime = Readonly<{
   configError?: ConfigError;
   planning?: Planning;
   schedule?: Schedule;
+  sources?: SourceLibrary;
   readiness: () => Promise<ReadinessReport>;
 }>;
 
@@ -79,12 +84,20 @@ function createWebRuntime(): WebRuntime {
       databaseUrl: config.DATABASE_URL,
       ids: { nextId: randomUUID },
     });
+    const sourceRepository = createPostgresSourceLibraryRepository(config.DATABASE_URL);
+    const objectStore = createS3SourceObjectStore(config);
     logger.info("runtime_started", { status: "auth_development" });
     return {
       academics: createAcademics(repository),
       auth: new DevelopmentIdentityAdapter(repository),
       planning: createPlanning(repository),
       schedule: createSchedule(repository, { clock }),
+      sources: createSourceLibrary({
+        clock,
+        ids: { nextId: randomUUID },
+        objectStore,
+        repository: sourceRepository,
+      }),
       readiness: dependencies.readiness,
     };
   } catch (error) {
@@ -109,6 +122,7 @@ export async function getScopedCourseFlow(): Promise<
     academics: Academics;
     planning: Planning;
     schedule: Schedule;
+    sources: SourceLibrary;
     scope: UserScope;
   }>
 > {
@@ -118,7 +132,8 @@ export async function getScopedCourseFlow(): Promise<
     runtime.academics === undefined ||
     runtime.auth === undefined ||
     runtime.planning === undefined ||
-    runtime.schedule === undefined
+    runtime.schedule === undefined ||
+    runtime.sources === undefined
   ) {
     throw runtime.configError ?? new Error("CourseFlow runtime is unavailable.");
   }
@@ -126,6 +141,7 @@ export async function getScopedCourseFlow(): Promise<
     academics: runtime.academics,
     planning: runtime.planning,
     schedule: runtime.schedule,
+    sources: runtime.sources,
     scope: await runtime.auth.getUserScope(),
   };
 }

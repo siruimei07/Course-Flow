@@ -17,6 +17,7 @@ CourseFlow 把课程资料转成可核对的课程计划。任何自动抽取结
 - 产品行为、开放问题、页面职责或验收标准变化：先读 [需求基线](./docs/product/REQUIREMENTS.md)，再读 [产品范围](./docs/product/SCOPE.md)。
 - 表、关系、日期、成绩或来源证据变化：读 [数据模型](./docs/architecture/DATA_MODEL.md)。
 - 上传、PDF/OCR、AI 抽取、重试或审核变化：读 [导入流水线](./docs/architecture/INGESTION.md)。
+- 个人中心 AI、用户 API key、规划问答/草稿、模型能力或凭据安全变化：读 [个人 AI 配置与规划助手](./docs/architecture/AI_ASSISTANT.md)。
 - HTTP、命令、查询、错误或模块调用变化：读 [接口契约](./docs/architecture/INTERFACES.md)。
 - 页面、交互、样式或用户提供的 UI 代码变化：读 [前端与 UI 整合](./docs/architecture/FRONTEND.md)。
 - 冻结网页原型、变更已确认视觉、建立视觉回归或把 HTML 迁移为生产 UI：读 [前端设计基线与冻结](./docs/design/DESIGN_BASELINE.md)。
@@ -52,4 +53,5 @@ CourseFlow 把课程资料转成可核对的课程计划。任何自动抽取结
 - UI 只依赖 view model/contract，不直接读取数据库实体。用户提供的页面代码先拆分视觉、交互和数据职责，再接入真实模块。
 - 冻结 UI 基线是具体视觉和交互的只读权威；普通实现不得静默改写。正确性、安全、隐私、领域 contract 或无障碍要求造成的偏差必须记录，新的视觉方向必须由用户确认并生成新基线版本。
 - 统计页保留稳定入口和查询 seam；指标未定义前不建立通用插件系统或虚构统计表。
+- DeepSeek AI 只有在 [AI 去留门禁](./docs/architecture/AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 全部通过并签署 `AI_GO` 后才能进入生产；任一硬门禁失败或最终仍未验证时执行 `MANUAL_ONLY`，删除 AI 功能且不换其他模型顶替。
 - 新的不可逆架构取舍满足 ADR 条件时写入 `docs/adr/`；领域词义变化同步更新 `CONTEXT.md`。

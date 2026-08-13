@@ -1,8 +1,8 @@
 # CourseFlow：可核对的课程计划
 
-CourseFlow 把学期课表、课程事项、资料证据与手工成绩整理成一套可核对的个人课程计划。自动抽取只产生候选；只有用户作出审核决定后，候选才可以进入正式课程记录。
+CourseFlow 把学期课表、课程事项、原始资料与手工成绩整理成一套可核对的个人课程计划。正式事实默认由用户手工确认；只有 DeepSeek 最终门禁通过时才启用自动抽取，且候选仍须经用户审核才能进入正式记录。
 
-当前仓库已完成 P1：在 P0 的 Next.js、Node worker、PostgreSQL、S3-compatible 本地对象存储和统一质量门上，提供 auth-scoped 的学期、Reading Week、课程/多课节、手工事项/标签与 Gradebook 闭环。生产页面只读取正式 contract，不用课程 mock 冒充功能；不计算 GPA 或预测最终成绩。实际阶段状态以 [实施计划](./docs/architecture/IMPLEMENTATION_PLAN.md) 为准。
+当前仓库已完成 P3：在 P1–P2 的正式课程与统一投影之上，Sources 已走通私有上传、服务端校验、安全预览、删除和“对照资料打开既有手工表单”，手工提交后由 Timeline/Dashboard 回读。DeepSeek 仍为 `AI_PENDING`；只存在隔离 deterministic fake、冻结 eval policy 与显式 harness，默认生产不含 AI route、UI、adapter 或 migration。实际阶段状态以 [实施计划](./docs/architecture/IMPLEMENTATION_PLAN.md) 为准。
 
 ## 本地启动
 
@@ -28,15 +28,15 @@ pnpm dev
 
 停止应用使用 `Ctrl+C`；本地依赖可用 `pnpm deps:down` 停止。该命令不会删除数据卷。
 
-## P1 质量门
+## 当前 P3 质量门
 
 本地与 CI 使用同一个阶段门禁：
 
 ```powershell
-pnpm gate:p1
+pnpm gate:p3
 ```
 
-它依次验证 frozen install、依赖与 bucket 准备、当前库和空库 migration、格式、ESLint/模块边界、TypeScript strict、最小 Vitest 集、P1 PostgreSQL 权限/持久化/版本契约、production build，以及唯一 Playwright canonical journey，并执行依赖漏洞、许可证和秘密扫描。需要只运行某一层时，以根 `package.json` 中的脚本为准。
+它依次验证 frozen install、依赖与 bucket 准备、当前库和空库 migration、格式、ESLint/模块边界、TypeScript strict、最小 Vitest 集、P1/P2 统一投影、P3 PostgreSQL/S3 Source 权限 contract、eval dry-run、production build、唯一手工 Playwright canonical journey，以及显式隔离的 fake AI harness；最后执行依赖漏洞、许可证和秘密扫描。默认 `pnpm dev`、`pnpm build` 和 `pnpm test:e2e` 都不会启动或构建 AI harness。
 
 ## 文档入口
 
@@ -53,7 +53,7 @@ pnpm gate:p1
 
 ## 核心承诺
 
-1. AI 不直接修改正式课程数据。
-2. 每个抽取字段都可回到原始课程资料核对。
+1. 没有 AI 也能完成全部课程计划；AI 只有通过硬门禁才启用，失败不换模型。
+2. `AI_ENABLED` 时 AI 不直接修改正式数据，每个抽取字段都可回到原始资料核对。
 3. 纯日期、具体时刻和待定日期有不同语义，不互相伪装。
 4. 用户提供的 UI 片段会被纳入统一设计系统，而不是形成孤立页面。

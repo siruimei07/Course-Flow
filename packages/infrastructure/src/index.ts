@@ -10,4 +10,9 @@ export {
   PostgresCourseFlowRepository,
   type UserProfileSeed,
 } from "./postgres-courseflow-repository";
+export {
+  createPostgresSourceLibraryRepository,
+  PostgresSourceLibraryRepository,
+} from "./postgres-source-library-repository";
+export { createS3SourceObjectStore } from "./s3-source-object-store";
 export * from "./schema";

@@ -2,14 +2,21 @@
 
 本流水线把不可信 PDF/图片变成可审核 Candidate。它追求可恢复和可解释，不追求“上传后立即自动写日历”。
 
+> 适用条件：Source 上传、安全校验和原文件预览属于所有产品模式；Prepare/OCR/Extract、Import Run、Candidate/Evidence 与 Review 只有 [DeepSeek 去留门禁](./AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 得到 `AI_GO` 后才进入生产。当前 `AI_PENDING` 只允许隔离 fake/contract。最终为 `MANUAL_ONLY` 时删除自动导入 surface 和 AI 专用 schema，用户从 Source 预览旁打开既有表单手工录入。
+
 ## 1. 外部 interface
 
-对 web 暴露三个高杠杆操作：
+所有模式都暴露 Source Library 的少量高杠杆操作；只有 `AI_ENABLED` 才额外装配自动导入操作：
 
 ```ts
-type IngestionModule = {
+type SourceLibraryModule = {
   beginUpload(input: BeginUploadInput): Promise<UploadPlan>;
-  completeUpload(input: CompleteUploadInput): Promise<ImportRunSummary>;
+  completeUpload(input: CompleteUploadInput): Promise<SourceDocumentSummary>;
+  deleteSource(input: DeleteSourceInput): Promise<void>;
+};
+
+type AiIngestionModule = {
+  startImport(input: StartImportInput): Promise<ImportRunSummary>;
   retryImport(input: RetryImportInput): Promise<ImportRunSummary>;
   reviewCandidate(input: ReviewCandidateInput): Promise<ReviewResult>;
 };
@@ -40,7 +47,7 @@ interface ExtractionPort {
 }
 ```
 
-生产和测试各有 adapter，port 才成立。`ExtractionPort` 隐藏 OpenAI request、file ID、模型响应和 token 细节；core 只认识版本化 artifact。
+`ObjectStorePort` 服务所有模式的 Source 上传/预览。`ImportQueuePort`、`DocumentPreparationPort` 与 `ExtractionPort` 只在 `AI_ENABLED` 装配；`ExtractionPort` 隐藏 DeepSeek request、动态模型版本、模型响应和 token 细节，core 只认识版本化 artifact。生产 adapter 使用用户自带凭据，日常测试使用 deterministic fake；`MANUAL_ONLY` 删除三个 AI port 与其 adapters，不建立空的 provider 框架。
 
 ## 2. 上传协议
 
@@ -65,7 +72,9 @@ interface ExtractionPort {
 - 计算 SHA-256；同课程相同 document fingerprint 给重复提示，可继续或取消。
 - PDF 页数和尺寸遵守上限；必要时隔离恶意/解压炸弹输入。
 
-验证成功后，在一个 transaction 中把资料改为 `ready`、创建 `ImportRun(queued)` 并提交任务。若队列 adapter 无法和业务 transaction 共享连接，使用 transactional outbox；不能出现数据库有 run 却永远没有任务的窗口。
+验证成功后，在一个 transaction 中把资料改为 `ready` 并返回 Source Document；此时**不自动创建** Import Run。资料上传不依赖 AI 成功。
+
+`MANUAL_ONLY` 到此结束：页面提供预览和“手工录入”入口，不调用 `startImport`。仅 `AI_ENABLED` 时，用户明确开始解析才调用 `startImport`。服务端重新鉴权并检查该用户的 DeepSeek 凭据为 `available`，然后在一个 transaction 中创建 `ImportRun(queued)` 并提交任务。若未配置或已撤销，返回 `AI_UNAVAILABLE`，资料继续保持 `ready`；若队列 adapter 无法和业务 transaction 共享连接，使用 transactional outbox，不能出现数据库有 run 却永远没有任务的窗口。UI 可以把“完成上传 → 开始解析”连续呈现，但必须保留两个失败边界。
 
 `uploading` 资料有明确过期时间。定期 cleanup 把超过时限且未完成的资料标为 `rejected`，删除已上传的孤立对象并使 upload token 失效；`completeUpload` 在过期后返回可重建上传的错误，不能复活旧对象。
 
@@ -134,6 +143,7 @@ worker 用 compare-and-set 转移状态。旧任务、重复投递或失去 leas
 type PreparedPage = {
   pageNumber: number; // 1-based
   text: string | null;
+  textSource: "embedded" | "ocr" | "none";
   imageRef: InternalObjectRef;
   width: number;
   height: number;
@@ -146,14 +156,14 @@ type PreparedDocument = {
 };
 ```
 
-- 有文本层 PDF：本地抽取文本，同时生成受限页图供 Evidence 定位和复杂布局理解。
-- 扫描 PDF/图片：保留图像输入；可选 OCR adapter 只用于检索和 Evidence 辅助，不把 OCR 文本当作事实。
+- 有文本层 PDF：本地抽取文本，同时生成受限页图供用户核对 Evidence、坐标映射和后续重处理；DeepSeek 不读取该页图。
+- 扫描 PDF/图片：保留页图供用户核对，并由受限 OCR adapter 产生带区域定位的非可信文本。OCR 结果可以作为 DeepSeek 的抽取输入，但不是正式事实；关键字段必须回到对应页/区域并经用户审核。没有可用文本/OCR 的页面不伪装成已解析成功。
 - 页顺序稳定；截图 set 按用户上传 position，不靠文件名字母排序。
 - 页面渲染在受限进程/容器执行，限制 CPU、内存、页数和像素总量。
 
 ### 4.3 Extract
 
-首个 `ExtractionPort` 可使用 OpenAI Responses 的 PDF/图片输入和 strict JSON Schema。模型输出只允许：
+首个真实 `ExtractionPort` 使用 DeepSeek Responses API 的 `deepseek-v4-pro` 文本输入与 `text.format=json_schema`。DeepSeek API 当前不支持 PDF、图片、vision 或 file input；adapter 只接收 `PreparedDocument` 产生的有界页级文本/OCR 与 locator，不能把对象 URL、原始文件或图片占位符发给模型。供应商 schema 不是领域信任边界，响应随后仍过本地 Zod 与 validator。模型输出只允许：
 
 - 资料级课程字段建议。
 - 课程事项草稿，包含 `temporal` union，未知用 `unscheduled`。
@@ -169,7 +179,21 @@ Prompt 原则：
 - 冲突信息全部返回，不让模型自行选择新旧版本。
 - 对评分规则保留 `ruleText`，不要把 “best 8 of 10” 展开为虚构事项。
 
-模型 request 固定 model snapshot、schema version、prompt version、temperature/推理配置；相关元数据写 run，正文不进普通日志。
+暂定实现不让 worker handler 手工拼 prompt 或供应商 request，而是调用以下内部链：
+
+```text
+PreparedDocument
+  -> ExtractionInputAssembler（页边界、locator、token budget、input digest）
+  -> IngestionPromptRegistry（purpose + prompt/schema/budget version）
+  -> DeepSeekResponsesPort（deterministic fake / conditional live adapter）
+  -> ExtractionOutputParser（唯一完整 output_text + 同版本 schema）
+  -> Evidence/领域 validator
+  -> immutable raw/normalized artifact
+```
+
+`IngestionPromptRegistry` 是 `ingestion` 内部的 source-controlled pure module；entry 同时持有 instructions builder、input serializer、JSON Schema、parser 和预算 policy 引用。HTTP、数据库和 Source Document 都不能覆盖 prompt/schema。课程资料以带页码和稳定 locator 的不可信数据 payload 进入 `input`，不能混进 `instructions`。改动 prompt 或 schema 必须升版本并重跑 gold/eval；不能在真实评测后静默改阈值或只改 prompt 不留版本。
+
+`DeepSeekResponsesPort` 使用正向请求字段 allowlist，固定请求 alias（v1 为 `deepseek-v4-pro`）、`stream=false`、`reasoning.effort=none`、`tools=[]`、`tool_choice=none` 和输入/输出预算；省略不支持的 `store`、会话和任意 tool/provider 参数。相关版本与调用元数据写 run，完整正文不进普通日志。port 只有在 `status=completed` 且唯一 `message/output_text` 时返回文本；其他终态、function/web output 或空文本映射为安全错误。feature parser 再拒绝非法 JSON 或本地校验失败，两层都不产生部分 Candidate。由于官方只暴露动态 alias，Responses 的 `response.id` 与实际 `model` 写入审计；`system_fingerprint` 只有所用 endpoint 实际返回时才 nullable 保存。变化触发 corpus eval，不能把展示名称当作可调用的固定 snapshot。
 
 ### 4.4 Normalize
 
@@ -178,7 +202,7 @@ Prompt 原则：
 - trim、Unicode 正规化、受控枚举映射。
 - 解析明确 ISO/英语月份等日期，使用课程/学期时区；不唯一则保持 unscheduled 并 warning。
 - 百分比转换为 bps，拒绝 NaN/负数/超过结构范围。
-- Evidence `field_path` 校验，quote 长度裁剪，bbox 范围校验。
+- Evidence `field_path` 使用正向 allowlist；每个实际提议字段都必须有 locator/quote、`0..1000` 字段置信度与非空纯文本推断说明，quote、说明和 bbox 分别做长度/标记/范围校验。
 - 为候选生成稳定 fingerprint：规范化 kind/title/日期/评分结构，不含置信度和 Evidence ID。
 - 保存 raw artifact 与 normalized artifact，二者均不可变。
 
@@ -250,6 +274,8 @@ UI 可以默认突出“作为新记录接受”，但提交 contract 必须明�
 | `invalid_input`      | 加密/损坏 PDF、格式不支持、超页数 | 否；提示用户替换资料          |
 | `provider_transient` | 429、5xx、网络超时                | 指数退避 + jitter，有限次数   |
 | `provider_permanent` | 模型拒绝该输入、schema 持续不匹配 | 最多一次修复/再调用，然后失败 |
+| `credential_invalid` | 401、调用前凭据已撤销             | 否；标记凭据无效/提示重新配置 |
+| `insufficient_balance` | 402                             | 否；提示用户检查供应商余额    |
 | `resource_limit`     | 渲染超时、像素/内存上限           | 否或降低批次后一次重试        |
 | `internal`           | constraint/代码错误               | 有限重试并告警，隐藏内部详情  |
 | `cancelled`          | 用户请求取消                      | 否                            |
@@ -263,14 +289,15 @@ UI 可以默认突出“作为新记录接受”，但提交 contract 必须明�
 - 上传资源视为恶意输入；文件类型 sniff、尺寸/页数/像素限制、隔离解析、禁止宏/脚本执行。
 - 对象存储默认私有；预签名 URL 短时、单对象、限制 method/content length。
 - 用户输入和文档正文不能成为 system/developer 指令；prompt 明确把它们标为待抽取数据，模型不具备工具调用权限。
-- 只向 AI provider 发送完成当前导入所需的页面，不附加其他课程或用户资料。
-- provider 文件如需上传，设置最短可行过期并在 run 结束后清理；记录清理失败供后台补偿。
+- 只向 AI provider 发送完成当前导入所需的页级文本块，不附加其他课程、原始 PDF/图片、对象 URL 或用户资料。
+- DeepSeek P3 adapter 不上传 provider File；若未来供应商增加文件能力，必须重新核验数据条款、清理语义并更新本节后才可采用。
+- worker 只按 Import Run owner 与用途临时解封凭据；明文 key 不进队列 payload、artifact、日志、trace 或错误响应。凭据在执行中被撤销时，于下一安全检查点停止并记录 `AI_UNAVAILABLE`。
 - 日志记录 ID、stage、耗时、错误 code、token 数，不记录全文、Evidence quote 或签名 URL。
 - 所有预览 endpoint 每次验证所有权；缓存头使用 private/no-store（或严格用户作用域 cache）。
 
 ## 8. 提取质量评估
 
-在接真实 AI 前建立去身份化 fixture corpus，至少覆盖：
+在任何真实调用前先冻结 `ai-eval-policy-v1` 的去身份化 fixture corpus、评分器、阈值和零容忍项；P3 只跑 fake/gold，P4 才由用户临时提供 key 运行真实评测。任一硬门禁失败或最终仍未验证时，不调低阈值补救，而是执行 `MANUAL_ONLY` 清理。corpus 至少覆盖：
 
 - 有文本层的标准 syllabus。
 - 扫描 PDF。

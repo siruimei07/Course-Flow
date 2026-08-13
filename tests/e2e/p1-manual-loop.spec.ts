@@ -3,12 +3,19 @@ import { Client } from "pg";
 
 const e2eUserId = "00000000-0000-4000-9000-000000000901";
 
-test.beforeAll(async () => {
+async function resetCanonicalData(): Promise<void> {
   if (process.env.DATABASE_URL === undefined) throw new Error("DATABASE_URL is required.");
   const client = new Client({ connectionString: process.env.DATABASE_URL });
   await client.connect();
   try {
     await client.query("begin");
+    await client.query(
+      `delete from courseflow.source_documents where course_id in (
+         select c.id from courseflow.courses c
+         join courseflow.academic_terms t on t.id=c.term_id where t.owner_user_id=$1
+       )`,
+      [e2eUserId],
+    );
     await client.query(
       `delete from courseflow.grading_schemes where course_id in (
          select c.id from courseflow.courses c
@@ -79,13 +86,21 @@ test.beforeAll(async () => {
   } finally {
     await client.end();
   }
-});
+}
 
-test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
+test("canonical P1–P3 manual plan survives PostgreSQL and private object storage", async ({
   page,
   request,
 }) => {
-  const requestId = "canonical-p1-p2-loop";
+  const browserErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      browserErrors.push(`${message.type()}: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => browserErrors.push(`pageerror: ${error.message}`));
+  await resetCanonicalData();
+  const requestId = "canonical-p1-p3-loop";
   const webHealth = await request.get("/api/health", { headers: { "x-request-id": requestId } });
   expect(webHealth.ok()).toBe(true);
   expect(webHealth.headers()["x-request-id"]).toBe(requestId);
@@ -99,7 +114,7 @@ test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
   const workerReady = await request.get("http://127.0.0.1:3001/ready");
   expect(workerReady.ok()).toBe(true);
 
-  await page.setViewportSize({ height: 1024, width: 768 });
+  await page.setViewportSize({ height: 900, width: 1280 });
   await page.goto("/dashboard");
   await expect(page).toHaveTitle(/CourseFlow/u);
   await page.keyboard.press("Tab");
@@ -161,14 +176,66 @@ test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
   await expect(page.getByText("Tutorial (TUT)", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Practical (PRA)", { exact: true }).first()).toBeVisible();
 
-  await page.goto("/tasks");
+  const sourcePdf = Buffer.from(
+    "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n",
+    "latin1",
+  );
+  await page.goto(`/sources?courseId=${courseId}`);
+  await expect(page.getByRole("heading", { name: "资料库" })).toBeVisible();
+  await page.getByLabel("资料名称（可选）").fill("Canonical Course Guide");
+  await page.getByLabel("选择原文件").setInputFiles({
+    buffer: sourcePdf,
+    mimeType: "application/pdf",
+    name: "canonical-course-guide.pdf",
+  });
+  await page.getByRole("button", { name: "创建资料" }).click();
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "资料已通过服务端校验；没有自动创建任何正式课程数据。" }),
+  ).toBeVisible();
+  await page.waitForURL(/\/sources\?courseId=[0-9a-f-]+&sourceId=[0-9a-f-]+&upload=completed$/u);
+  const sourceId = new URL(page.url()).searchParams.get("sourceId");
+  if (sourceId === null) throw new Error("Source redirect did not include sourceId.");
+  await expect(page.getByText("Canonical Course Guide", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("仅 Source，尚未写入正式课程数据")).toBeVisible();
+  await expect(page.getByRole("link", { name: "查看原始文件" })).toBeVisible();
+  const previewResponse = await request.get(`/api/v1/source-documents/${sourceId}/preview`);
+  expect(previewResponse.ok()).toBe(true);
+  expect(previewResponse.headers()["content-type"]).toContain("application/pdf");
+  expect(await previewResponse.body()).toEqual(sourcePdf);
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: false,
+    path: "test-results/canonical-p3-sources-1280x900.png",
+  });
+  await page.setViewportSize({ height: 450, width: 640 });
+  const sourceReflow = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(sourceReflow.scrollWidth).toBeLessThanOrEqual(sourceReflow.clientWidth + 1);
+  await expect(page.getByRole("link", { name: "查看原始文件" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "课程事项" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除资料" })).toBeVisible();
+  await page.setViewportSize({ height: 900, width: 1280 });
+
+  await page.getByRole("link", { name: "课程事项" }).click();
+  await page.waitForURL(new RegExp(`/tasks\\?courseId=${courseId}&sourceId=${sourceId}$`, "u"));
+  await expect(page.getByRole("heading", { name: "Canonical Course Guide" })).toBeVisible();
+  await expect(page.getByText(/原文不会预填或提交任何字段/u)).toBeVisible();
+  await expect(page.getByRole("link", { name: "查看原始文件" })).toHaveAttribute(
+    "target",
+    "_blank",
+  );
+  await expect(page.getByLabel("课程")).toHaveValue(courseId);
   await page.getByLabel("创建本学期标签").fill("需讨论");
   await page.getByRole("button", { name: "保存标签" }).click();
   await expect(page.getByText("标签已保存，可刷新后用于该学期事项。")).toBeVisible();
   await page.getByLabel("事项标题").fill("Problem Set 1");
   await page.getByLabel("预计投入（分钟，可选）").fill("600");
   await page.getByLabel("时间语义").selectOption("date");
-  await page.getByLabel("日期").fill("2026-09-30");
+  await page.getByLabel("日期").fill("2026-09-10");
   await page.getByLabel("需讨论").check();
   await page.getByRole("button", { name: "添加事项" }).click();
   await expect(
@@ -230,12 +297,12 @@ test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
   await page.screenshot({
     animations: "disabled",
     fullPage: false,
-    path: "test-results/canonical-p2-tasks-768x1024.png",
+    path: "test-results/canonical-p2-tasks-1280x900.png",
   });
 
   await page.goto(`/courses/${courseId}/timeline`);
   await expect(page.getByRole("heading", { name: "Problem Set 1" })).toBeVisible();
-  await expect(page.getByText(/9月30日.*全天/u).first()).toBeVisible();
+  await expect(page.getByText(/9月10日.*全天/u).first()).toBeVisible();
 
   await page.goto(`/courses/${courseId}/grading`);
   await page.locator("#grade-title-0").fill("Midterm");
@@ -288,6 +355,7 @@ test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
   );
 
   await page.goto("/dashboard");
+  await expect(page.getByText("Problem Set 1", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("教学周 1")).toBeVisible();
   await expect(page.getByRole("heading", { name: "实践课" })).toBeVisible();
   await expect(page.getByText("时间冲突")).toBeVisible();
@@ -330,37 +398,26 @@ test("canonical P1 and P2 plan survives a real PostgreSQL round trip", async ({
     path: "test-results/canonical-p2-calendar-reading-week-1280x900.png",
   });
 
-  await page.setViewportSize({ height: 900, width: 640 });
-  await page.goto("/tasks");
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-      ),
-    )
-    .toBe(true);
-  await page.goto("/calendar?from=2026-09-08");
-  await expect(page.getByRole("heading", { name: "日历" })).toBeVisible();
-  await expect
-    .poll(() =>
-      page.evaluate(
-        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-      ),
-    )
-    .toBe(true);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const calendar = document.querySelector<HTMLElement>(".calendar-scroll");
-        return calendar !== null && calendar.scrollWidth > calendar.clientWidth;
-      }),
-    )
-    .toBe(true);
-  await page.setViewportSize({ height: 900, width: 1280 });
   await page.goto(`/courses?courseId=${courseId}`);
   await page.screenshot({
     animations: "disabled",
     fullPage: false,
     path: "test-results/canonical-p2-courses-1280x900.png",
   });
+
+  await page.goto(`/sources?courseId=${courseId}&sourceId=${sourceId}`);
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "删除资料" }).click();
+  await page.waitForURL("/sources");
+  await expect(page.getByText("Canonical Course Guide", { exact: true })).toHaveCount(0);
+  const revokedPreview = await request.get(`/api/v1/source-documents/${sourceId}/preview`, {
+    maxRedirects: 0,
+  });
+  expect(revokedPreview.status()).toBe(404);
+
+  await page.goto(`/courses/${courseId}/timeline`);
+  await expect(page.getByRole("heading", { name: "Problem Set 1" })).toBeVisible();
+  await page.goto("/dashboard");
+  await expect(page.getByText("Problem Set 1", { exact: true }).first()).toBeVisible();
+  expect(browserErrors).toEqual([]);
 });

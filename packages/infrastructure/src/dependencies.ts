@@ -1,6 +1,7 @@
 import {
   CreateBucketCommand,
   HeadBucketCommand,
+  PutBucketCorsCommand,
   S3Client,
   type S3ClientConfig,
 } from "@aws-sdk/client-s3";
@@ -14,7 +15,7 @@ export type ReadinessReport = Readonly<{
   status: "ready" | "not_ready";
 }>;
 
-function createS3Client(config: RuntimeConfig) {
+export function createS3Client(config: RuntimeConfig) {
   const options: S3ClientConfig = {
     credentials: {
       accessKeyId: config.OBJECT_STORE_ACCESS_KEY,
@@ -79,6 +80,26 @@ export async function ensureObjectStoreBucket(config: RuntimeConfig): Promise<vo
       abortSignal: AbortSignal.timeout(5_000),
     });
   } finally {
-    objectStore.destroy();
+    try {
+      await objectStore.send(
+        new PutBucketCorsCommand({
+          Bucket: config.OBJECT_STORE_BUCKET,
+          CORSConfiguration: {
+            CORSRules: [
+              {
+                AllowedHeaders: ["content-type"],
+                AllowedMethods: ["GET", "HEAD", "PUT"],
+                AllowedOrigins: [config.APP_ORIGIN],
+                ExposeHeaders: ["etag"],
+                MaxAgeSeconds: 900,
+              },
+            ],
+          },
+        }),
+        { abortSignal: AbortSignal.timeout(5_000) },
+      );
+    } finally {
+      objectStore.destroy();
+    }
   }
 }

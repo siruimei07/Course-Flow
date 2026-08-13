@@ -216,6 +216,101 @@ export const calendarQuerySchema = scheduleQuerySchema.extend({
   includeMeetings: z.boolean().optional(),
 });
 
+export const beginSourceUploadInputSchema = z.object({
+  assets: z
+    .array(
+      z.object({
+        byteSize: z
+          .number()
+          .int()
+          .positive()
+          .max(50 * 1024 * 1024),
+        declaredMimeType: z.enum(["application/pdf", "image/jpeg", "image/png", "image/webp"]),
+        originalFilename: z.string().trim().min(1).max(255),
+        position: z.number().int().min(0),
+      }),
+    )
+    .min(1)
+    .max(24),
+  courseId: uuid,
+  displayName: z.string().trim().min(1).max(200),
+  kind: z.enum(["syllabus", "assignment_brief", "screenshot_set", "other"]),
+});
+
+export const completeSourceUploadInputSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+});
+
+export const deleteSourceInputSchema = z.object({
+  expectedVersion: z.number().int().positive(),
+});
+
+const coursePatchCandidatePayloadSchema = z.object({
+  code: z.string().max(32).optional(),
+  instructorName: nullableText(160),
+  section: nullableText(80),
+  title: z.string().max(160).optional(),
+});
+
+const courseItemCandidatePayloadSchema = z.object({
+  courseId: uuid,
+  details: z.string().max(10_000).nullable(),
+  estimatedMinutes: z.number().int().positive().nullable(),
+  kind: z.enum([
+    "assignment",
+    "exam",
+    "quiz",
+    "lab",
+    "project",
+    "presentation",
+    "reading",
+    "milestone",
+    "other",
+  ]),
+  temporal: temporalSchema,
+  title: z.string().trim().min(1).max(200),
+});
+
+const gradingSchemeCandidatePayloadSchema = z.object({
+  components: z
+    .array(
+      z.object({
+        ruleText: z.string().max(4_000).nullable(),
+        title: z.string().trim().min(1).max(200),
+        weightBps: z.number().int().min(0).max(10_000).nullable(),
+      }),
+    )
+    .min(1)
+    .max(100),
+  conditionText: z.string().max(4_000).nullable(),
+  courseId: uuid,
+  isPrimary: z.boolean(),
+  name: z.string().trim().min(1).max(120),
+});
+
+export const candidatePayloadSchema = z.union([
+  courseItemCandidatePayloadSchema,
+  gradingSchemeCandidatePayloadSchema,
+  coursePatchCandidatePayloadSchema,
+]);
+
+export const reviewCandidateBodySchema = z.object({
+  application: z
+    .discriminatedUnion("kind", [
+      z.object({ kind: z.literal("create") }),
+      z.object({
+        expectedVersion: z.number().int().positive(),
+        kind: z.literal("update_existing"),
+        targetId: uuid,
+      }),
+    ])
+    .nullable(),
+  decision: z.enum(["accepted", "accepted_with_edits", "rejected", "duplicate"]),
+  duplicateTargetId: uuid.nullable(),
+  finalPayload: candidatePayloadSchema.nullable(),
+  note: z.string().trim().max(2_000).nullable(),
+});
+
 export function toJsonValue<T>(value: T): T {
   return JSON.parse(
     JSON.stringify(value, (_key, current: unknown) =>
@@ -234,3 +329,6 @@ export type SaveMeetingExceptionInput = z.infer<typeof saveMeetingExceptionInput
 export type ScheduleQuery = z.infer<typeof scheduleQuerySchema>;
 export type TaskBoardQuery = z.infer<typeof taskBoardQuerySchema>;
 export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
+export type BeginSourceUploadInput = z.infer<typeof beginSourceUploadInputSchema>;
+export type CompleteSourceUploadInput = z.infer<typeof completeSourceUploadInputSchema>;
+export type ReviewCandidateBody = z.infer<typeof reviewCandidateBodySchema>;

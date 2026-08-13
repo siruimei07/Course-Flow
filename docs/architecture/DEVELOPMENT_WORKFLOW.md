@@ -13,6 +13,7 @@ Agent 采用以下工作方式：
 - **证据最少但充分**：一个行为由最低层、最快且能真实证明它的测试负责。跨栈 smoke 只保留阶段关键旅程，不为每个页面和端点复制 E2E。
 - **按需扩展**：为已实现能力留下稳定 interface、discriminated union、versioned policy 或 adapter seam；不创建空目录、空表、通用工厂或假想插件平台。
 - **显式失败**：超出当前范围或不可恢复的错误以稳定错误码和可操作页面状态暴露；不以静默 fallback、猜测数据或吞错维持表面成功。
+- **AI 条件装配**：当前是 `AI_PENDING`。P3 默认 production 只装配 Source 手工路径；AI contract/fake 留在隔离 composition。P4 最终只能选 `AI_GO` 或 `MANUAL_ONLY`，未验证按失败，且不换模型。
 
 ## 2. 最低限度的防御边界
 
@@ -21,19 +22,22 @@ Agent 采用以下工作方式：
 | HTTP/Server Action | session、`UserScope`、Zod contract、稳定错误映射；mutation 做 Origin/CSRF 基线    | 同一 DTO 在 handler、service、repository 重复校验；捕获所有异常后返回成功 |
 | Core command/query | 所有权、领域不变量、`expectedVersion`；跨 aggregate 写入使用明确 transaction      | 校验 UI 展示细节；为理论上的第二调用方增加 service 层                     |
 | PostgreSQL         | FK/check/unique 等能表达事实的约束；多写操作原子提交；migration 可重放到目标版本  | 用数据库 trigger 复制 core 规则；为未来查询提前建表和索引                 |
-| 文件/AI 输出       | 类型、大小/页数等资源上限；strict schema；本地 deterministic normalizer/validator | 信任 MIME、OCR 或模型置信度；为单一 provider 建通用插件系统               |
+| 文件/条件性 AI 输出 | 类型、大小/页数等资源上限；`AI_ENABLED` 时 strict schema 与本地 validator | 信任 MIME、OCR 或模型置信度；为单一 provider 建通用插件系统               |
+| 条件性 AI 凭据/助手 | 仅 `AI_ENABLED`：fixed endpoint、server-side vault、最小 snapshot、草稿确认 | key 下发浏览器、用户自定义 base URL、模型直写正式数据或读取全库           |
 | 队列/远程调用      | timeout；只对 transient error 有限重试；job/artifact 幂等                         | 用户输入错误重试；无 telemetry 依据的 circuit breaker 或无限补偿框架      |
 | UI                 | 只消费 view model；文本安全渲染；关键操作有 loading/error/conflict；键盘可达      | 在组件重算领域规则；为每个内部状态加全局 error boundary                   |
 
 无论“低防御性”如何取舍，以下正确性不能削减：
 
-1. Candidate 经用户 Review Decision 后才能进入正式课程数据。
+1. 正式事实由手工表单提交；`AI_ENABLED` 时 Candidate 仍须经用户 Review Decision 才能进入正式课程数据。
 2. 每次正式读写携带 `UserScope`；私有资源越权与不存在使用相同 not-found 语义。
 3. `unscheduled/date/deadline/interval` 保持不同时间语义；DST 歧义不静默选择。
 4. 未知权重保持未知；成绩占比使用整数基点，`10000 = 100%`。
 5. 审核写入、重试敏感命令和版本更新分别保持 transaction、幂等和乐观并发语义。
-6. Evidence、原始 Candidate 和版本元数据可追踪；编辑后的 final payload 不覆盖原始提取结果。
+6. `AI_ENABLED` 时 Evidence、原始 Candidate 和版本元数据可追踪；编辑后的 final payload 不覆盖原始提取结果。
 7. 密钥、正文、Evidence quote、签名 URL 和供应商原始错误不进入普通日志或前端响应。
+8. `AI_ENABLED` 时 Planning Draft 只预填现有手工表单；模型无写工具，用户确认与既有 command 校验不可省略。
+9. P4 任一 AI 硬门禁失败或仍未验证时执行 `MANUAL_ONLY`：删除 AI 产品和专用实现，正式手工数据保持不变。
 
 ## 3. 单个纵向切片的固定顺序
 
@@ -102,7 +106,7 @@ Agent 采用以下工作方式：
 ### 步骤 6：验收和收尾
 
 1. 先运行受影响 package 的 format/lint/typecheck/test/build，再按当前阶段门禁运行仓库脚本。
-2. 对变更页面做适用 viewport、键盘、长文本、中文/英文和 reduced-motion 检查；只对关键页面保存视觉基线。
+2. 对变更页面做 `1280x900` 视觉、200% zoom 功能保留、键盘、长文本、中文/英文和 reduced-motion 检查；只对关键页面保存视觉基线。
 3. 删除临时 route、生产 mock、重复样式、无用 adapter、调试日志和被替代实现。
 4. 更新真实行为涉及的文档、migration、UI 整合记录和阶段状态。
 5. 交付报告列出结果、验证命令与结果、未验证项、UI 条目状态和下一阶段是否解锁。
@@ -157,7 +161,7 @@ UI 的架构规则和冲突优先级见 [前端与 UI 整合](./FRONTEND.md)。�
 
 ### 4.5 补全用户没有设计的页面
 
-Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern → 相邻页面的信息密度和布局 → `SCOPE.md` 页面职责 → 本文件规定的页面状态。补全内容包括 768/1280 桌面布局、200% zoom、loading/empty/error/conflict、长文本、键盘路径和 reduced-motion，不要求用户逐像素设计；不另行推导移动端或窄屏专用布局。
+Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern → 相邻页面的信息密度和布局 → `SCOPE.md` 页面职责 → 本文件规定的页面状态。补全内容包括 `1280x900` 正常横屏桌面布局、loading/empty/error/conflict、长文本、键盘路径和 reduced-motion，不要求用户逐像素设计；不另行推导竖屏、移动端或窄屏专用布局。
 
 若参考视觉与领域 contract 冲突，保留视觉意图并改写 mock/data wiring；只有确实需要新产品行为时才向用户说明影响并请求决定。
 
@@ -165,7 +169,7 @@ Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern �
 
 ### 4.6 接真实数据并验证
 
-原型通过后，按 `contract -> feature props` 接入真实数据，移除生产 hard-code；验证 768/1280 桌面参考 viewport、200% zoom、键盘、中文/英文、长内容及所有适用状态。更新 UI 条目为 `integrated`，视觉、行为和无障碍检查通过后改为 `verified`。
+原型通过后，按 `contract -> feature props` 接入真实数据，移除生产 hard-code；验证 `1280x900` 正常横屏桌面参考 viewport、键盘、中文/英文、长内容及所有适用状态。更新 UI 条目为 `integrated`，视觉、行为和无障碍检查通过后改为 `verified`。
 
 完成条件：原始视觉意图逐项有结论，旧实现被清理，生产 route 只依赖真实 query/command。
 
@@ -179,8 +183,9 @@ Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern �
 | 学期与课程                     | `AcademicsCommands/Queries` 和 module `index.ts`                           | 新行为增加意图明确的 command/query；不暴露通用 CRUD repository                                |
 | 课表与校历例外                 | Academics 的 `MeetingPattern/Exception` + Schedule 的 occurrence expansion | 新课节类型/例外先扩展 enum/union 和展开测试；不预生成每周实例表                               |
 | 课程事项/标签/评分             | `PlanningCommands/Queries`、temporal union、label 与 grading aggregate     | 新 kind/规则先更新领域类型、migration、contract 和 interface 测试；任务分组和当前成绩保持派生 |
-| PDF/图片及未来格式             | `DocumentPreparationPort`                                                  | 每种新格式增加 adapter；统一输出 `PreparedDocument`                                           |
-| AI/OCR 供应商                  | `ExtractionPort`/可选 OCR port                                             | 新 provider 只在 infrastructure/composition 替换；core 不接 SDK 类型                          |
+| PDF/图片及未来格式             | Source upload/preview port；仅 `AI_ENABLED` 增加 `DocumentPreparationPort` | 通用预览增加安全 adapter；自动准备只在已通过门禁的 AI composition 中增加                       |
+| 条件性 AI/OCR                  | 仅 `AI_ENABLED` 的 `ExtractionPort`/OCR port                               | 本项目只允许通过门禁的 DeepSeek；失败则删除 seam，不在 P3 建通用 provider 插件                  |
+| 条件性个人 AI 与用户凭据       | 仅 `AI_ENABLED` 的 Assistant/PlanningContext/SecretVault interfaces        | 新意图需重新过门禁；不能增加通用执行工具，`MANUAL_ONLY` 不保留空 interface                      |
 | 对象存储/任务队列              | 使用模块拥有的 port                                                        | 增加 concrete adapter；不建立运行时插件市场                                                   |
 | Evidence 展示/定位             | versioned Evidence locator contract 与 `EvidenceViewer` view model         | 新坐标/媒介 variant 先扩展 union 和 mapper；页面不读取 raw provider output                    |
 | Source 删除/数据清理           | ingestion lifecycle command、对象清理 port、幂等 cleanup job               | 新派生产物登记到清理清单；正式记录是否保留由显式产品规则决定                                  |
@@ -230,7 +235,7 @@ Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern �
 - PostgreSQL migration/ownership contract；
 - 一个 canonical E2E：创建学期/Reading Week → 创建含多个课节的课程 → 新增带标签事项 → 录入一个成绩结果 → 刷新后在课程/timeline/Gradebook 可见。
 
-阶段验收：真实持久化、无生产 mock；另一用户猜 ID 读不到；课节/例外、四种事项时间语义、标签、未出分/成绩覆盖与评分 warning 可观察；768px 桌面参考 viewport、200% zoom 与键盘主路径可用。通过后解锁 P2。
+阶段验收：真实持久化、无生产 mock；另一用户猜 ID 读不到；课节/例外、四种事项时间语义、标签、未出分/成绩覆盖与评分 warning 可观察；`1280x900` 正常横屏桌面与键盘主路径可用。通过后解锁 P2。
 
 ### P2：总览、任务分组、热力图、冲突与 ICS
 
@@ -247,38 +252,41 @@ Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern �
 
 阶段验收：同一正式课节/事项在所有投影语义一致；Reading Week 不生成常规课节，下一节倒计时目标正确；TBA 不进热力图/具体日历格/ICS；短期/中长期和标签筛选一致；热力图可非视觉理解；重新导出 UID 稳定。通过后解锁 P3。
 
-### P3：上传、确定性导入与审核闭环
+### P3：资料手工闭环与条件性 DeepSeek 候选
 
 按顺序实现：
 
-1. 实现 Source Document、ordered Asset、Import Run、Artifact、Evidence、Candidate、Review Decision/Application schema、状态机和 migration。
-2. 实现对象存储 port 与 production/local/test adapter；浏览器预签名直传，complete 时服务端重新验证对象 metadata 与所有权。
-3. 实现 PostgreSQL queue、worker claim/heartbeat/lease/retry/cancel 和 artifact 幂等键；worker 角色不能写正式 planning 表。
-4. 先接 `FixtureExtractionAdapter`，让获授权测试 PDF/图片确定性产生 Prepared Document、Evidence 和 Candidate，不调用真实 AI。
-5. 实现上传计划、导入进度/历史、ETag 轮询和可恢复失败状态。
-6. 实现 `reviewCandidate` transaction：锁定 Candidate，验证 decision/application，调用 `planning.applyReviewedCandidate`，原子写正式记录和审核记录；覆盖 create/update_existing/reject/duplicate 与 idempotency/version conflict。
-7. 完成全局 `/sources`、`/courses/[courseId]/sources` 和 `/imports/[runId]`。默认使用候选/编辑与 Evidence 双区；200% zoom 等受限桌面呈现切换或纵向排列 pane；所有决策明确写入目标和影响。
-8. 在 P3 结束前把全局资料入口、上传、进度、审核、Evidence 及其 loading/empty/error/conflict UI 定型，并清理隔离 demo。
+1. 先登记并冻结**不依赖 AI**的 Source UI：上传、校验、资料列表、原文预览、删除，以及从预览旁打开既有 Course Item/成绩/课表手工表单。AI 页面标 `conditional`，`AI_GO` 前不得进入生产基线。
+2. 实现 Source Document、ordered Asset 和对象存储 port/adapters；预签名直传后重新校验 metadata、hash、类型、大小与 owner。上传只到 `ready`，不创建 Import Run，不修改正式计划。
+3. 通过 route state 或安全的 return target 把 course/source context 带入 P1 既有表单；表单提交仍调用原公开 command。完成真实 Source → 预览 → 手工录入 → Timeline/Dashboard canonical journey。
+4. 在任何真实调用前冻结 `ai-eval-policy-v1` 的去身份化 corpus、gold/Evidence、阈值、延迟/费用预算和零容忍项；开发、CI、E2E、截图全用 deterministic fake，仓库没有真实 key。
+5. 读取 [专项可行性研究](../research/deepseek-local-text-prompt-ui-slot-feasibility.md)，把其结论登记为“接口形态有条件可行，真实能力未验证”。实现固定内部链 `Local Preparation → Feature Prompt Registry → DeepSeek Responses Port → Local Result Validation → Safe View Model → UI Result Region`；页面只调用 feature interface，不编排这些内部步骤。
+6. 实现本地输入准备。资料侧使用受资源限制的 PDF text/page image、有序图片和 OCR `DocumentPreparationPort`，保留页码/locator；助手侧由 `PlanningContextPort` 读取当前 owner 的有界正式 snapshot 并裁剪短期对话。对输入做 Unicode、范围、分块、token、可引用 ID allowlist 和 digest；完整正文不进普通日志。
+7. 在 `ingestion`/`assistant` 分别建立 source-controlled Prompt Registry。每个 purpose 原子绑定 prompt/schema/budget version、instructions builder、input serializer、JSON Schema 与 parser/validator。HTTP/client/数据库/资料内容不能覆盖 prompt、schema、model、tools 或 base URL；资料 payload 标为不可信数据。任何 prompt/schema 变化先升版本，再跑对应 gold/eval。
+8. 只在隔离 composition 中实现 `SecretVaultPort`、内部 `DeepSeekResponsesPort`、Import Run/Artifact/Candidate/Evidence/Review 与 deterministic fake。v1 adapter contract 使用请求字段 allowlist，固定官方 endpoint、`deepseek-v4-pro`、`stream=false`、`reasoning.effort=none`、Responses `json_schema`、`tools=[]`、`tool_choice=none`、超时与 token 上限；省略不支持的 `store`/会话字段。P3 不装配 live adapter，只评审 AI schema，不把 AI migration 加入默认 migration chain。
+9. 实现本地输出验证与 mapper。只接受 `status=completed` 的唯一完整 `message/output_text`；incomplete/failed、多 message、function/web item、空/非法 JSON、引用/Evidence/领域失败都返回安全错误且零部分 Candidate/Draft。记录 `response.id`、实际 `model` 和版本元数据；原始 response/reasoning/error 不进入 view model 或 DOM。
+10. 用 fake 实现审核 transaction 和个人助手只读草稿：Evidence 必须本地回查，歧义保持 TBA，模型没有数据库 CRUD/apply tool，所有正式写入仍由用户提交既有表单。测试 prompt 选择、输入最小化、completed-only、注入样本、citation allowlist、schema failure、错误映射和草稿未确认零写入。
+11. 用 `ux-heuristics` 和 `typeui-fundamentals` 同时审核 `MANUAL_ONLY` 与 `AI_ENABLED` 矩阵；P3 只冻结前者。条件性 `AiResultRegion` 覆盖 idle/generating/completed/cancelled/failed，完整答案不做 live-region 逐字播报；错误持久显示并保留问题、恢复操作和手工路径。不得直接渲染 Markdown/HTML/SSE delta/provider error。
+12. 准备一次性受控真实 eval runner 和操作手册；P3 不填真实 key、不执行外部调用，也不以 fake 或专项研究结论宣称 DeepSeek 可用。
 
-最低证明集：状态机/审核 interface 测试覆盖重放、same-key different-body、target version rollback 和来源删除；对象/队列/PostgreSQL contract；一个 canonical E2E：上传 fixture → worker → 审核四类决定中的代表路径 → 正式 timeline/dashboard。它取代冗余上传 smoke。
+最低证明集：Source 对象/PostgreSQL contract 与 owner 隔离；一个真实 canonical E2E 覆盖上传→预览→手工表单→正式投影；AI 隔离 contract/fake 覆盖凭据不回读、client/资料不能覆盖 prompt/schema/provider、输入范围/token、completed-only、400/401/402/422/429/500/503、schema/citation/Evidence failure、prompt injection、审核重放、越权和“草稿未确认无写入”；`AiResultRegion` 覆盖全部状态且不渲染原始输出。默认 production route/config 和 migration chain 扫描证明 AI 尚未暴露；冻结的 eval policy 和 runner dry-run。P3 没有真实 API 调用。
 
-阶段验收：审核前所有正式视图不变；审核后 Evidence、Decision 与正式记录可追溯；worker 重放不重复写；失败可安全 retry；UI 能完成键盘审核。通过后解锁 P4。
+阶段验收：没有 AI 也能完成资料到正式计划的手工闭环；AI 代码仍在隔离层，未被 fake 或视觉原型伪装成生产能力；没有真实 key 或外部调用。手工 UI 在 `1280x900`、键盘、focus、reduced-motion 和 200% 功能保留下通过；AI 条件矩阵已登记但未冻结。通过后解锁 P4。
 
-### P4：真实 PDF/图片与 AI 提取
+### P4：DeepSeek 最终去留门禁
 
 按顺序实现：
 
-1. 实现受资源限制的 PDF text/page image 和 ordered image `DocumentPreparationPort` adapter；页码从 1 开始，顺序不靠文件名猜测。
-2. 定义并版本化 strict extraction JSON Schema、prompt 和 provider request mapper；模型只产 Candidate 草稿与 Evidence locator。
-3. 实现首个真实 `ExtractionPort` adapter，配置 pinned model、timeout、并发、有限 transient retry 和 provider file cleanup。
-4. 实现纯 normalizer/validator：Unicode、枚举、明确日期、bps、Evidence bbox/path、fingerprint、重复/匹配/warning；歧义保持 TBA。
-5. 建立去身份化 fixture corpus、gold JSON/Evidence 和 baseline report，覆盖文本 PDF、扫描件、截图、表格、相对日期、替代评分和中英混合。
-6. 增加 stage/cost/schema failure telemetry，日志只记录 ID、版本、耗时、计数和错误 code。
-7. UI 只补真实 provider 带来的 warning、失败和数据质量状态；P4 不重新设计主导航或核心页面结构。
+1. 用户临时提供真实 DeepSeek key，只注入受保护 eval 环境；完成立即撤销。未提供、无效或中断都记 `UNVERIFIED`。
+2. 不修改冻结阈值或临时调 prompt/schema，用 P3 固定 versions 运行完整 extraction/assistant corpus 与红队；确认实际 request 固定 endpoint/model、JSON Schema、无 tools/web、non-streaming 和预算。记录 Responses `id`/实际 `model`、质量、延迟、终态失败率、token 和费用；不记录正文/CoT/key。
+3. 完成适用于下游最终用户的数据保留、训练使用/退出、处理地域、DPA/条款、披露和清理评估；模糊或不可接受就是失败。
+4. 按 [AI 去留门禁](./AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 签署唯一结论：`AI_GO` 或 `MANUAL_ONLY`。最终 `UNVERIFIED` 等同失败。
+5. `AI_GO`：启用通过评测的 live adapter、prompt/schema/budget versions、凭据、worker、Candidate/Review、助手和错误恢复，冻结 `AiResultRegion` 等 AI UI；模型仍无正式写权限。
+6. `MANUAL_ONLY`：按清理清单删除所有 AI UI/route/module/adapter/contract/table/migration/config/文案，不换模型。若有支持数据，用显式安全清理且不触碰正式数据；回归 Source 手工闭环。
 
-最低证明集：normalizer 表驱动测试、provider adapter contract（成功/timeout/schema failure）、全 corpus eval；沿用 P3 浏览器旅程和 deterministic fake，真实模型 eval 作为受控门禁，不新增易波动浏览器 smoke。
+最低证明集：冻结 policy 对应的完整 eval、官方兼容性/错误 contract、隐私条款结论、用户签署和分支清理报告。沿用 P3 手工浏览器旅程；只有 `AI_GO` 才追加 deterministic AI journey，不把真实模型放入普通 CI。
 
-阶段验收：关键字段有 Evidence 或 `EVIDENCE_UNVERIFIED`；旧 run 可由版本解释；provider failure 不产生正式数据；cleanup 和数据保留可验证；baseline 达到团队在首次报告中记录的阈值。通过后解锁 P5。
+阶段验收：门禁报告没有未决项。`AI_GO` 时全部阈值、隐私、安全、凭据、错误和 UI 证据通过；`MANUAL_ONLY` 时仓库/迁移/数据库/UI/配置扫描证明 AI 已清除，Source 手工 E2E 通过。任一结果都可把 P4 标 `done` 并解锁 P5；“保持受控但随产品保留 AI 入口”不是合法结果。
 
 ### P5：UI 整合与体验打磨
 
@@ -287,7 +295,7 @@ Agent 按以下顺序推导：已确认 token → 已确认 primitive/pattern �
 1. 补完 Grade Component 与 Course Item 关联、复杂 `ruleText`、alternative scheme、成绩覆盖/等级表 partial 状态和 update diff 的真实 UI，不把规则扁平为错误数字，不扩展成 GPA/预测。
 2. 清点 UI log，把所有 `received/mapped/prototyped/frozen` 条目逐个整合或明确 superseded；晚到 UI 作为迁移，不另建页面壳。
 3. 合并同义 token/primitive，清理旧 CSS、重复图标、临时 fixture 和被替代组件；保持页面独特构图。
-4. 完成中文/英文文案结构、长 Unicode、768/1280 桌面参考 viewport、200% zoom、键盘/focus、对比度、reduced-motion 和热力图等价视图。
+4. 完成中文/英文文案结构、长 Unicode、`1280x900` 正常横屏桌面参考 viewport、键盘/focus、对比度、reduced-motion 和热力图等价视图。
 5. 对 dashboard/import review 做真实数据 profile，只修复已测得的 N+1、过量 client JS、图片加载或渲染瓶颈。
 6. 为核心 route 建立少量稳定视觉基线和 axe 检查；保留一个 canonical product E2E，不扩张成每页 smoke 套件。
 

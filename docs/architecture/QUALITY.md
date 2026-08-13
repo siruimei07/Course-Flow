@@ -12,9 +12,9 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 | interface 测试        | core + in-memory adapter               | 完整 command/query 行为           | review 原子性、所有权、幂等、版本冲突       |
 | adapter contract 测试 | 临时 PostgreSQL/对象存储               | concrete adapter 与 port 契约一致 | transaction、索引约束、签名 URL、队列重投   |
 | contract/golden 测试  | Zod/serializer                         | 稳定 JSON、AI schema、ICS         | union variants、Problem Details、折行/转义  |
-| 组件测试              | Testing Library                        | 用户可见行为和 a11y               | 审核编辑、Evidence 切换、错误焦点           |
-| E2E                   | Playwright + 真实 web/worker + fake AI | 关键旅程                          | 创建课程→上传 fixture→审核→dashboard→ICS    |
-| AI eval               | fixture corpus + pinned model          | 抽取质量和回归                    | precision/recall、日期/权重/Evidence 准确率 |
+| 组件测试              | Testing Library                        | 用户可见行为和 a11y               | Source 预览/手工入口；条件性审核/错误焦点    |
+| E2E                   | Playwright + 真实 web/worker            | 关键旅程                          | 上传→预览→手工表单→正式投影                 |
+| 条件性 AI contract/eval | fake + 冻结 corpus；最终受控真实调用  | 门禁、抽取/助手质量和模型升级回归 | precision/recall、Evidence、越权与草稿安全   |
 
 ### 1.1 必测领域场景
 
@@ -36,6 +36,9 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 - 同一审核命令重放只创建一份正式记录；不同 payload 使用同 key 被拒绝。
 - 已被决定或来源已删除的 Candidate 不能再次产生 Review Decision；正式 target version 冲突整体回滚。
 - 新版资料匹配已有事项时，`update_existing` 更新目标且写一条 Review Application；`create` 产生独立项；`duplicate` 不修改目标，三者不可混淆。
+- 所有模式下 Source Document 都能上传、owner-scoped 预览并从旁进入既有手工表单；上传/预览本身零正式写入。
+- 仅 `AI_ENABLED` 测试：未配置/撤销 key 不得创建卡住的 Import Run；任何普通 query/DOM/log/trace/queue/artifact 都拿不到明文；Assistant 只读授权正式 snapshot，放弃 Draft 零写入。
+- `MANUAL_ONLY` 测试：route manifest、client bundle、migration/schema、依赖、环境变量、DOM 和产品文案中没有密钥/助手/AI 抽取/Candidate 功能；Source 手工 canonical E2E 仍通过。
 - 归档课程默认不出现在 dashboard；取消/删除事项不进入当前 ICS。
 - 用户 A 猜到用户 B 的每一种资源 ID 均读不到，包括 Evidence page preview。
 
@@ -43,7 +46,10 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 
 - 测试使用注入的 `Clock` 和 ID generator；不读取真实 `Date.now()` 或随机 UUID 来断言。
 - 文档 fixture 必须自创、获授权或去身份化，不提交真实学生姓名、学号、邮箱和未获授权课程资料。
-- AI 日常 CI 使用 deterministic fake adapter 和 golden artifact；真实供应商 eval 在受控 job/手动门禁运行，避免 flaky 与费用失控。
+- AI 日常 CI 使用 deterministic fake adapter 和 golden artifact；P3 不运行真实 DeepSeek。P4 最终评审才由用户临时提供 key，经受保护 secret input 调用，完成立即撤销；未提供或未完成视为 `UNVERIFIED` 并进入 `MANUAL_ONLY`。
+- P3 对每个 Prompt Registry entry 做版本/golden 测试：purpose 只能选择已知 spec，HTTP/数据库/资料文本不能覆盖 instructions/schema/provider 参数，数据 payload 保留页码/opaque ID 且被标为不可信。prompt/schema 任一变化必须显式升版本并使对应 gold/eval 重新运行。
+- DeepSeek seam contract 覆盖 completed 单一 `output_text`、incomplete/failed、多 message、function/web output、空/非法 JSON、取消与 400/401/402/422/429/500/503；只有通过本地 schema、citation/Evidence allowlist 和领域 validator 的结果能生成 Candidate/Draft view model。
+- `AiResultRegion` 浏览器测试使用 fake view model 覆盖 idle/generating/completed/cancelled/failed：不出现原始 HTML/Markdown/reasoning/provider error，错误保留问题与恢复操作，键盘/focus/aria-live/200% zoom 可用，`MANUAL_ONLY` route/DOM/bundle 中不存在该区域。
 - migration integration test 从空库迁移到最新，并至少验证上一 release schema 到最新。开发早期没有上一 release 时固定初始 snapshot。
 
 ## 2. CI 质量门
@@ -88,18 +94,24 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 
 ### 3.4 文件与远程 AI
 
-完整要求见 [导入流水线](./INGESTION.md)。额外要求：
+Source 文件要求始终适用；远程 AI 条目只在 `AI_ENABLED` 适用。完整要求见 [导入流水线](./INGESTION.md) 和 [AI 去留门禁](./AI_ASSISTANT.md#3-deepseek-ai-去留门禁)。额外要求：
 
 - 解析库和 worker 定期更新；处理进程使用最小权限和临时空间配额。
 - 对象 key、数据库 URL、API key、完整 prompt 不进入前端、错误响应或 analytics。
-- AI provider 选择和配置须确认数据保留策略；若上传 provider File，设到期并补偿删除。
+- 用户 DeepSeek key 只经 same-origin HTTPS 到 server；以独立表的认证加密密文保存，master key/KMS 与数据库分离。固定官方 endpoint，不接受用户 base URL、代理或任意模型名。
+- credential verifier 只能证明认证与模型可见性；401 标无效、402 标余额不足，429/5xx 不应把正确 key 永久标无效。密钥显隐/复制控件不得把已保存明文重新送回浏览器。
+- `AI_ENABLED` 前必须确认 DeepSeek 数据保留策略；首版禁止上传 provider File，不能因未来接口出现就绕过重新评审。
 - Prompt injection 被当作文档内容；抽取调用不开放 web、code、MCP 或写工具。
 - 供应商 response 先过 strict schema，再过本地领域 validator；拒绝/截断/不完整状态必须显式处理。
+- `AI_ENABLED` 的 DeepSeek 调用只发送页级文本或有界正式 planning context；官方 API 不支持 PDF/图片/file 输入。Assistant 默认关闭 web search，模型只产解释/草稿，没有应用草稿或审核 Candidate 的工具。
+- 最终评审任一能力、安全、隐私、质量、可靠性或 UI 硬门禁失败，或仍未验证，必须执行 `MANUAL_ONLY` 清理；不能切换其他模型、隐藏后保留 route，或用 fake 宣称可用。
 
 ## 4. 隐私与数据生命周期
 
 - 收集最少信息：首版不需要学号、学校账号密码或通讯录。
-- 上传前告知资料会发送给配置的解析/AI provider；隐私文案和实际 adapter 保持一致。
+- `AI_ENABLED` 时，在首次远程解析前告知哪些文本会发送给 DeepSeek；`MANUAL_ONLY` 不出现远程发送文案。隐私文案和实际 composition 必须一致。
+- 个人中心在保存 key 和首次调用前说明会发送哪些课程文本、用途、供应商和撤销方式；`store:false`/stateless 不得宣传成零留存保证。
+- 用户可撤销 DeepSeek key并删除短期助手历史；撤销后新调用立即失败，正在执行的调用在安全检查点停止。备份中的密文按保留/轮换策略过期。
 - 用户可删除 Source Document；对象、页图、provider file 和正文 artifact 通过可观察 cleanup job 删除。
 - 用户可导出/删除账号数据；账号删除是幂等 saga，任何残留步骤可重试。
 - 普通日志不含课程正文、原文件名（如可能含姓名）、Evidence quote、邮箱或签名 URL。必要调试内容使用显式受限、安全过期的诊断机制。
@@ -123,7 +135,7 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 - 热力图/冲突用有界日期范围；先在应用层纯计算，profile 证明瓶颈后再 SQL 聚合/缓存。
 - 图片预览生成合适尺寸，不把原始超大页面塞进列表；Evidence viewer 按页懒加载。
 - 上传浏览器直传对象存储，web 不缓冲整份文件。
-- worker 并发按 CPU、AI 限额和用户公平性控制；同一用户不能占满全局 worker。
+- worker 并发按 CPU 和用户公平性控制；`AI_ENABLED` 时再加入供应商限额，同一用户不能占满全局 worker。
 
 ## 6. 可观测性
 
@@ -147,7 +159,8 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 
 - 请求量、错误率、p50/p95/p99 latency。
 - 队列深度、最老 queued age、stage duration、retry/failure/cancel rate、stale heartbeat。
-- 每页/每 run AI token 与成本、schema failure、provider 429/5xx。
+- `AI_ENABLED` 时记录每页/每 run token 与成本、schema failure、provider 429/5xx。
+- `AI_ENABLED` 时记录 Assistant 请求/完成/取消/失败、credential 配置/验证/撤销结果（只含安全 code）、请求 alias 与 Responses `id`/实际 `model` 变化；fingerprint 仅在实际返回时 nullable 记录。
 - Candidate accepted/edited/rejected/duplicate 比例，作为质量信号但不把用户行为当 gold truth。
 - cleanup backlog 与删除失败。
 
@@ -165,6 +178,7 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 ## 8. 无障碍与浏览器质量
 
 - 目标 WCAG 2.2 AA；关键 journeys 至少用 axe 自动检查加人工键盘/屏幕阅读器 spot check。
+- `1280x900` 是视觉回归基线，200% zoom 是功能性无障碍检查：关键任务不得丢内容、控件或错误，除日历/热力图等明确二维容器外不得出现 document 级水平滚动；不要求像素相同或建立移动端布局。
 - 支持当前和前一个稳定版本的 Chrome、Edge、Firefox、Safari；不基于 user-agent 分支核心逻辑。
 - 热力图提供非视觉等价列表；图表有可读标题、范围和 summary。
 - 文件 dropzone 同时有标准 file input；粘贴/拖拽不是唯一入口。
@@ -180,7 +194,8 @@ CourseFlow 管理可能影响学生提交和考试安排的数据。质量门槛
 - command/query interface 有可观察行为测试，adapter 有必要 contract test。
 - HTTP/AI/文件输入在 seam 校验；授权覆盖正反路径。
 - 页面包含 loading、empty、error、success，以及该功能可能的 stale/partial 状态。
-- 键盘、768/1280 桌面参考 viewport、200% zoom、长文本和本地化数据经过验证。
+- 键盘、`1280x900` 正常横屏桌面视觉参考、200% zoom 功能保留、长文本和本地化数据经过验证。
+- P4 已形成无未决项的 `AI_GO` 或 `MANUAL_ONLY`；若为后者，AI 代码/route/table/config/UI 清理证明与手工 Source E2E 已通过。
 - 日志/指标足以定位失败且不泄漏正文/凭据。
 - migration/config/docs 同步；没有 mock 数据、临时 route、死代码或被替代实现残留。
 - CI required checks 全绿。

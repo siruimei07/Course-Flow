@@ -26,7 +26,7 @@ packages/ui/
 ├─ styles/tokens.css            # 色彩、字体、间距、圆角、阴影、motion token
 ├─ primitives/                  # Button、Dialog、Tabs、Field、Tooltip 等
 ├─ patterns/                    # PageHeader、EmptyState、StatusBanner、DataTable
-└─ courseflow/                  # CourseBadge、DateBadge、EvidenceViewer 等跨 feature 组件
+└─ courseflow/                  # CourseBadge、DateBadge；AI_ENABLED 可增 EvidenceViewer
 ```
 
 依赖方向：route 组合 feature；feature 使用 `packages/ui` 和 `packages/contracts`；`packages/ui` 不 import feature、core 或 Next.js route。业务组件属于 feature，只有在第二个真实 feature 复用且语义相同后才提升。
@@ -115,19 +115,21 @@ Primitive 负责键盘行为、焦点、ARIA 和基础 variant；不理解课程
 - `MeetingTypeBadge`：Lecture/Tutorial/Practical 的全称、可选缩写与非颜色区分。
 - `MeetingTimePlace`：课节实例的起止时间、地点/TBA 和改期/停课状态。
 - `TemporalLabel`：date/deadline/interval/unscheduled 的一致显示和 tooltip。
-- `ConfidenceIndicator`：置信度及文字，不只用颜色。
-- `EvidenceViewer`：页图、bbox、quote、字段关联和键盘导航。
-- `ImportStatus`：状态机的用户语言映射。
+- `ConfidenceIndicator`（仅 `AI_ENABLED`）：置信度及文字，不只用颜色。
+- `EvidenceViewer`（仅 `AI_ENABLED`）：页图、bbox、quote、字段关联和键盘导航。
+- `ImportStatus`（仅 `AI_ENABLED`）：状态机的用户语言映射。
 - `WorkloadLegend`：分钟、来源和 policy 的解释。
 - `ConflictCard`：硬冲突、拥挤提醒和数据质量提示的不同语义。
 - `GradeCoverageSummary`：已获总评百分点、已出分部分百分比、已覆盖权重和数据质量。
 - `TaskLabelList`：系统标签与自定义标签的可访问展示；不承担筛选规则。
+- `AiAvailability`（仅 `AI_ENABLED`）：未配置/验证中/可用/无效/余额不足/限流/供应商失败的文字状态与恢复入口。
+- `PlanningDraftPreview`（仅 `AI_ENABLED`）：AI 建议、引用的正式记录、假设和“放弃 / 填入表单”操作；本身不执行正式写入。
 
 这些组件只消费 view model，不调用 fetch 或 core。
 
 ### 5.4 当前全局视觉与兼容基线
 
-当前已有 [UI-0001 visual lab](../design/UI_INTEGRATION_LOG.md#ui-0001-courseflow-visual-lab)，但它仍是可变原型而非冻结权威。设计期间以其风格指纹作为工作方向；用户明确完成设计后，必须先按 [前端设计基线与冻结](../design/DESIGN_BASELINE.md) 建立 Git 可追踪版本，生产实现才以该版本的具体 token、构图和交互为准：
+当前最新设计稿是 [UI-0003 模糊玻璃 visual lab](../design/UI_INTEGRATION_LOG.md#ui-0003-模糊玻璃前端与设置中心)；它仍是可变原型而非冻结权威。`ui-v1` 继续约束已冻结历史范围，玻璃稿不能在冻结前静默覆盖它。设计期间以 `courseflow-visual-lab-glass.html` 的风格指纹作为最新工作方向；用户明确完成设计后，必须先按 [前端设计基线与冻结](../design/DESIGN_BASELINE.md) 建立 Git 可追踪版本，生产实现才以新版本的具体 token、构图和交互为准：
 
 - 产品以桌面 Web 应用为主，用户提供的 HTML/CSS/JS 需要拆成 React/Next.js route、feature 和最小 Client island，不能把完整 document、全局 reset、CDN script 或内联事件直接粘入生产页面。
 - 软件界面保持圆角。无明确参考时使用 control `10px`、panel/card `16px`、dialog/sheet `20px`、pill `999px` 的语义 token；收到设计后可以统一校准，但不让页面各自选择半径。
@@ -216,7 +218,7 @@ Primitive 负责键盘行为、焦点、ARIA 和基础 variant；不理解课程
 
 ### 8.2 Import Review
 
-默认采用“候选列表/编辑 + Evidence 预览”的双区结构；200% zoom 等受限桌面呈现可切换或纵向排列 pane，不能压缩到信息或操作不可用。
+默认采用“候选列表/编辑 + Evidence 预览”的双区结构；正常横屏桌面下不能压缩到信息或操作不可用。
 
 - 顶部：资料名、状态、总进度、筛选和退出提示。
 - 候选：类型、标题、日期、权重、confidence、warning、字段级 Evidence 入口；匹配已有项时展示字段差异。
@@ -245,13 +247,40 @@ Primitive 负责键盘行为、焦点、ARIA 和基础 variant；不理解课程
 - Gradebook 作为课程支持 surface 接入当前课程页的“成绩组成”入口。每项结果表单录入 earned/possible；摘要同时显示总评百分点、已出分百分比和覆盖权重。长期任务上的 `progress` 明确标为准备进度，不能复用成绩百分比组件。无等级表、未知权重或未出分都用明确空/partial 状态。
 - 课程学分只作为课程元数据展示；首版 UI 不出现 GPA 或“已获得学分”的误导性结论。
 
-当前 UI 未覆盖的添加课程与 Gradebook surface 按设计基线 token 补齐，并遵守 `typeui-fundamentals` 的结构性约束：每步只有一个清晰主操作；相关字段用 proximity 成组；输入在静止态就有可见边界；同排输入/按钮等高、相邻按钮同尺寸且标签不换行；200% zoom 等受限桌面呈现改为单列并把操作移到可见 footer，不横向压缩表单。步骤标题、说明、错误摘要和字段标签保持真实语义层级，不能用 placeholder 替代 label。
+当前 UI 未覆盖的添加课程与 Gradebook surface 按设计基线 token 补齐，并遵守 `typeui-fundamentals` 的结构性约束：每步只有一个清晰主操作；相关字段用 proximity 成组；输入在静止态就有可见边界；同排输入/按钮等高、相邻按钮同尺寸且标签不换行；正常横屏桌面下把操作保持在可见 footer，不横向压缩表单。步骤标题、说明、错误摘要和字段标签保持真实语义层级，不能用 placeholder 替代 label。
 
 ### 8.6 Sources
 
-- `/sources` 保持当前 UI 的全局资料库构图：按课程筛选、项目文件夹、原始资料列表与审核队列；它使用有界的用户/学期资料 query。
-- `/courses/[courseId]/sources` 是同一 sources feature 的课程上下文投影，负责上传、历史批次和课程内审核入口；不维护第二套资料实体或样式系统。
-- `/imports/[runId]` 承担完整进度/错误/审核工作台。全局资料页只摘要状态并导航，不把复杂审核 transaction 塞进列表卡片。
+- `/sources` 保持当前 UI 的全局资料库构图：按课程筛选、项目文件夹和原始资料列表；它使用有界的用户/学期资料 query。所有模式都有上传、私有预览、删除与“打开手工表单”操作，上传本身不改变计划。
+- `/courses/[courseId]/sources` 是同一 sources feature 的课程上下文投影，不维护第二套资料实体或样式系统。`MANUAL_ONLY` 的主动作是“对照资料添加事项/成绩组成/课表”，沿用 P1 表单；来源预览和表单形成可返回的双区或相邻流程。
+- 只有 `AI_ENABLED` 才显示解析状态、审核队列和 `/imports/[runId]`。该 route 承担完整进度/错误/审核工作台；全局资料页只摘要状态并导航。`AI_PENDING` 原型中的候选数量和解析按钮不能出现在生产 route。
+
+### 8.7 个人中心、设置与条件性 AI 助手（玻璃稿）
+
+`ui-v1` 只冻结右上角头像按钮，参考稿还明确把个人菜单留到后续。`UI-0002 / UI-0003` 已在 `courseflow-visual-lab-glass.html` 形成个人菜单与三页设置中心，但 AI 部分当前为 `conditional`。P3 可冻结账户与普通设置，以及 `MANUAL_ONLY` 的 Source 手工路径；在 P4 `AI_GO` 前不得把 AI 配置、助手或候选审核纳入生产基线。失败时，个人中心只保留账户与普通偏好，不显示“暂不可用”的永久 AI 卡片。
+
+下述设计契约只适用于 `AI_ENABLED`：
+
+设计必须把两种输入分开：
+
+- **DeepSeek API Key**：密码语义的凭据字段，提供配置/替换/撤销、验证中、掩码提示和最后验证时间；已保存明文永不回填。说明 `GET /models` 验证不代表余额或后续可用。
+- **向 AI 提问**：只有 `AiAvailability=available` 时启用的普通文本输入；未配置时在原位置显示“AI 功能暂不可用，请先配置 DeepSeek API Key”和唯一恢复操作。
+
+`AiAvailability` 可在 `available` 时显示 server 提供的非敏感、可信展示元数据：`providerDisplayName`、`requestedModelAlias` 与 `verifiedAt`。P3 的这些值由 server 固定/派生，客户端不能提交或覆盖；不得把 provider SDK 类型、endpoint、密钥指纹或响应原文泄漏为 UI contract。未配置或验证失败时不猜测“当前提供商”。
+
+助手回答必须标记“AI 生成，可能有误”，列出所用课程/事项与时间范围，明确未知信息。`PlanningDraftPreview` 的主动作是“填入表单”，不是“立即执行”；进入表单后仍显示所有字段、diff/假设和正常提交按钮。结构化输出在 server 完整缓冲、净化和校验后才出现；UI 可以显示“正在生成”和取消，但不逐 token 展示未闭合 JSON。关闭、取消或放弃草稿都不写正式数据。
+
+“预留答案空位”实现为 `AiResultRegion` 语义区域，而不是永久空白容器：
+
+- `AI_PENDING` 的 production 与 `MANUAL_ONLY` 完全不渲染该区域；它只能存在于标为 `conditional` 的设计稿/fake harness，`AI_GO` 后才进入生产基线。
+- `idle` 显示一句范围说明和可问示例，不伪造回答；`generating` 显示明确状态与取消；`completed` 只消费 `AssistantResultView.blocks/citations/assumptions/planningDraft`；`failed` 持久显示问题、原因类别和“重试 / 检查配置 / 改为手工”的适用恢复操作。
+- 区域使用可见标题；状态消息用克制的 `role=status`/`aria-live=polite`，完整答案不放进 live region 逐字播报。请求完成后把焦点移到结果标题或提供可发现的结果跳转，取消后回到提问框。
+- 只用项目组件渲染 paragraph/list/citation/draft；不使用 `dangerouslySetInnerHTML`，不直接渲染 provider Markdown、HTML、SSE delta、reasoning 或错误正文。引用是可聚焦文字链接，不只靠 hover/颜色。
+- 结果区可以保留设计基线规定的视觉高度来减少布局跳动，但不得使用会裁切文本的固定高度；内容增长、200% zoom 和错误说明必须自然扩展或在有标题的 pane 内滚动。
+
+UI 状态矩阵至少覆盖 `unconfigured / validating / available / invalid / insufficient-balance / rate-limited / provider-unavailable / generating / cancelled / truncated / completed-with-draft`。overlay 打开后有明确标题和关闭入口，初始焦点不落在密钥显隐按钮，Escape/关闭后焦点回到头像；生成状态使用克制 `aria-live`，reduced-motion 下不依赖打字机动画。`1280x900` 正常横屏桌面下，凭据、对话和草稿保持清晰层级且不挤成不可读多栏。
+
+联合 UX/TypeUI 操作约束：密码和提问输入必须有持久 label 且明显分区；每个 panel 只保留一个主动作；标签、输入、错误与恢复操作按 proximity 成组；按钮/输入同高、操作标签不换行；错误不能只用 toast；44px 目标、可见 focus、非颜色状态、Escape/focus return、reduced-motion 为硬要求。AI 方案在未完成真实评测与错误态视觉前评分 8/10、最高 severity 2，不得冻结；无 severity 3/4 只是申请冻结的最低条件，不代表自动通过。
 
 ## 9. 表单与反馈
 
@@ -265,7 +294,7 @@ Primitive 负责键盘行为、焦点、ARIA 和基础 variant；不理解课程
 
 ## 10. 桌面适配、国际化与无障碍
 
-- 产品不提供移动端或窄屏专用应用布局；以 `768x1024` 和 `1280x900` 为桌面参考 viewport。浏览器缩放导致空间受限时按内容优先级重排；本质二维的表格、日历和热力图可在语义完整的自身容器内横向滚动。
+- 产品只提供正常横屏桌面布局，以 `1280x900` 为像素参考 viewport；不建立竖屏、窄屏或移动端布局。本质二维的表格、日历和热力图可在语义完整的自身容器内横向滚动。200% zoom 不作截图像素基线，但关键任务必须保留全部内容、表单控件、错误和键盘操作，以兑现 WCAG 2.2 AA。
 - 支持至少 `zh-CN` 和英文文案结构；禁止用字符串拼接构造带变量句子。日期/数字用 `Intl` 和用户 locale。
 - 课程标题、老师名、Evidence quote 可包含任意 Unicode；布局测试长词和 CJK。
 - WCAG 2.2 AA 为目标：语义 HTML、可见 focus、键盘完整、对比度、44px 左右 touch target、错误不只靠颜色。
@@ -277,7 +306,8 @@ Primitive 负责键盘行为、焦点、ARIA 和基础 variant；不理解课程
 
 每个完成的 route 至少验证：
 
-- `768x1024`、`1280x900` 桌面参考 viewport；200% zoom（不把缩放后的布局定义为移动端设计）。
+- `1280x900` 正常横屏桌面参考 viewport。
+- 200% zoom 功能检查：除明确二维容器外无 document 级水平滚动，核心操作和错误不丢失；不要求与 `1280x900` 像素一致。
 - 键盘从页面头到主操作无陷阱，Dialog 关闭后焦点返回触发点。
 - light/dark（若当前版本承诺 dark）和高对比状态。
 - 中文、英文、超长课程名、0 条/1 条/大量条目。

@@ -10,10 +10,19 @@ type LabelOption = Readonly<{ colorKey: string; displayName: string; id: string;
 
 export function TaskEditor({
   courses,
+  initialCourseId,
   labels,
-}: Readonly<{ courses: readonly CourseOption[]; labels: readonly LabelOption[] }>) {
+}: Readonly<{
+  courses: readonly CourseOption[];
+  initialCourseId?: string;
+  labels: readonly LabelOption[];
+}>) {
   const router = useRouter();
-  const [courseId, setCourseId] = useState(courses[0]?.id ?? "");
+  const [courseId, setCourseId] = useState(
+    courses.some((course) => course.id === initialCourseId)
+      ? initialCourseId!
+      : (courses[0]?.id ?? ""),
+  );
   const selectedCourse = courses.find((course) => course.id === courseId) ?? null;
   const availableLabels = useMemo(
     () => labels.filter((label) => label.termId === selectedCourse?.termId),

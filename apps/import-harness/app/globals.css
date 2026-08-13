@@ -1,0 +1,70 @@
+@import "../../web/app/globals.css";
+
+.harness-header {
+  min-height: 4rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 1.25rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-header);
+  backdrop-filter: blur(1.25rem);
+}
+
+.harness-header strong,
+.harness-header span {
+  display: block;
+}
+
+.harness-header span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.ai-result-region {
+  max-width: 52rem;
+  margin: 2rem auto;
+  padding: 1.5rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  background: var(--surface-panel);
+}
+
+.ai-result-region > header,
+.ai-recovery-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.ai-state-card,
+.ai-draft-card {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  padding: 1.5rem;
+  border-radius: var(--radius-card);
+  background: var(--surface-soft);
+}
+
+.ai-question {
+  color: var(--text-muted);
+}
+
+.ai-draft-card dl,
+.ai-draft-card dl > div {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ai-draft-card dl > div {
+  grid-template-columns: 6rem 1fr;
+}
+
+.ai-recovery-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}

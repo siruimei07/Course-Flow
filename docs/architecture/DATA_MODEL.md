@@ -1,6 +1,8 @@
 # CourseFlow 数据模型
 
-本文定义正式数据、导入候选和派生投影的语义。它是 schema 与领域类型的依据；实际 migration 可以拆表或增加索引，但不能改变这里的业务含义。
+本文定义正式数据、Source、条件性导入候选和派生投影的语义。它是 schema 与领域类型的依据；实际 migration 可以拆表或增加索引，但不能改变这里的业务含义。
+
+关系总览画出 `AI_ENABLED` 的超集。当前 `AI_PENDING` 不能据此提前把 AI 表加入默认生产 migration；`MANUAL_ONLY` 只保留正式领域表及 `source_documents/source_assets`，删除 `USER_AI_CREDENTIAL`、assistant、Import Run/Artifact、Evidence、Candidate 与 Review 表。正式手工数据不受模式决定影响。
 
 ## 1. 建模约定
 
@@ -19,6 +21,9 @@
 erDiagram
     USER_PROFILE ||--o{ ACADEMIC_TERM : owns
     USER_PROFILE ||--o{ LETTER_GRADE_SCALE : defines
+    USER_PROFILE ||--o| USER_AI_CREDENTIAL : configures
+    USER_PROFILE ||--o{ AI_ASSISTANT_SESSION : starts
+    AI_ASSISTANT_SESSION ||--o{ AI_ASSISTANT_TURN : contains
     ACADEMIC_TERM ||--o{ COURSE : contains
     ACADEMIC_TERM ||--o{ ACADEMIC_CALENDAR_EXCEPTION : contains
     ACADEMIC_TERM ||--o{ TASK_LABEL : contains
@@ -59,6 +64,31 @@ erDiagram
 | `week_starts_on`          | smallint `0..6` | 周起始日，ISO 对应 `0=Monday ... 6=Sunday`；首版账户默认 Monday，用户可在设置修改 |
 | `active_term_id`          | UUID nullable   | 当前 dashboard 默认学期，必须属于该用户                                           |
 | `created_at`,`updated_at` | timestamptz     | 技术审计时间                                                                      |
+
+### `user_ai_credentials`
+
+本节只适用于 `AI_ENABLED`。账户级用户自带 AI 凭据与普通 profile 字段分表，避免常规资料查询或导出意外选出秘密；每个用户最多一份 DeepSeek 凭据：
+
+- `owner_user_id`：PK/FK；删除账户时一并擦除。
+- `provider`：固定枚举 `deepseek`；不保存自定义 endpoint。
+- `encrypted_secret`、`encryption_key_version`：由 server-side `SecretVaultPort` 产生的认证加密密文与轮换版本；数据库中不保存可独立解密的 master key。
+- `secret_fingerprint`：带服务端 pepper 的不可逆摘要，用于检测重复替换/审计；不是 API key 的裸 hash。
+- `display_hint`：非敏感掩码提示；不得保存足以重建 key 的片段。
+- `status`：`available/invalid`。未配置由“无行”表达，不使用空字符串。
+- `verified_model_alias`、`last_verified_at`、`last_error_code`、`version`、`created_at`、`updated_at`；错误只用安全枚举，不保存供应商正文。
+
+明文 key 只存在于配置请求和一次供应商调用所需的短生命周期内存中。repository 不提供 list/read-secret API；解封需 `UserScope`、明确用途和受审计的 secret-vault port。替换/撤销使用 `expectedVersion`，撤销是幂等删除并使后续 AI job 在下一安全检查点失败为 `AI_UNAVAILABLE`。
+
+### `ai_assistant_sessions` 与 `ai_assistant_turns`
+
+本节只适用于 `AI_ENABLED`。个人助手历史是可删除、短期保留的支持数据，不是正式课程记录，也不进入 `ScheduleSnapshot`：
+
+- session：`id`, `owner_user_id`, `title`（可空/用户可改）, `created_at`, `updated_at`, `expires_at`, `deleted_at`。
+- turn：`id`, `session_id`, `role=user/assistant`, `content`（纯文本/受控 Markdown，大小上限）, `status=generating/completed/cancelled/failed`, `safe_error_code`, `provider`, `credential_version`（非秘密）, `requested_model_alias`, `response_id`, `response_model`, nullable `system_fingerprint`, 输入/输出 token、`created_at`, `completed_at`。UI 不持久化未经 schema 校验的 streaming delta。
+- 可选 `planning_draft` 使用带版本的不可变 JSONB union，只允许现有表单可表达的 draft；它不是 Candidate，也不带已应用标志。正式写入由用户之后提交的既有 command/idempotency/version 记录解释，不从 turn 直接推断。
+- 不持久化原始 Chain of Thought、明文 API key、完整 prompt、未审核 Candidate、整个数据库 snapshot 或供应商原始错误。为可解释性只保存用户可见的简洁回答、引用的正式 record IDs/versions 与安全元数据。
+
+P3 可先把 session 设为短期、按用户显式删除；具体保留天数在生产放量前写入 privacy 配置与文案。若首个切片仅需单轮交互，可以不提前创建 session 表，但不得把对话塞进 `user_profiles` 或 Import Run artifact。
 
 ### `academic_terms`
 
@@ -276,7 +306,7 @@ MVP 固定 `workload-v1` 默认值，避免各页面自行猜测：`assignment=1
 
 MVP 的热力图表示**事项落点所在周的截止压力**：完整分钟数计入 `date/deadline` 的到期周或 `interval` 的开始周，不凭空把工作平摊到此前几天。无日期事项不进入格子，并单独计数。以后引入学习 session 后可增加真实日程投影，但不能回写或重释历史事项。
 
-## 6. 课程资料与导入数据
+## 6. 课程资料与条件性导入数据
 
 ### `source_documents` 与 `source_assets`
 
@@ -288,6 +318,7 @@ MVP 的热力图表示**事项落点所在周的截止压力**：完整分钟数
 - `kind`: `syllabus/assignment_brief/screenshot_set/other`
 - `display_name`: 用户看到的名称
 - `status`: `uploading/ready/rejected/deleted`
+- `cleanup_status`: `not_requested/pending/complete`；删除先置 pending 并撤销预览，对象清理成功后置 complete，同 version 重试继续 pending 清理
 - `content_fingerprint`: 所有 asset 内容 hash 与顺序形成的 hash，用于重复提示
 - `page_count`: 准备后已知，可空
 - `deleted_at`, `created_at`, `version`
@@ -303,12 +334,12 @@ MVP 的热力图表示**事项落点所在周的截止压力**：完整分钟数
 
 ### `import_runs`
 
-每次解析尝试一行；重试新建 run，不覆盖失败历史。
+以下 `import_runs` 到 `review_applications` 仅在 `AI_ENABLED` 中存在。每次解析尝试一行；重试新建 run，不覆盖失败历史。
 
 - 身份：`id`, `source_document_id`, `attempt_number`
 - 状态：`status`, `current_stage`, `progress_current`, `progress_total`
 - 版本：`pipeline_version`, `extraction_schema_version`, `normalization_policy_version`, `prompt_version`
-- 供应商审计：`provider`, `model_snapshot`（非秘密）
+- 供应商审计：`provider`, `credential_version`, `requested_model_alias`, `response_id`, `response_model`, nullable `system_fingerprint`（均非秘密；Responses 未返回 fingerprint 时保持未知）
 - 生命周期：`queued_at`, `started_at`, `last_heartbeat_at`, `finished_at`
 - 安全错误：`error_code`, `error_category`, `safe_error_message`; stack/供应商原文只进受限日志
 - 成本指标：输入/输出 token、页数、远程耗时；不得记录课程正文
@@ -347,7 +378,7 @@ Candidate 是带 schema 版本的不可变 discriminated union：
 
 字段：`id`, `import_run_id`, `kind`, `schema_version`, `proposed_payload` JSONB, `confidence_milli`, `fingerprint`, `sort_order`, `created_at`。payload 在写入和读取时都由对应 Zod schema 验证。Candidate 写入后不可变，因此不设置无意义的乐观锁版本；Candidate ID 与内容 hash 唯一指向该 payload。
 
-`candidate_evidence(candidate_id, field_path, evidence_id, is_primary)` 把 RFC 6901 JSON Pointer（如 `/temporal/at`）连到 Evidence。`candidate_warnings` 保存代码定义的 warning code、severity 和结构化参数，UI 文案由 web 本地化。
+`candidate_evidence(candidate_id, field_path, evidence_id, field_confidence_milli, inference_text, is_primary)` 把受控 RFC 6901 JSON Pointer（如 `/temporal/at`）连到 Evidence；字段置信度约束为 `0..1000`，推断说明是非空、受长度限制的纯文本。每个实际提议字段必须至少关联一条本地可回查 Evidence，不能只用候选级置信度或一条日期 Evidence 覆盖整份 payload。`candidate_warnings` 保存代码定义的 warning code、severity 和结构化参数，UI 文案由 web 本地化。
 
 Candidate 不保存可变 `accepted` flag。是否已决策由唯一 `review_decisions.candidate_id` 推导，避免双重状态源。
 
@@ -439,6 +470,8 @@ pg-boss 的队列表由其 adapter 管理，不作为领域 schema 对外读取�
 - `grade_results(grade_component_id unique)`；`letter_grade_scales(owner_user_id)`；`letter_grade_bands(scale_id, letter unique)`。
 - `task_labels(term_id, normalized_name unique)`；`course_item_labels(course_item_id, label_id)` 复合主键及反向索引。
 - `idempotency_records(owner_user_id, intent, key_hash unique)` 和 `expires_at` 清理索引。
+- `user_ai_credentials(owner_user_id PK)`；凭据 fingerprint 不建立可枚举的公开查询入口。
+- `ai_assistant_sessions(owner_user_id, updated_at desc)`、`expires_at` 清理索引；`ai_assistant_turns(session_id, created_at)`。
 
 数据库 check constraints 保护时间 union、课节本地时间、比例/分数范围、正分钟数、页码和 bbox。`meeting_exceptions` 按 action 检查替代字段恰当为空/非空；`letter_grade_bands` 限五个 letter。跨行规则（评分合计、等级边界、课节/学期范围、标签同学期和所有权）由 core 验证并在 integration test 中覆盖。
 
@@ -447,6 +480,7 @@ pg-boss 的队列表由其 adapter 管理，不作为领域 schema 对外读取�
 - 归档学期/课程是可逆业务动作，不级联删除。
 - 归档课程时其课节规则不再进入默认 occurrence snapshot，但规则与例外保留；删除单次例外只恢复该日期按原规则/学期例外重新派生。
 - 删除 Grade Result 使该组成恢复“未出分”，不把值写成 0；删除自定义 Task Label 只移除标签及 join，不删除课程事项。
-- 删除 Source Document 会先取消活动 run 并立即撤销预览访问，再排队清除对象、页图、正文 artifact、Evidence quote/bbox 和未审核 Candidate payload。已经产生正式记录时，正式记录与 Review Decision 的 final payload 保留；Candidate 只保留 ID、kind、schema version、fingerprint 与内容 hash，界面标注“来源已删除”。
+- 删除 Source Document 会先取消活动 run、把 `cleanup_status` 置为 pending 并立即撤销预览访问，再清除对象、页图、正文 artifact、Evidence quote/bbox 和未审核 Candidate payload；成功后置 complete，失败保留 pending 供同版本幂等重试。已经产生正式记录时，正式记录与 Review Decision 的 final payload 保留；Candidate 只保留 ID、kind、schema version、fingerprint 与内容 hash，界面标注“来源已删除”。
+- 撤销 AI 凭据删除 `user_ai_credentials` 行并使新调用立即不可用；不会删除正式课程数据。短期 assistant session/turn 可由用户删除并按 `expires_at` 清理，Planning Draft 随 turn 删除且从不回滚或删除用户后来通过普通表单创建的正式记录。
 - 删除正式事项先写 `deleted_at`，使稳定 ICS UID 和导入审计仍可解释；未来提供隐私硬删除时由专门流程清理引用。
 - 删除用户账号属于单独的全租户擦除流程：停止任务、删除对象、级联结构化数据、记录不含个人内容的完成凭证。

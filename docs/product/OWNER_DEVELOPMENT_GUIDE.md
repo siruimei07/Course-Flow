@@ -7,25 +7,25 @@
 | 时间点            | 你需要决定什么                                              | 可以留给 Agent 的部分                  |
 | ----------------- | ----------------------------------------------------------- | -------------------------------------- |
 | P0 开始前/进行中  | 有参考就发；没有也不阻塞                                    | 工程骨架和中性 token                   |
-| P1 大量页面开写前 | 全局方向：导航、字体、色彩、圆角感、卡片/表单风格、动画气质 | loading/empty/error、200% zoom 和小交互 |
+| P1 大量页面开写前 | 全局方向：导航、字体、色彩、圆角感、卡片/表单风格、动画气质 | loading/empty/error、正常横屏桌面和小交互 |
 | P2 结束前         | dashboard、课程页、timeline、calendar 的主要布局和信息层级  | 极端数据、无障碍和响应式细节           |
-| P3 进行中         | 上传、进度、候选审核、Evidence 查看器                       | 状态变体和受限桌面 pane 重排方案       |
-| **P4 开始前**     | **几乎所有 MVP UI 的结构、风格和关键交互必须定型**          | 文案微调、边距、动效参数和可访问性修正 |
+| P3 开始前/进行中  | 上传、预览、手工录入；AI/密钥/审核/结果区只作 conditional 方案 | 结果区 idle/generating/completed/failed 等状态与受限桌面 pane 重排 |
+| **P4 最终评审**   | 提供临时 DeepSeek key 并签署 `AI_GO` 或 `MANUAL_ONLY`；仅通过后定型 AI UI | 文案微调、边距、动效参数和可访问性修正 |
 | P5                | 接入晚到片段、统一和打磨                                    | 不能把 P5 当第一次设计全部页面         |
 
 “几乎所有”不等于每个像素都由你画完。最迟在 P4 前，你需要确认全局视觉语言和所有核心页面的结构；未设计的状态和次要页面由 Agent 按已确认风格补齐。所有界面默认保持圆角，并带有克制、支持 reduced-motion 的动画。
 
 ## 当前网页设计完成后
 
-当前根目录 `courseflow-visual-lab.html` 是持续修改的视觉实验室，并被 `.gitignore` 排除。设计过程中保持这样即可；当你确认设计完成时，不要直接让 Agent “照这个 HTML 开始写生产页面”，先让它按 [前端设计基线与冻结](../design/DESIGN_BASELINE.md) 建立 `ui-v1`。冻结会把 HTML 的精确快照、hash、token、route/状态矩阵和 768/1280 桌面参考截图纳入 Git，另验收 200% zoom，并先处理严重可用性、无障碍与产品范围冲突。
+当前根目录 `courseflow-visual-lab.html` 是持续修改的视觉实验室，并被 `.gitignore` 排除。设计过程中保持这样即可；当你确认设计完成时，不要直接让 Agent “照这个 HTML 开始写生产页面”，先让它按 [前端设计基线与冻结](../design/DESIGN_BASELINE.md) 建立新基线。冻结会把 HTML 的精确快照、hash、token、route/状态矩阵和 `1280x900` 正常横屏桌面参考截图纳入 Git，并先处理严重可用性、无障碍与产品范围冲突。
 
 发送下面这段即可：
 
 ```text
-前端设计已完成。请按 docs/design/DESIGN_BASELINE.md 把当前 courseflow-visual-lab.html 冻结为 ui-v1。先做 route/状态矩阵与冻结前审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。通过后保存可追踪的 HTML 快照、hash、token/交互清单和 768/1280 桌面参考截图，验证 200% zoom，更新 UI-0001。不要开始生产页面实现。
+前端设计已完成。请按 docs/design/DESIGN_BASELINE.md 把当前 courseflow-visual-lab.html 冻结为新的 UI 基线。先做 route/状态矩阵与冻结前审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。通过后保存可追踪的 HTML 快照、hash、token/交互清单和 `1280x900` 正常横屏桌面参考截图，更新对应 UI 条目。不要开始生产页面实现。
 ```
 
-你确认冻结报告后，再按实施计划从当前 `next` 阶段推进。每个可见切片都必须引用 `ui-v1`，在同 viewport/主题/fixture 下做截图比对；改变已确认视觉时建立 `ui-v2`，不原地改写 `ui-v1`。这样后续开发锁定的是可版本化、可测试的设计合约，而不是某个 Agent 对网页文件的主观理解。
+你确认冻结报告后，再按实施计划从当前 `next` 阶段推进。P3 已完成并只冻结 `p3-manual-v1` 的 Source 上传/预览/手工录入；当前 `next` 是 P4，AI 页面继续 conditional，必须先按冻结 policy 做最终去留门禁。每个可见切片都必须引用相应基线，在同 viewport/主题/fixture 下做截图比对；改变已确认视觉时建立新版本，不原地改写旧基线。这样后续开发锁定的是可版本化、可测试的设计合约，而不是某个 Agent 对网页文件的主观理解。
 
 ## 发送网站、页面或 HTML/CSS 时
 
@@ -44,6 +44,30 @@
 ```
 
 同一风格的新参考可以继续发；如果它推翻旧风格，请明确写“替代 UI-xxxx”，否则 Agent 会优先把它视为现有设计系统的补充。
+
+## DeepSeek 暂定接入方式
+
+专项可行性研究的当前结论是：**接口形态有条件可行，但尚未通过真实能力门禁**。DeepSeek 可以接收 CourseFlow 本地准备的有界文本，并按 JSON Schema 返回结构化答案；它不能直接读取 PDF/图片，也不能替代本地 Evidence、日期、成绩、权限和正式写入校验。完整证据见 [本地文本—提示词—UI 插槽可行性研究](../research/deepseek-local-text-prompt-ui-slot-feasibility.md)，实现权威见 [个人 AI 架构](../architecture/AI_ASSISTANT.md#41-暂定实现框架)。
+
+暂定数据流只有这一条：
+
+```text
+本地 PDF/OCR/正式课程 snapshot 与短期对话裁剪
+→ feature 内固定、版本化 Prompt Registry
+→ 固定 DeepSeek Responses JSON Schema 请求
+→ 本地 schema、引用/Evidence 与领域校验
+→ 安全 view model
+→ 条件性 AI 结果区或 Candidate 审核页
+```
+
+你需要把握四个决策点：
+
+1. **P3 不提供真实 key。** Agent 只能用 deterministic fake 证明框架、错误与界面状态，不得把 fake 或官方文档当成真实效果。
+2. **第一次真实调用前批准 `ai-eval-policy-v1`。** 先锁定去身份化样本、准确率/Evidence/安全阈值、p95 延迟、费用和失败率；看到结果后不为通过而改阈值。
+3. **确认数据发送说明。** “本地处理”只表示文件解析、OCR、裁剪和校验在 CourseFlow 完成；最终放进 prompt 的最小文本仍会发送给 DeepSeek，界面必须如实说明。
+4. **P4 只签一个结论。** 全部门禁通过才签 `AI_GO`；任一失败或未验证即签 `MANUAL_ONLY`，删除 AI，不换供应商。
+
+如果你提供 AI 结果区的网页代码或截图，请把它标为 `conditional`，并至少画出：未开始、生成中/取消、完成回答、带引用/假设、带表单草稿、失败与手工恢复。页面预留的是 `AiResultRegion`，不是空白卡片；生产实现只渲染 server 已校验的 view model，不直接插入 DeepSeek 原始文本、Markdown/HTML 或逐 token JSON。
 
 ## 阶段提示词
 
@@ -73,18 +97,18 @@ P0 不需要等 UI。如果你已有代表性的网页或代码，可以在 P0 �
 
 ### P2 完成后：进入 P3
 
-此时除导入/审核专属页面外，UI 应已基本确定。若还缺常规页面设计，先补发 UI 或让 Agent 按现有风格补齐。
+此时 P1/P2 UI 已基本确定。P3 先完成不依赖 AI 的资料上传、预览和手工录入；个人中心/密钥/助手可继续优化，但必须标为 conditional，不能在最终门禁前冻结成产品承诺。
 
 ```text
-请先审计 P2 门禁和 UI 整合记录，再执行 P3：上传、确定性 fixture 导入、worker、候选审核与 Evidence 闭环。真实 AI 暂不接入。重点保证审核前不污染正式数据、审核 transaction/幂等/版本冲突正确，并完成 sources、progress、review、Evidence 的桌面与 200% zoom UI。只保留一个上传→worker→审核→正式视图的 canonical E2E。P3 完成时列出仍未定型的 UI；存在核心页面缺口就不要解锁 P4。
+请先审计 P2 门禁和 UI 整合记录，并读取 DeepSeek 本地文本—提示词—UI 插槽可行性研究。执行 P3：先冻结并实现 Sources 上传、安全预览、删除和“对照资料打开既有手工表单”，走通上传→预览→手工录入→Timeline/Dashboard；这条闭环不得依赖 AI。然后在真实调用前冻结 ai-eval-policy-v1，只在隔离 composition 中实现 `Local Preparation → Feature Prompt Registry → DeepSeek Responses Port → Local Result Validation → Safe View Model → UI Result Region`。资料侧本地 PDF/OCR/分页/locator，助手侧本地正式 snapshot/短期对话裁剪；ingestion 与 assistant 分别持有源码内版本化 prompt/schema/budget，client/数据库/资料不能覆盖。DeepSeek contract 用正向字段 allowlist 固定官方 endpoint、deepseek-v4-pro、non-streaming、reasoning none、JSON Schema 和无 tools/web，并省略不支持的 store/会话字段；日常只用 deterministic fake。只接受 completed 的唯一完整 output_text，经本地 schema、citation/Evidence 与领域校验后生成 Candidate/Draft view model；原始 response/HTML/Markdown/reasoning/error 不进入 DOM。条件性 AiResultRegion 覆盖 idle/generating/completed/cancelled/failed，并保留重试/配置/手工恢复。开发、CI、E2E、截图不得填入真实 key，也不得把 live adapter、AI route/migration/UI 装入默认生产。用 ux-heuristics 与 typeui-fundamentals 审核 MANUAL_ONLY 和 AI_ENABLED 两套矩阵，P3 只冻结前者。完成后报告手工 canonical E2E、prompt/input/output/UI fake 证明、默认生产隔离、eval runner dry-run 和仍为 AI_PENDING 的状态。
 ```
 
-### P3 完成后：进入 P4（UI 硬门禁）
+### P3 完成后：进入 P4（DeepSeek 最终去留门禁）
 
-这是 UI 的最晚定型点。先检查导航、dashboard、term/course、timeline、grading、sources、progress、review、Evidence、calendar、insights 空状态和 settings 是否已有统一结构。
+这是唯一允许使用真实 key 的最终评审。你需要临时提供可用 key；评测后立即撤销。若能力、质量、延迟/费用、安全、隐私条款或 UI 任一硬门禁失败，或者仍未验证，就选择 `MANUAL_ONLY`，删除 AI 全部功能，不接其他模型。
 
 ```text
-在开始 P4 前先执行 UI 硬门禁：核对六个一级入口、添加课程/多个课节、Reading Week 例外、tasks、Gradebook、所有 MVP route、关键状态和 UI_INTEGRATION_LOG，确认几乎所有 UI 已定型；可按既有风格推导的细节直接补齐，涉及产品行为的缺口列给我确认。门禁通过后执行 P4：真实 PDF/图片准备、版本化 AI schema/prompt、Extraction adapter、deterministic normalizer、fixture corpus 和 eval。不要借 P4 重做页面结构；浏览器测试继续使用 deterministic fake，真实模型只走受控 eval。完成后按 P4 验收报告版本、质量、Evidence、失败与清理证据。
+执行 P4 DeepSeek 最终去留门禁。先确认 ai-eval-policy-v1、corpus、阈值和 P3 的 prompt/schema/budget versions 已在第一次真实调用前冻结，再通过受保护 secret input 使用我临时提供的 key。用同一版本运行 extraction/assistant smoke、完整 eval、错误 contract 与 prompt-injection/越权红队，验证实际 request 确实固定官方 endpoint、deepseek-v4-pro、JSON Schema、无 tools/web、non-streaming 和预算；统计结构成功率、关键字段 precision/recall、Evidence/citation 命中、p50/p95 延迟、终态失败率、token 和费用。同时核对适用于下游用户的数据保留、训练使用/退出、处理地域、DPA/条款与披露。评测后立即撤销 key，不记录 key、正文或 CoT，不得为了通过修改样本、阈值或 prompt/schema。最终只能提交 AI_GO 或 MANUAL_ONLY：AI_GO 时只启用已评测版本的 live adapter/migration，完成凭据/审核/助手安全、AiResultRegion 浏览器验收和 AI UI 冻结；任一失败或 UNVERIFIED 时删除 AI 配置、助手、解析/候选 UI、route/module/adapter/prompt/schema/table/migration/config/文案，不换模型，并回归 Sources 手工闭环。更新 P4 状态后报告签署结果和清理/启用证据。
 ```
 
 ### P4 完成后：进入 P5
@@ -92,7 +116,7 @@ P0 不需要等 UI。如果你已有代表性的网页或代码，可以在 P0 �
 如果此时再提供 UI，最好明确它是局部优化还是替代已有 UI ID。
 
 ```text
-请审计 P4 的 corpus baseline、Evidence、provider failure 和 cleanup 门禁，然后执行 P5：UI 整合与体验打磨。清空 UI log 中尚未处理的条目，统一 token/primitives，完成评分方案差异、国际化、桌面 viewport/200% zoom、键盘、WCAG、reduced-motion、视觉基线和基于实测的性能优化。保持圆角和既定动画风格；删除生产 mock、旧 CSS、临时 route 和被替代实现。不要扩张成每页 E2E。完成后给出最终 UI/质量验收矩阵。
+请审计 P4 的 corpus baseline、Evidence、provider failure 和 cleanup 门禁，然后执行 P5：UI 整合与体验打磨。清空 UI log 中尚未处理的条目，统一 token/primitives，完成评分方案差异、国际化、`1280x900` 正常横屏桌面、键盘、WCAG、reduced-motion、视觉基线和基于实测的性能优化。保持圆角和既定动画风格；删除生产 mock、旧 CSS、临时 route 和被替代实现。不要扩张成每页 E2E。完成后给出最终 UI/质量验收矩阵。
 ```
 
 ### P5 完成后：是否进入 P6

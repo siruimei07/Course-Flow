@@ -10,7 +10,7 @@
 | 冻结基线   | 用户确认版本的 HTML、截图、token、页面/状态矩阵 | 是，约束具体视觉与交互 | 否；变更建立新版本 |
 | 生产实现   | React/Next.js、真实 contract 和可访问交互       | 必须匹配冻结基线       | 按开发流程变更     |
 
-当前视觉实验室是仓库根目录的 `courseflow-visual-lab.html`。它被 `.gitignore` 排除，适合继续设计，但后续 Agent、CI 和历史版本都不能稳定依赖它。其当前状态是 `UI-0001 / prototyped`，尚未冻结；设计完成前保持它为本地可变文件。
+当前最新视觉实验室是仓库根目录的 `courseflow-visual-lab-glass.html`。它被 `.gitignore` 排除，采用用户确认继续发展的模糊玻璃方向，适合继续设计，但后续 Agent、CI 和历史版本都不能稳定依赖它。`courseflow-visual-lab.html` 保留为此前非玻璃实验稿；已冻结的 `ui-v1` 仍是唯一 Git 可追踪视觉权威。玻璃稿登记为 `UI-0003 / prototyped`，尚未冻结；设计完成前保持它为本地可变文件。
 
 冻结基线负责视觉事实，产品和领域文档负责行为事实。冲突按 [前端冲突处理优先级](../architecture/FRONTEND.md#7-冲突处理优先级) 裁决；无障碍、安全、隐私与领域正确性不会为了像素相似而降级。
 
@@ -25,7 +25,6 @@ docs/design/baselines/ui-v1/
 ├─ reference/
 │  └─ courseflow.html          # 从视觉实验室逐字复制的冻结快照
 └─ screenshots/
-   ├─ 768x1024/
    └─ 1280x900/
 ```
 
@@ -63,14 +62,16 @@ docs/design/baselines/ui-v1/
 | Ownership       | route、feature、primitive、view model/contract 的目标归属  |
 | Status          | covered/derived/pending/verified                           |
 
-CourseFlow 面向桌面浏览器，基准 viewport 为 `768x1024` 与 `1280x900`，另验收 200% zoom；不建立 320/360px 移动端或窄屏应用基线。只为能改变布局或任务结果的代表状态截图，不生成页面 × 状态 × 主题的无意义全排列。
+CourseFlow 只面向正常横屏桌面浏览器，像素基准 viewport 为 `1280x900`；不建立竖屏、移动端或窄屏产品布局，也不把 200% zoom 当作像素比对基线。只为能改变布局或任务结果的代表状态截图，不生成页面 × 状态 × 主题的无意义全排列。为兑现 WCAG 2.2 AA，200% zoom 仍做功能检查：关键内容、表单、错误和操作不得丢失，明确二维容器之外不得出现 document 级水平滚动。
 
-完成标准：导航、首屏、主要 overlay、桌面断点/zoom 重排方式和核心任务都能落到明确矩阵行。
+`ui-v1` 已冻结目录中的 `768x1024` 与 200% zoom 截图属于旧版本的不可变历史证据；不得删除或改写，也不得把它们复制成新像素基线。自本规则起的增量截图只记录正常横屏桌面，但 200% 功能检查结果仍写入验收记录。
+
+完成标准：导航、首屏、主要 overlay 和正常横屏桌面下的核心任务都能落到明确矩阵行。
 
 ### 第三步：冻结前审计
 
 1. 使用 `ux-heuristics` 对导航、信息架构、表单和核心旅程做启发式检查并给出 severity；severity 3/4 必须修复后再冻结，保留的 severity 1/2 写入基线已知问题。
-2. 在设计 token 已明确的前提下使用 `typeui-fundamentals`，按其规定顺序检查 spacing → UI hierarchy/controls → typography，并执行 accessibility 模块；具体值仍由基线决定。至少验证 focus、键盘、对比度、touch target、768/1280 桌面参考 viewport、200% zoom、非颜色表达和 motion safety。320/360px 不属于产品布局范围，但浏览器缩放后的受限呈现不能丢失主任务。
+2. 在设计 token 已明确的前提下使用 `typeui-fundamentals`，按其规定顺序检查 spacing → UI hierarchy/controls → typography，并执行 accessibility 模块；具体值仍由基线决定。至少验证 focus、键盘、对比度、touch target、`1280x900` 正常横屏桌面参考 viewport、非颜色表达和 motion safety。
 3. 只有交互确实使用手势、弹簧、sheet、动量、空间层级或半透明材质时才使用 `apple-design` 做 Web 适配检查。
 4. `apple-human-interface-guidelines` 只用于原生 Apple 平台目标，不作为当前 Web 基线的通用审核器。
 5. 检查字体、图标、图片、参考组件和第三方代码的来源、许可与生产加载方案。外部 CDN、内联 script 和原型许可注释不能在迁移时丢失。
@@ -115,7 +116,7 @@ CourseFlow 面向桌面浏览器，基准 viewport 为 `768x1024` 与 `1280x900`
 
 ## 4. 冻结后的实现顺序
 
-当前实施计划仍以 P0 为 `next`。设计冻结后不要跳阶段：先完成 P0 的工程与质量骨架；P1 起按阶段交付真实纵向切片。P0 可以在设计期间进行，但未经用户许可，生产页面不得以未冻结实验稿作为最终视觉事实。
+当前实施计划已经完成 P3，P4 为 `next`，产品模式仍是 `AI_PENDING`。设计冻结后不要跳阶段：只读 `ui-v1` 继续作为全局像素权威，`p3-manual-v1` 只冻结 Sources 手工增量；P4 最终结论前，条件性 AI harness 不是生产视觉事实。
 
 每个前端切片按以下顺序：
 
@@ -127,7 +128,7 @@ CourseFlow 面向桌面浏览器，基准 viewport 为 `768x1024` 与 `1280x900`
 6. **验证可见结果**：使用 `build-web-apps:frontend-testing-debugging`，在 Browser 中检查目标旅程、console、桌面/移动截图和 mismatch ledger；React/Next.js 代码同时应用 `build-web-apps:react-best-practices`。
 7. **关闭切片**：运行相关 component/a11y/visual/E2E 与仓库 quality gates，更新矩阵状态，删除临时实现与重复样式。
 
-阶段映射仍由实施计划决定：P1 实现学期、课程/多个课节、Reading Week、手工事项/标签、基础 Gradebook 和相关页面；P2 接今日/下一节课、任务短期/中长期分组、雷达、热力图、冲突、日历与 ICS；P3 接资料、导入进度、审核和 Evidence；`/insights` 只有定义真实 Insight 后才显示指标。不能因为视觉实验室已经画出页面，就用 mock 提前伪装功能完成。
+阶段映射仍由实施计划决定：P1 实现学期、课程/多个课节、Reading Week、手工事项/标签、基础 Gradebook 和相关页面；P2 接今日/下一节课、任务分组、雷达、热力图、冲突、日历与 ICS；P3 接 Source 上传/预览/手工录入并只隔离设计 AI 候选；P4 `AI_GO` 后才接导入进度、审核和 Evidence，否则将这些 surface 删除。`/insights` 只有定义真实 Insight 后才显示指标。不能因为视觉实验室已经画出页面，就用 mock 提前伪装功能完成。
 
 ## 5. 防止后续开发漂移
 
@@ -160,18 +161,22 @@ CourseFlow 面向桌面浏览器，基准 viewport 为 `768x1024` 与 `1280x900`
 | `sources`    | `/sources`、`/courses/[courseId]/sources`、`/imports/[runId]` | 保留全局资料入口，同时把课程上下文和审核工作台拆清楚                 |
 | `statistics` | `/insights`                                                   | 当前数字仅作视觉 fixture；Insight 未定义前生产只显示真实空状态       |
 
-`/terms`、`/courses/new` 分步添加课节、Reading Week/单次例外、课程 timeline、Gradebook 成绩录入/等级表、settings、完整 import progress/error 等核心 surface 也尚未在该单文件中逐一覆盖。冻结时必须把它们标成“新增设计 / 可按系统推导 / 当前版本不覆盖”，不能默认为已经确认。按系统推导的表单除了复用 token，还必须记录默认/hover/focus/disabled/error/success、键盘焦点、200% zoom 下的单列重排、输入与按钮等高及相邻操作不换行；无障碍结构优先于视觉压缩。
+`/terms`、`/courses/new` 分步添加课节、Reading Week/单次例外、课程 timeline、Gradebook 成绩录入，以及完整 import progress/error 等核心 surface 仍未在该单文件中逐一覆盖。设置中心现已覆盖显示时区、周起始日、默认等级表、账户资料和 AI 凭据主路径，但供应商错误与助手状态仍不完整。冻结时必须把其余 surface 标成“新增设计 / 可按系统推导 / 当前版本不覆盖”，不能默认为已经确认。按系统推导的表单除了复用 token，还必须记录默认/hover/focus/disabled/error/success、键盘焦点、输入与按钮等高及相邻操作不换行；无障碍结构优先于视觉压缩。
+
+2026-08-13 新增的头像个人中心、设置与偏好、账户与隐私、DeepSeek API Key 配置、AI 可用状态、提问/生成中回答与规划草稿明确属于 `UI-0002 / UI-0003 / prototyped`，不在 `ui-v1` 的 derived 范围内。当前产品模式为 `AI_PENDING`：账户/普通设置和 Source 手工录入可以进入下一基线；密钥、AI 抽取、Candidate/Review 与助手必须标 `conditional`，P4 `AI_GO` 前不得冻结为生产承诺。若最终 `MANUAL_ONLY`，新基线删除全部 AI surface，只保留普通个人中心及手工资料路径；不得留下永久 disabled AI 卡片。
 
 ## 7. 项目所有者的下一条指令
 
 设计真正完成后，可直接发送：
 
 ```text
-前端设计已完成。请读取 AGENTS.md、docs/design/DESIGN_BASELINE.md、FRONTEND.md、SCOPE.md 和 UI_INTEGRATION_LOG.md，把当前 courseflow-visual-lab.html 冻结为 ui-v1。先做 route/状态矩阵与冻结前 UX/无障碍审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。通过后保存可追踪的 HTML 快照、hash、token/交互清单和 768/1280 桌面参考截图，验证 200% zoom，更新 UI-0001，并只报告仍需我决定的项目。不要开始生产页面实现。
+前端设计已完成。请读取 AGENTS.md、docs/design/DESIGN_BASELINE.md、FRONTEND.md、SCOPE.md 和 UI_INTEGRATION_LOG.md，把当前 courseflow-visual-lab-glass.html 冻结为 ui-v2。当前 AI 为 AI_PENDING：只冻结账户/普通设置、Sources 上传预览和手工录入；把 DeepSeek 密钥、AI 抽取、Candidate/Review 与助手状态登记为 conditional，不纳入生产基线。先做 route/状态矩阵与 ux-heuristics/typeui-fundamentals/无障碍审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。通过后保存 HTML 快照、hash、token/交互清单、1280x900 参考截图和 200% 功能检查，更新 UI 条目。不要开始生产页面实现。
 ```
 
-冻结报告通过后，仓库当前唯一正确的开发起点仍是 P0。再发送：
+`p3-manual-v1` 已冻结并验证，仓库当前正确的开发起点是实施计划中标为 `next` 的 P4。任何真实调用必须继续使用已冻结的 `ai-eval-policy-v1`，完成真实能力/隐私/成本评测与三方签署后，只能选择 `AI_GO` 或 `MANUAL_ONLY`；目前仍是 `AI_PENDING`。
+
+历史上用于启动 P3 的指令保留如下，不能再据此重复实现或绕过 P4：
 
 ```text
-ui-v1 已确认冻结。请按 IMPLEMENTATION_PLAN.md 和 DEVELOPMENT_WORKFLOW.md 执行当前 next 阶段。所有可见前端实现必须引用 ui-v1 的矩阵行，先对齐 contract fixture，再接真实 view model；不得静默重设计或把原型 mock 带入生产。
+ui-v2 已确认冻结。请按 IMPLEMENTATION_PLAN.md 和 DEVELOPMENT_WORKFLOW.md 执行当前 next 的 P3：先做 Sources 上传/预览/手工录入闭环；AI 仍按 conditional contract/fake 隔离，未经过 P4 AI_GO 不装配生产 route、migration 或 UI。所有可见实现引用 ui-v2 矩阵行，先对齐 contract fixture，再接真实 view model；不得静默重设计或把原型 mock 带入生产。
 ```

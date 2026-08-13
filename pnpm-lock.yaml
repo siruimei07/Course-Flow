@@ -88,6 +88,43 @@ importers:
         specifier: ^4.0.0
         version: 4.1.10(@types/node@24.13.3)(@vitest/coverage-v8@4.1.10)(jsdom@27.4.0(supports-color@8.1.1))(vite@8.2.1(@types/node@24.13.3)(esbuild@0.28.2)(tsx@4.23.12))
 
+  apps/import-harness:
+    dependencies:
+      '@courseflow/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@courseflow/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@courseflow/infrastructure':
+        specifier: workspace:*
+        version: link:../../packages/infrastructure
+      '@courseflow/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
+      next:
+        specifier: 16.2.11
+        version: 16.2.11(@babel/core@7.29.7(supports-color@8.1.1))(@playwright/test@1.62.1)(@types/node@24.13.3)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      react:
+        specifier: 19.2.8
+        version: 19.2.8
+      react-dom:
+        specifier: 19.2.8
+        version: 19.2.8(react@19.2.8)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.2.18
+      '@types/react-dom':
+        specifier: ^19.2.0
+        version: 19.2.4(@types/react@19.2.18)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+
   apps/web:
     dependencies:
       '@courseflow/contracts':

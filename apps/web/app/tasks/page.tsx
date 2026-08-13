@@ -1,5 +1,11 @@
 import Link from "next/link";
-import { asTaskLabelId, type TaskGroupKey } from "@courseflow/core";
+import {
+  asCourseId,
+  asSourceDocumentId,
+  asTaskLabelId,
+  type SourceDocumentSummary,
+  type TaskGroupKey,
+} from "@courseflow/core";
 import { getScopedCourseFlow } from "@/composition/runtime";
 import { ScheduleTaskRow } from "@/features/schedule/schedule-task-row";
 import { PageHeading } from "@/features/shared/page-heading";
@@ -32,9 +38,15 @@ function filterHref(
 export default async function TasksPage({
   searchParams,
 }: Readonly<{
-  searchParams: Promise<{ group?: string; labelId?: string; q?: string }>;
+  searchParams: Promise<{
+    courseId?: string;
+    group?: string;
+    labelId?: string;
+    q?: string;
+    sourceId?: string;
+  }>;
 }>) {
-  const { academics, schedule, scope } = await getScopedCourseFlow();
+  const { academics, schedule, scope, sources } = await getScopedCourseFlow();
   const [terms, parameters] = await Promise.all([academics.listTerms(scope), searchParams]);
   const active =
     terms.find((term) => term.isActive && term.archivedAt === null) ??
@@ -60,6 +72,20 @@ export default async function TasksPage({
           academics.listCourses(scope, active.id),
         ]);
   const courses = courseSetups.filter((setup) => setup.course.archivedAt === null);
+  let sourceContext: SourceDocumentSummary | null = null;
+  if (parameters.sourceId !== undefined && parameters.courseId !== undefined) {
+    const selectedCourse = courses.find((setup) => setup.course.id === parameters.courseId);
+    if (selectedCourse !== undefined) {
+      const sourceLibrary = await sources.listSources(scope, {
+        courseId: asCourseId(parameters.courseId),
+      });
+      sourceContext =
+        sourceLibrary.sources.find(
+          (source) =>
+            source.id === asSourceDocumentId(parameters.sourceId!) && source.status === "ready",
+        ) ?? null;
+    }
+  }
   const total =
     board === null ? 0 : Object.values(board.groups).reduce((sum, items) => sum + items.length, 0);
 
@@ -89,6 +115,31 @@ export default async function TasksPage({
         </section>
       ) : (
         <>
+          {sourceContext === null ? null : (
+            <section className="panel source-manual-context" aria-labelledby="source-manual-title">
+              <div>
+                <span className="meta-label">对照资料手工录入</span>
+                <h2 id="source-manual-title">{sourceContext.displayName}</h2>
+                <p>原文不会预填或提交任何字段。请在新标签页查看资料，再由你填写下面的既有表单。</p>
+              </div>
+              <div className="source-manual-context-actions">
+                <a
+                  className="button button-dark"
+                  href={`/api/v1/source-documents/${sourceContext.id}/preview`}
+                  rel="noreferrer"
+                  target="_blank"
+                >
+                  查看原始文件
+                </a>
+                <Link
+                  className="button button-secondary"
+                  href={`/sources?courseId=${sourceContext.courseId}&sourceId=${sourceContext.id}`}
+                >
+                  返回资料库
+                </Link>
+              </div>
+            </section>
+          )}
           <section className="panel task-filters" aria-label="任务筛选">
             <form action="/tasks" className="task-search" role="search">
               {selectedGroup === undefined ? null : (
@@ -196,6 +247,9 @@ export default async function TasksPage({
                     id: label.id,
                     termId: label.termId,
                   }))}
+                  {...(parameters.courseId === undefined
+                    ? {}
+                    : { initialCourseId: parameters.courseId })}
                 />
               </div>
             </aside>

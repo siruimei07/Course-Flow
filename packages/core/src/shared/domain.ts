@@ -12,6 +12,11 @@ export type GradingSchemeId = Brand<string, "GradingSchemeId">;
 export type GradeComponentId = Brand<string, "GradeComponentId">;
 export type GradeResultId = Brand<string, "GradeResultId">;
 export type LetterGradeScaleId = Brand<string, "LetterGradeScaleId">;
+export type SourceDocumentId = Brand<string, "SourceDocumentId">;
+export type SourceAssetId = Brand<string, "SourceAssetId">;
+export type ImportRunId = Brand<string, "ImportRunId">;
+export type CandidateId = Brand<string, "CandidateId">;
+export type EvidenceId = Brand<string, "EvidenceId">;
 
 export type UserScope = Readonly<{ userId: UserId }>;
 
@@ -93,6 +98,26 @@ export function asGradeResultId(value: string): GradeResultId {
 
 export function asLetterGradeScaleId(value: string): LetterGradeScaleId {
   return value as LetterGradeScaleId;
+}
+
+export function asSourceDocumentId(value: string): SourceDocumentId {
+  return value as SourceDocumentId;
+}
+
+export function asSourceAssetId(value: string): SourceAssetId {
+  return value as SourceAssetId;
+}
+
+export function asImportRunId(value: string): ImportRunId {
+  return value as ImportRunId;
+}
+
+export function asCandidateId(value: string): CandidateId {
+  return value as CandidateId;
+}
+
+export function asEvidenceId(value: string): EvidenceId {
+  return value as EvidenceId;
 }
 
 export function validationError(message: string, issues: readonly DomainIssue[]): DomainError {

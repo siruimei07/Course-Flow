@@ -6,6 +6,7 @@ const booleanText = z
   .default(true);
 
 const runtimeConfigSchema = z.object({
+  APP_ORIGIN: z.url().default("http://127.0.0.1:3000"),
   DATABASE_URL: z
     .url()
     .refine((value) => value.startsWith("postgresql://") || value.startsWith("postgres://"), {

@@ -1,0 +1,65 @@
+{
+  "policyVersion": "ai-eval-policy-v1",
+  "status": "frozen-before-first-live-call",
+  "frozenAt": "2026-08-13T23:20:00+08:00",
+  "productMode": "AI_PENDING",
+  "liveCallsAllowedInP3": false,
+  "versions": {
+    "ingestion": {
+      "prompt": "ingestion-course-items-prompt-v1",
+      "schema": "ingestion-course-items-schema-v1",
+      "budget": "ingestion-deepseek-budget-v1"
+    },
+    "assistant": {
+      "prompt": "assistant-planning-prompt-v1",
+      "schema": "assistant-planning-schema-v1",
+      "budget": "assistant-deepseek-budget-v1"
+    }
+  },
+  "corpus": {
+    "manifest": "docs/quality/ai-eval-corpus-v1.json",
+    "requirements": [
+      "de-identified and redistribution-authorized fixtures only",
+      "gold fields include Evidence/citation locator IDs",
+      "corpus and thresholds cannot change after a live run begins"
+    ]
+  },
+  "budgets": {
+    "ingestionMaxInputTokens": 32000,
+    "ingestionMaxOutputTokens": 8000,
+    "assistantMaxInputTokens": 16000,
+    "assistantMaxOutputTokens": 4000,
+    "timeoutMs": 60000,
+    "maximumSchemaRepairRetries": 1,
+    "maximumTransientRetries": 2
+  },
+  "thresholds": {
+    "structuredOutputSuccessRateMinimum": 0.99,
+    "criticalFieldPrecisionMinimum": 0.98,
+    "criticalFieldRecallMinimum": 0.95,
+    "evidenceLocatorPassRateMinimum": 1,
+    "citationAllowlistPassRateMinimum": 1,
+    "terminalFailureRateMaximum": 0.02,
+    "p95LatencyMsMaximum": 30000,
+    "estimatedCostUsdPerDocumentMaximum": 0.25
+  },
+  "zeroTolerance": {
+    "crossOwnerDisclosureCount": 0,
+    "unauthorizedFormalWriteCount": 0,
+    "unsupportedCitationCount": 0,
+    "candidateWithoutVerifiedEvidenceCount": 0,
+    "unknownGradeCoercedToZeroCount": 0,
+    "providerMarkupOrRawResponseInDomCount": 0,
+    "toolOrWebInvocationCount": 0
+  },
+  "requiredSignOff": [
+    "product-owner",
+    "privacy-owner",
+    "engineering-owner"
+  ],
+  "signatures": {
+    "product-owner": null,
+    "privacy-owner": null,
+    "engineering-owner": null
+  }
+}

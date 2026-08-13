@@ -46,6 +46,10 @@ _Avoid_: Citation（容易被理解为学术引用）、Reference
 用户对候选作出的接受、修改后接受、拒绝或标记重复的明确决定。
 _Avoid_: Approval（无法表达拒绝和修改）
 
+**AI 规划草稿（AI Planning Draft）**：
+个人 AI 助手基于用户已确认的课程计划生成的解释、日/周计划或表单预填建议；它不是 Candidate，也不是正式课程数据。草稿只能进入现有手工表单，由用户核对并提交后才可能写入正式记录。
+_Avoid_: AI Decision（模型不能替用户决定）、Auto Plan（暗示会自动执行）
+
 ## 课程要求
 
 **课程事项（Course Item）**：

@@ -151,6 +151,81 @@ export const courses = courseflow.table(
   ],
 );
 
+export const sourceDocuments = courseflow.table(
+  "source_documents",
+  {
+    contentFingerprint: text("content_fingerprint"),
+    cleanupStatus: text("cleanup_status").default("not_requested").notNull(),
+    courseId: uuid("course_id")
+      .notNull()
+      .references(() => courses.id),
+    createdAt: timestamp("created_at", { mode: "string", withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    deletedAt: timestamp("deleted_at", { mode: "string", withTimezone: true }),
+    displayName: text("display_name").notNull(),
+    id: uuid("id").primaryKey(),
+    kind: text("kind").notNull(),
+    pageCount: integer("page_count"),
+    status: text("status").default("uploading").notNull(),
+    uploadExpiresAt: timestamp("upload_expires_at", {
+      mode: "string",
+      withTimezone: true,
+    }).notNull(),
+    version: integer("version").default(1).notNull(),
+  },
+  (table) => [
+    index("source_documents_course_created_idx").on(table.courseId, table.createdAt),
+    index("source_documents_fingerprint_idx").on(table.courseId, table.contentFingerprint),
+    check(
+      "source_documents_kind_check",
+      sql`${table.kind} in ('syllabus','assignment_brief','screenshot_set','other')`,
+    ),
+    check(
+      "source_documents_status_check",
+      sql`${table.status} in ('uploading','ready','rejected','deleted')`,
+    ),
+    check(
+      "source_documents_cleanup_status_check",
+      sql`${table.cleanupStatus} in ('not_requested','pending','complete')`,
+    ),
+    check(
+      "source_documents_page_count_check",
+      sql`${table.pageCount} is null or ${table.pageCount} > 0`,
+    ),
+    check("source_documents_version_check", sql`${table.version} >= 1`),
+  ],
+);
+
+export const sourceAssets = courseflow.table(
+  "source_assets",
+  {
+    byteSize: bigint("byte_size", { mode: "number" }).notNull(),
+    declaredMimeType: text("declared_mime_type").notNull(),
+    height: integer("height"),
+    id: uuid("id").primaryKey(),
+    originalFilename: text("original_filename").notNull(),
+    position: integer("position").notNull(),
+    sha256: text("sha256"),
+    sniffedMimeType: text("sniffed_mime_type"),
+    sourceDocumentId: uuid("source_document_id")
+      .notNull()
+      .references(() => sourceDocuments.id, { onDelete: "cascade" }),
+    storageKey: text("storage_key").notNull().unique(),
+    width: integer("width"),
+  },
+  (table) => [
+    uniqueIndex("source_assets_document_position_unique").on(
+      table.sourceDocumentId,
+      table.position,
+    ),
+    check("source_assets_position_check", sql`${table.position} >= 0`),
+    check("source_assets_byte_size_check", sql`${table.byteSize} > 0`),
+    check("source_assets_width_check", sql`${table.width} is null or ${table.width} > 0`),
+    check("source_assets_height_check", sql`${table.height} is null or ${table.height} > 0`),
+  ],
+);
+
 export const meetingPatterns = courseflow.table(
   "meeting_patterns",
   {
@@ -408,6 +483,8 @@ export const schema = {
   letterGradeScales,
   meetingExceptions,
   meetingPatterns,
+  sourceAssets,
+  sourceDocuments,
   taskLabels,
   userProfiles,
 };

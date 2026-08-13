@@ -2,6 +2,8 @@
 # an exact snapshot into docs/design/baselines/<version>/; this root file remains
 # local and mutable, so it is never the authoritative frozen baseline.
 /courseflow-visual-lab.html
+/courseflow-element-style-lab.html
+/courseflow-visual-lab-glass.html
 
 # Local configuration and generated dependency state.
 .env

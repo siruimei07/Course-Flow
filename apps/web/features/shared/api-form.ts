@@ -1,6 +1,10 @@
 export type FormNotice = Readonly<{ message: string; tone: "danger" | "success" | "warning" }>;
 
-export async function sendJson(url: string, method: "PATCH" | "POST" | "PUT", body: unknown) {
+export async function sendJson(
+  url: string,
+  method: "DELETE" | "PATCH" | "POST" | "PUT",
+  body: unknown,
+) {
   const response = await fetch(url, {
     body: JSON.stringify(body),
     headers: {

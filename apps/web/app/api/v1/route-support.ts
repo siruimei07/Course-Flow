@@ -95,9 +95,14 @@ export async function fileQuery(
   const requestId = getOrCreateRequestId(request.headers.get("x-request-id") ?? undefined);
   try {
     const response = await handler(requestId);
-    response.headers.set("cache-control", "no-store");
-    response.headers.set("x-request-id", requestId);
-    return response;
+    const headers = new Headers(response.headers);
+    headers.set("cache-control", "no-store");
+    headers.set("x-request-id", requestId);
+    return new Response(response.body, {
+      headers,
+      status: response.status,
+      statusText: response.statusText,
+    });
   } catch (error) {
     return failure(error, requestId);
   }

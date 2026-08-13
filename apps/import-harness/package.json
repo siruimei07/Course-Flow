@@ -1,0 +1,24 @@
+{
+  "name": "@courseflow/import-harness",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3100",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@courseflow/contracts": "workspace:*",
+    "@courseflow/core": "workspace:*",
+    "@courseflow/infrastructure": "workspace:*",
+    "@courseflow/ui": "workspace:*",
+    "next": "16.2.11",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.0"
+  }
+}
