@@ -1,16 +1,18 @@
 import type { ScheduleItemView } from "@courseflow/core";
 import { courseColor, courseItemKindLabels } from "@/features/shared/format";
 import { TaskActions } from "@/features/tasks/task-actions";
+import { TaskCompletionButton } from "@/features/tasks/task-completion-button";
 
 export function ScheduleTaskRow({ item }: Readonly<{ item: ScheduleItemView }>) {
   return (
     <article className="task-row">
+      <TaskCompletionButton itemId={item.id} title={item.title} version={item.version} />
       <span
         aria-hidden="true"
         className="task-kind-rail"
         style={{ background: courseColor(item.course.colorKey) }}
       />
-      <div>
+      <div className="task-row-copy">
         <span className="course-code-big">
           {item.course.code} · {courseItemKindLabels[item.kind]}
         </span>
@@ -30,12 +32,7 @@ export function ScheduleTaskRow({ item }: Readonly<{ item: ScheduleItemView }>) 
             <span className="meta-label">准备进度 {item.progressBps / 100}%</span>
           )}
         </div>
-        <TaskActions
-          itemId={item.id}
-          state={item.state}
-          title={item.title}
-          version={item.version}
-        />
+        <TaskActions itemId={item.id} title={item.title} version={item.version} />
       </div>
       <div className="task-meta">
         <strong>{item.temporalLabel}</strong>

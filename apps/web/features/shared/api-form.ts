@@ -14,15 +14,18 @@ export async function sendJson(
     method,
   });
   const payload = (await response.json()) as {
+    code?: string;
     data?: unknown;
     detail?: string;
     errors?: readonly { message: string }[];
   };
   if (!response.ok) {
     const message =
-      payload.errors?.map((issue) => issue.message).join("；") ||
-      payload.detail ||
-      "保存失败，请重试。";
+      payload.code === "VERSION_CONFLICT"
+        ? "记录已被其他页面更新。请刷新后重试；本次操作没有覆盖新版本。"
+        : payload.errors?.map((issue) => issue.message).join("；") ||
+          payload.detail ||
+          "保存失败，请重试。";
     throw new Error(message);
   }
   return payload.data;

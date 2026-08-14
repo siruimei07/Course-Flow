@@ -300,8 +300,25 @@ test("canonical P1–P3 manual plan survives PostgreSQL and private object stora
     path: "test-results/canonical-p2-tasks-1280x900.png",
   });
 
+  const quickQuizCompletion = page.getByRole("button", { name: "标记完成：Quick Quiz" });
+  await quickQuizCompletion.focus();
+  await expect(quickQuizCompletion).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => new URL(page.url()).searchParams.get("notice")).toBe("completed");
+  const completedTaskUrl = new URL(page.url());
+  expect(completedTaskUrl.searchParams.get("courseId")).toBe(courseId);
+  expect(completedTaskUrl.searchParams.get("sourceId")).toBe(sourceId);
+  await expect(page.getByRole("status")).toContainText("事项已标记完成");
+  await expect(page.getByRole("heading", { name: "Quick Quiz" })).toHaveCount(0);
+  await page.screenshot({
+    animations: "disabled",
+    fullPage: false,
+    path: "test-results/canonical-p5-task-completed-1280x900.png",
+  });
+
   await page.goto(`/courses/${courseId}/timeline`);
   await expect(page.getByRole("heading", { name: "Problem Set 1" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Quick Quiz" })).toBeVisible();
   await expect(page.getByText(/9月10日.*全天/u).first()).toBeVisible();
 
   await page.goto(`/courses/${courseId}/grading`);

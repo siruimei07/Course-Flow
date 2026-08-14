@@ -6,12 +6,10 @@ import { sendJson } from "@/features/shared/api-form";
 
 export function TaskActions({
   itemId,
-  state,
   title,
   version,
 }: Readonly<{
   itemId: string;
-  state: "planned" | "completed" | "cancelled";
   title: string;
   version: number;
 }>) {
@@ -80,24 +78,6 @@ export function TaskActions({
         <div className="button-row">
           <button className="button button-ghost" onClick={() => setEditing(true)} type="button">
             编辑
-          </button>
-          <button
-            className="button button-ghost"
-            disabled={saving}
-            onClick={() =>
-              action(
-                () =>
-                  sendJson(`/api/v1/course-items/${itemId}/state`, "PUT", {
-                    expectedVersion: version,
-                    itemId,
-                    state: state === "completed" ? "planned" : "completed",
-                  }),
-                state === "completed" ? "事项已恢复为计划中。" : "事项已标记完成。",
-              )
-            }
-            type="button"
-          >
-            {state === "completed" ? "恢复" : "完成"}
           </button>
           <button
             className="button button-ghost"

@@ -35,6 +35,25 @@ function filterHref(
   return query === "" ? "/tasks" : "/tasks?" + query;
 }
 
+function dismissNoticeHref(
+  current: Readonly<{
+    courseId?: string;
+    group?: string;
+    labelId?: string;
+    q?: string;
+    sourceId?: string;
+  }>,
+): string {
+  const parameters = new URLSearchParams();
+  if (current.courseId) parameters.set("courseId", current.courseId);
+  if (current.group) parameters.set("group", current.group);
+  if (current.labelId) parameters.set("labelId", current.labelId);
+  if (current.q) parameters.set("q", current.q);
+  if (current.sourceId) parameters.set("sourceId", current.sourceId);
+  const query = parameters.toString();
+  return query === "" ? "/tasks" : `/tasks?${query}`;
+}
+
 export default async function TasksPage({
   searchParams,
 }: Readonly<{
@@ -42,6 +61,7 @@ export default async function TasksPage({
     courseId?: string;
     group?: string;
     labelId?: string;
+    notice?: string;
     q?: string;
     sourceId?: string;
   }>;
@@ -97,6 +117,15 @@ export default async function TasksPage({
         }
         title="任务"
       />
+      {parameters.notice === "completed" ? (
+        <div className="status-banner task-update-notice" data-tone="success" role="status">
+          <div>
+            <strong>事项已标记完成</strong>
+            <span>它已离开待办分组；正式记录及历史负荷仍然保留。</span>
+          </div>
+          <Link href={dismissNoticeHref(parameters)}>关闭提示</Link>
+        </div>
+      ) : null}
       {active === null || board === null ? (
         <section className="panel empty-state">
           <h2>先创建当前学期</h2>
