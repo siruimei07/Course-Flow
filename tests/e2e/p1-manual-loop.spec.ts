@@ -327,6 +327,9 @@ test("canonical P1–P3 manual plan survives PostgreSQL and private object stora
   await page.getByRole("button", { name: "添加组成" }).click();
   await page.locator("#grade-title-1").fill("Final");
   await page.locator("#grade-weight-1").fill("80");
+  await page.getByRole("button", { name: "添加组成" }).click();
+  await page.locator("#grade-title-2").fill("Weekly quizzes");
+  await page.locator("#grade-rule-2").fill("Best 5 of 6；首版只展示老师公布的汇总结果");
   await page.getByRole("button", { name: "创建评分方案" }).click();
   await expect(page.getByText("评分方案已保存；未知权重保持未知，未出分不会按 0。")).toBeVisible();
   const earned = page.getByLabel("Midterm 得分");
@@ -345,11 +348,26 @@ test("canonical P1–P3 manual plan survives PostgreSQL and private object stora
     page.locator(".grade-summary").filter({ hasText: "覆盖总评权重" }).locator("strong"),
   ).toHaveText("20%");
 
+  const quizzesEarned = page.getByLabel("Weekly quizzes 得分");
+  await quizzesEarned.fill("90");
+  const quizzesResultForm = quizzesEarned.locator("xpath=ancestor::form");
+  await quizzesResultForm.getByLabel("满分").fill("100");
+  await quizzesResultForm.getByRole("button", { name: "记录结果" }).click();
+  await expect(page.getByText(/覆盖口径不完整：已录入的 1 个成绩因权重未知/u)).toBeVisible();
+  await expect(page.getByText("本项 90% · 贡献待定（权重未知）")).toBeVisible();
+  await expect(
+    page.locator(".grade-summary").filter({ hasText: "已获总评百分点" }).locator("strong"),
+  ).toHaveText("16%");
+  await expect(
+    page.locator(".grade-summary").filter({ hasText: "覆盖总评权重" }).locator("strong"),
+  ).toHaveText("20%");
+
   await page.reload();
   await expect(
     page.locator(".grade-summary").filter({ hasText: "已获总评百分点" }).locator("strong"),
   ).toHaveText("16%");
   await expect(page.getByText("Final").first()).toBeVisible();
+  await expect(page.getByText(/覆盖口径不完整：已录入的 1 个成绩因权重未知/u)).toBeVisible();
 
   const dashboardApi = await request.get("/api/v1/dashboard?termId=" + termId);
   const tasksApi = await request.get("/api/v1/tasks?termId=" + termId);

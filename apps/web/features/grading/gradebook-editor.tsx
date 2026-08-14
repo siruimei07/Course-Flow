@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { sendJson, type FormNotice } from "@/features/shared/api-form";
 import { Icon } from "@/features/shell/icon";
 
@@ -41,6 +41,7 @@ export function GradebookEditor({
   selectedScaleId: string | null;
 }>) {
   const router = useRouter();
+  const noticeRef = useRef<HTMLDivElement>(null);
   const [notice, setNotice] = useState<FormNotice | null>(null);
   const [saving, setSaving] = useState(false);
   const [name, setName] = useState(gradebook.scheme?.name ?? "主要评分方案");
@@ -64,6 +65,9 @@ export function GradebookEditor({
         }))
       : [{ ruleText: "", title: "", weight: "" }],
   );
+  useEffect(() => {
+    if (notice?.tone === "danger") noticeRef.current?.focus();
+  }, [notice]);
   function update(index: number, patch: Partial<ComponentDraft>) {
     setComponents((current) =>
       current.map((component, candidate) =>
@@ -198,7 +202,13 @@ export function GradebookEditor({
   return (
     <div className="form-stack">
       {notice === null ? null : (
-        <div aria-live="polite" className="status-banner" data-tone={notice.tone}>
+        <div
+          className="status-banner"
+          data-tone={notice.tone}
+          ref={noticeRef}
+          role={notice.tone === "danger" ? "alert" : "status"}
+          tabIndex={notice.tone === "danger" ? -1 : undefined}
+        >
           {notice.message}
         </div>
       )}

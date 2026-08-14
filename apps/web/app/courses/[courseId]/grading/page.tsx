@@ -53,6 +53,9 @@ export default async function GradebookPage({
   const safeGradebook = toJsonValue(gradebook) as unknown as Parameters<
     typeof GradebookEditor
   >[0]["gradebook"];
+  const visibleWarnings = gradebook.warnings.filter(
+    (warning) => warning.code !== "UNKNOWN_WEIGHT" || gradebook.unknownWeightResultCount === 0,
+  );
   return (
     <section className="page">
       <PageHeading context={`${course.course.code} · 手工结果与覆盖权重`} title="Gradebook" />
@@ -99,9 +102,17 @@ export default async function GradebookPage({
               <span>覆盖总评权重</span>
             </div>
           </div>
-          {gradebook.warnings.length ? (
+          {gradebook.unknownWeightResultCount === 0 ? null : (
+            <div className="panel-body">
+              <div className="status-banner" data-tone="warning">
+                覆盖口径不完整：已录入的 {gradebook.unknownWeightResultCount} 个成绩因权重未知，
+                未计入已获总评百分点或覆盖总评权重。填写并保存权重后会按正式结果重新计算。
+              </div>
+            </div>
+          )}
+          {visibleWarnings.length ? (
             <div className="panel-body form-stack">
-              {gradebook.warnings.map((warning, index) => (
+              {visibleWarnings.map((warning, index) => (
                 <div className="status-banner" data-tone="warning" key={`${warning.code}-${index}`}>
                   {warning.message}
                 </div>
@@ -133,7 +144,9 @@ export default async function GradebookPage({
                   </strong>
                   {component.resultPercentBps === null
                     ? "不纳入当前口径"
-                    : `本项 ${percent(component.resultPercentBps)} · 贡献 ${percent(component.contributionCourseBps)}`}
+                    : component.contributionCourseBps === null
+                      ? `本项 ${percent(component.resultPercentBps)} · 贡献待定（权重未知）`
+                      : `本项 ${percent(component.resultPercentBps)} · 贡献 ${percent(component.contributionCourseBps)}`}
                 </div>
               </article>
             ))

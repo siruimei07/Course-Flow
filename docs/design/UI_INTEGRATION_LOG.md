@@ -18,6 +18,7 @@
 | UI-0003 | 模糊玻璃与设置中心 | superseded-rejected | 与被拒绝的条件 surface 混合；P4 已删除本地原型 |
 | UI-0004 | P3 Sources 手工闭环 | frozen + verified | `/sources` → 既有手工表单 → Timeline/Dashboard |
 | UI-0005 | P5 Tasks 完成闭环 | integrated + verified | `/tasks` → `planning.setCourseItemState` → `schedule.getTaskBoard` |
+| UI-0006 | P5 Gradebook 未知权重 partial 状态 | integrated | 手工结果 → `planning.saveGradeResult` → `planning.getGradebook` |
 
 状态只用 `received/mapped/prototyped/frozen/integrated/verified/superseded` 加必要限定。被替代条目保留历史说明，但不进入当前 route/状态矩阵。
 
@@ -50,6 +51,15 @@
 - 数据边界：production 不含 task fixture/mock；完成状态来自用户明确操作，未直接读取数据库实体或写第二套 task 真相。
 - 可见映射：复用冻结圆形完成 affordance、44px target、既有颜色/token 与 focus ring；编辑、取消、软删除仍是独立正式 command。
 - 验证：1280x900 浅/深主题、200% 等效视口、键盘 focus/Enter、成功与 409 冲突、console、截图、canonical E2E 与 MANUAL_ONLY 门禁。
+
+## UI-0006：P5 Gradebook 未知权重 partial 状态
+
+- 输入/矩阵：`ui-v1` tombstone 保留的非 AI token/component family 派生行；`/courses/[courseId]/grading`、`partial_unknown_weight`、`1280x900` light 为像素检查，dark 与 200% 为功能等价检查。
+- 用户场景：用户为权重尚未确认的成绩组成手工录入老师已公布的汇总结果；页面显示本项百分比，并明确该结果尚未进入已获总评百分点或覆盖总评权重。补齐并保存权重后，正式 Gradebook 投影重新计算。
+- interface：写入只调用 `planning.saveGradeResult(expectedVersion)`；刷新只读取 `planning.getGradebook(courseId, schemeId?)` 的 `unknownWeightResultCount`、结果百分比和贡献，不读取数据库实体或在组件内重算成绩。
+- 边界：未知权重不是 0；未出分不是 0；复杂 `ruleText` 只展示、不执行；409 冲突聚焦持久错误且保留表单输入。
+- 可见映射：复用既有 warning banner、summary card、Grade Component row、语义 token 与 focus ring；不增加新色彩、图标或视觉方向。
+- 验收：目标 interface test、canonical E2E、1280x900 浅/深主题、200% zoom、键盘/focus、reduced-motion、console、screenshot 与 `pnpm gate:p4`。
 
 ## UI-0002：个人中心
 
