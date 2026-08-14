@@ -9,7 +9,7 @@
 - `/courses/[courseId]/timeline` 与 `/dashboard`：只有用户提交既有表单后回读正式事项。
 - 正常横屏参考 viewport `1280x900`；200% zoom 做内容/键盘/操作保留检查，不作为新像素截图基准。
 
-明确不冻结：DeepSeek key、解析、Candidate/Evidence、Import Review、助手和任何 AI 状态。它们只登记为 `AI_ENABLED / conditional` contract harness；P4 `AI_GO` 前不进入 production web route、manifest、migration 或 UI。
+明确不冻结：任何远程模型凭据、自动解析/审核、助手状态。P4 最终选择 `MANUAL_ONLY` 后，这些未冻结 surface 已从代码和当前设计矩阵删除；本基线只约束 Sources 手工路径。
 
 ## 设计合约
 

@@ -1,3 +1,4 @@
+import { notFound } from "@courseflow/core";
 import { describe, expect, it } from "vitest";
 import { assertSameOrigin, fileQuery } from "../../apps/web/app/api/v1/route-support";
 
@@ -52,5 +53,20 @@ describe("P1 HTTP mutation boundary", () => {
     expect(response.headers.get("location")).toBe("https://private-object-store.invalid/signed");
     expect(response.headers.get("cache-control")).toBe("no-store");
     expect(response.headers.get("x-request-id")).toBeTruthy();
+  });
+
+  it("maps a domain error after a production module boundary loses constructor identity", async () => {
+    const boundaryError = notFound();
+    Object.setPrototypeOf(boundaryError, Error.prototype);
+
+    const response = await fileQuery(
+      new Request("https://courseflow.local/api/v1/source-documents/missing/preview"),
+      async () => {
+        throw boundaryError;
+      },
+    );
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({ code: "NOT_FOUND", status: 404 });
   });
 });

@@ -123,7 +123,7 @@ export function SourceLibraryView({
             </nav>
             <div className="source-sidebar-note">
               <strong>先确认，再写入</strong>
-              <p>Source 是原文容器，不是计划。手工表单和审核事务才会创建正式数据。</p>
+              <p>Source 是原文容器，不是计划。只有你明确提交手工表单才会创建正式数据。</p>
             </div>
           </aside>
 
@@ -317,11 +317,8 @@ export function SourceLibraryView({
                     </div>
                   </section>
                   <div className="source-contract-note">
-                    <strong>Evidence contract</strong>
-                    <p>
-                      若未来启用审核，原始
-                      Evidence、页码、定位状态与写入目标会继续显式展示；当前模式不创建 Candidate。
-                    </p>
+                    <strong>手工核对</strong>
+                    <p>原文与表单保持分离；你可以随时返回预览核对页码和内容。</p>
                   </div>
                   <SourceDeleteButton sourceId={selected.id} version={selected.version} />
                 </div>

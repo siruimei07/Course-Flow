@@ -17,6 +17,7 @@ const secretPatterns = [
   /(?:sk|rk|pk)-(?:live|prod)-[A-Za-z0-9_-]{16,}/u,
   /AKIA[0-9A-Z]{16}/u,
   /github_pat_[A-Za-z0-9_]{20,}/u,
+  /\bsk-[A-Za-z0-9_-]{24,}\b/u,
   /(?:DEEPSEEK_(?:API_)?(?:KEY|TOKEN|SECRET)|(?:KEY|TOKEN|SECRET)_DEEPSEEK)\s*=\s*[^\s"']+/iu,
 ];
 

@@ -1,5 +1,5 @@
 import { toJsonValue } from "@courseflow/contracts";
-import { DomainError } from "@courseflow/core";
+import { isDomainError } from "@courseflow/core";
 import { ConfigError, getOrCreateRequestId } from "@courseflow/infrastructure";
 import { ZodError, type ZodType } from "zod";
 
@@ -64,7 +64,7 @@ function failure(error: unknown, requestId: string): Response {
       })),
     );
   }
-  if (error instanceof DomainError) {
+  if (isDomainError(error)) {
     const status =
       error.code === "NOT_FOUND"
         ? 404

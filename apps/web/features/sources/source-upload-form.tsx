@@ -156,7 +156,7 @@ export function SourceUploadForm({
           type="file"
         />
         <p className="field-hint">
-          一组连续截图会保留为同一份 Source Document；文件顺序就是 Evidence 页序。
+          一组连续截图会保留为同一份 Source Document；文件顺序就是预览页序。
         </p>
       </div>
       <button className="button button-primary" disabled={saving || courseId === ""} type="submit">

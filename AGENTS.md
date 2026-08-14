@@ -1,6 +1,6 @@
 # CourseFlow Agent Guide
 
-CourseFlow 把课程资料转成可核对的课程计划。任何自动抽取结果都只是候选数据；用户确认后，才可写入正式课程记录。
+CourseFlow 把课程资料与用户手工确认的课程事实整理成可核对的课程计划。P4 已签署 `MANUAL_ONLY`：产品不含远程 AI、自动抽取、候选审核或个人规划助手。
 
 ## 开始任务
 
@@ -10,14 +10,14 @@ CourseFlow 把课程资料转成可核对的课程计划。任何自动抽取结
 4. 确定本次变更所属模块及其公开 interface。跨模块调用只经过目标模块的公开入口。
 5. 实现最小完整纵向切片，并在该 interface 上补齐可观察行为测试。
 
-完成标准：相关文档约束全部满足，仓库已经提供的类型检查、测试和 lint 通过，且没有把 mock 数据、供应商类型或未确认的抽取结果泄漏到正式领域模型。
+完成标准：相关文档约束全部满足，仓库已经提供的类型检查、测试和 lint 通过，且没有把 mock 数据或未经用户提交的资料内容泄漏到正式领域模型。
 
 ## 按任务读取
 
 - 产品行为、开放问题、页面职责或验收标准变化：先读 [需求基线](./docs/product/REQUIREMENTS.md)，再读 [产品范围](./docs/product/SCOPE.md)。
-- 表、关系、日期、成绩或来源证据变化：读 [数据模型](./docs/architecture/DATA_MODEL.md)。
-- 上传、PDF/OCR、AI 抽取、重试或审核变化：读 [导入流水线](./docs/architecture/INGESTION.md)。
-- 个人中心 AI、用户 API key、规划问答/草稿、模型能力或凭据安全变化：读 [个人 AI 配置与规划助手](./docs/architecture/AI_ASSISTANT.md)。
+- 表、关系、日期、成绩或来源变化：读 [数据模型](./docs/architecture/DATA_MODEL.md)。
+- 上传、预览、删除或资料生命周期变化：读 [资料流水线](./docs/architecture/INGESTION.md)。
+- P4 决策历史或为什么不提供远程 AI：读 [P4 归档](./docs/architecture/AI_ASSISTANT.md) 与 [签署报告](./docs/quality/P4_MANUAL_ONLY_SIGNOFF.md)。
 - HTTP、命令、查询、错误或模块调用变化：读 [接口契约](./docs/architecture/INTERFACES.md)。
 - 页面、交互、样式或用户提供的 UI 代码变化：读 [前端与 UI 整合](./docs/architecture/FRONTEND.md)。
 - 冻结网页原型、变更已确认视觉、建立视觉回归或把 HTML 迁移为生产 UI：读 [前端设计基线与冻结](./docs/design/DESIGN_BASELINE.md)。
@@ -43,15 +43,14 @@ CourseFlow 把课程资料转成可核对的课程计划。任何自动抽取结
 ## 稳定规则
 
 - `packages/core` 是领域规则的单一来源；页面、Route Handler、worker 和数据库 adapter 不复制领域判断。
-- 模块对外暴露少量高杠杆 interface；数据库、对象存储、队列、OCR 和 AI 供应商位于 seam 的 adapter 一侧。
-- 正式数据只来自用户手工输入或已审核候选。低置信度只影响展示优先级，不能绕过审核。
+- 模块对外暴露少量高杠杆 interface；数据库、对象存储和队列位于 seam 的 adapter 一侧。
+- 正式数据只来自用户明确提交的手工表单；上传、预览或删除 Source 都不能写入课程事实。
 - 日期按课程时区解释；纯日期保持纯日期，不能用 UTC 午夜伪装。
 - 课表保存周期课节与例外，具体课节实例按范围派生；Reading Week 不通过删除课节规则实现。
 - 成绩使用整数基点：`10000 = 100%`。未知值保持未知，不用 `0` 代替。
 - 任务短期/中长期分组与当前成绩都是正式数据的派生投影，不另建第二套真相；未出分成绩不按零分。
-- 每个抽取字段保留来源证据、置信度与推断说明；原始候选不可被后续编辑覆盖。
 - UI 只依赖 view model/contract，不直接读取数据库实体。用户提供的页面代码先拆分视觉、交互和数据职责，再接入真实模块。
 - 冻结 UI 基线是具体视觉和交互的只读权威；普通实现不得静默改写。正确性、安全、隐私、领域 contract 或无障碍要求造成的偏差必须记录，新的视觉方向必须由用户确认并生成新基线版本。
 - 统计页保留稳定入口和查询 seam；指标未定义前不建立通用插件系统或虚构统计表。
-- DeepSeek AI 只有在 [AI 去留门禁](./docs/architecture/AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 全部通过并签署 `AI_GO` 后才能进入生产；任一硬门禁失败或最终仍未验证时执行 `MANUAL_ONLY`，删除 AI 功能且不换其他模型顶替。
+- `MANUAL_ONLY` 是已签署的发布约束：不得重新加入 AI 凭据、远程模型、自动解析、候选/审核、助手、相关 route/module/adapter/prompt/schema/table/migration/config/文案，也不得换模型或用隐藏 feature flag 恢复。改变此约束需要新的、用户明确授权的产品决策和 ADR，不能作为普通实现顺手引入。
 - 新的不可逆架构取舍满足 ADR 条件时写入 `docs/adr/`；领域词义变化同步更新 `CONTEXT.md`。

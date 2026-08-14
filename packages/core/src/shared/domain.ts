@@ -14,9 +14,6 @@ export type GradeResultId = Brand<string, "GradeResultId">;
 export type LetterGradeScaleId = Brand<string, "LetterGradeScaleId">;
 export type SourceDocumentId = Brand<string, "SourceDocumentId">;
 export type SourceAssetId = Brand<string, "SourceAssetId">;
-export type ImportRunId = Brand<string, "ImportRunId">;
-export type CandidateId = Brand<string, "CandidateId">;
-export type EvidenceId = Brand<string, "EvidenceId">;
 
 export type UserScope = Readonly<{ userId: UserId }>;
 
@@ -35,7 +32,11 @@ export type DomainWarning = Readonly<{
 export type DomainErrorCode =
   "AUTH_REQUIRED" | "NOT_FOUND" | "VALIDATION_FAILED" | "VERSION_CONFLICT";
 
+const domainErrorBrand = Symbol.for("courseflow.domain-error");
+
 export class DomainError extends Error {
+  readonly [domainErrorBrand] = true;
+
   constructor(
     readonly code: DomainErrorCode,
     message: string,
@@ -45,6 +46,15 @@ export class DomainError extends Error {
     super(message);
     this.name = "DomainError";
   }
+}
+
+export function isDomainError(error: unknown): error is DomainError {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    domainErrorBrand in error &&
+    (error as Record<PropertyKey, unknown>)[domainErrorBrand] === true
+  );
 }
 
 export type CommandResult<TValue> = Readonly<{
@@ -106,18 +116,6 @@ export function asSourceDocumentId(value: string): SourceDocumentId {
 
 export function asSourceAssetId(value: string): SourceAssetId {
   return value as SourceAssetId;
-}
-
-export function asImportRunId(value: string): ImportRunId {
-  return value as ImportRunId;
-}
-
-export function asCandidateId(value: string): CandidateId {
-  return value as CandidateId;
-}
-
-export function asEvidenceId(value: string): EvidenceId {
-  return value as EvidenceId;
 }
 
 export function validationError(message: string, issues: readonly DomainIssue[]): DomainError {

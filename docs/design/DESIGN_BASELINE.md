@@ -10,7 +10,7 @@
 | 冻结基线   | 用户确认版本的 HTML、截图、token、页面/状态矩阵 | 是，约束具体视觉与交互 | 否；变更建立新版本 |
 | 生产实现   | React/Next.js、真实 contract 和可访问交互       | 必须匹配冻结基线       | 按开发流程变更     |
 
-当前最新视觉实验室是仓库根目录的 `courseflow-visual-lab-glass.html`。它被 `.gitignore` 排除，采用用户确认继续发展的模糊玻璃方向，适合继续设计，但后续 Agent、CI 和历史版本都不能稳定依赖它。`courseflow-visual-lab.html` 保留为此前非玻璃实验稿；已冻结的 `ui-v1` 仍是唯一 Git 可追踪视觉权威。玻璃稿登记为 `UI-0003 / prototyped`，尚未冻结；设计完成前保持它为本地可变文件。
+P4 签署 `MANUAL_ONLY` 时，两个混入模型配置、自动解析与候选审核的本地页面实验稿已删除；仓库当前没有页面级可变视觉实验室。已冻结的 `ui-v1` 与 `p3-manual-v1` 是 Git 可追踪视觉权威；无 AI 的 `courseflow-element-style-lab.html` 只用于局部样式试验，不能定义页面或产品行为。新的页面方向必须从当前手工模式基线建立干净的新实验稿，不得恢复已删除原型。
 
 冻结基线负责视觉事实，产品和领域文档负责行为事实。冲突按 [前端冲突处理优先级](../architecture/FRONTEND.md#7-冲突处理优先级) 裁决；无障碍、安全、隐私与领域正确性不会为了像素相似而降级。
 
@@ -116,7 +116,7 @@ CourseFlow 只面向正常横屏桌面浏览器，像素基准 viewport 为 `128
 
 ## 4. 冻结后的实现顺序
 
-当前实施计划已经完成 P3，P4 为 `next`，产品模式仍是 `AI_PENDING`。设计冻结后不要跳阶段：只读 `ui-v1` 继续作为全局像素权威，`p3-manual-v1` 只冻结 Sources 手工增量；P4 最终结论前，条件性 AI harness 不是生产视觉事实。
+当前实施计划已经完成 P4 并签署 `MANUAL_ONLY`，P5 为 `next`。`ui-v1` 已因混入被拒绝 surface 而转为部分 tombstone，只保留经像素复核的非 AI 历史截图；`p3-manual-v1` 是 Sources 手工增量权威。P4 已删除所有远程模型 surface 与受污染的可执行/视觉工件。
 
 每个前端切片按以下顺序：
 
@@ -128,7 +128,7 @@ CourseFlow 只面向正常横屏桌面浏览器，像素基准 viewport 为 `128
 6. **验证可见结果**：使用 `build-web-apps:frontend-testing-debugging`，在 Browser 中检查目标旅程、console、桌面/移动截图和 mismatch ledger；React/Next.js 代码同时应用 `build-web-apps:react-best-practices`。
 7. **关闭切片**：运行相关 component/a11y/visual/E2E 与仓库 quality gates，更新矩阵状态，删除临时实现与重复样式。
 
-阶段映射仍由实施计划决定：P1 实现学期、课程/多个课节、Reading Week、手工事项/标签、基础 Gradebook 和相关页面；P2 接今日/下一节课、任务分组、雷达、热力图、冲突、日历与 ICS；P3 接 Source 上传/预览/手工录入并只隔离设计 AI 候选；P4 `AI_GO` 后才接导入进度、审核和 Evidence，否则将这些 surface 删除。`/insights` 只有定义真实 Insight 后才显示指标。不能因为视觉实验室已经画出页面，就用 mock 提前伪装功能完成。
+阶段映射仍由实施计划决定：P1 实现学期、课程/多个课节、Reading Week、手工事项/标签、基础 Gradebook；P2 接今日/下一节课、任务分组、雷达、热力图、冲突、日历与 ICS；P3 接 Source 上传/预览/手工录入；P4 已删除未通过门禁的条件 surface。`/insights` 只有定义真实 Insight 后才显示指标。不能因为历史视觉实验室画过被拒绝页面，就用 mock 恢复功能。
 
 ## 5. 防止后续开发漂移
 
@@ -154,29 +154,23 @@ CourseFlow 只面向正常横屏桌面浏览器，像素基准 viewport 为 `128
 
 | 原型画面     | 预期产品位置                                                  | 冻结前决定                                                           |
 | ------------ | ------------------------------------------------------------- | -------------------------------------------------------------------- |
-| `overview`   | `/dashboard`                                                  | 确认首屏结构与待审核/风险模块的代表状态                              |
+| `overview`   | `/dashboard`                                                  | 确认首屏结构与风险模块的代表状态                                    |
 | `courses`    | `/courses/[courseId]` 等课程页面                              | 明确列表、课程总览、timeline、grading 如何拆 route                   |
 | `calendar`   | `/calendar`                                                   | 确认周/月模式、TBA 区与 ICS 入口状态                                 |
 | `tasks`      | `/tasks`                                                      | 已确认保留全局行动视图；冻结时覆盖短期/中长期/TBA/标签筛选的代表状态 |
-| `sources`    | `/sources`、`/courses/[courseId]/sources`、`/imports/[runId]` | 保留全局资料入口，同时把课程上下文和审核工作台拆清楚                 |
+| `sources`    | `/sources`、`/courses/[courseId]/sources`                    | 保留全局资料入口和课程上下文，只提供手工核对路径                     |
 | `statistics` | `/insights`                                                   | 当前数字仅作视觉 fixture；Insight 未定义前生产只显示真实空状态       |
 
-`/terms`、`/courses/new` 分步添加课节、Reading Week/单次例外、课程 timeline、Gradebook 成绩录入，以及完整 import progress/error 等核心 surface 仍未在该单文件中逐一覆盖。设置中心现已覆盖显示时区、周起始日、默认等级表、账户资料和 AI 凭据主路径，但供应商错误与助手状态仍不完整。冻结时必须把其余 surface 标成“新增设计 / 可按系统推导 / 当前版本不覆盖”，不能默认为已经确认。按系统推导的表单除了复用 token，还必须记录默认/hover/focus/disabled/error/success、键盘焦点、输入与按钮等高及相邻操作不换行；无障碍结构优先于视觉压缩。
+`/terms`、`/courses/new` 分步添加课节、Reading Week/单次例外、课程 timeline、Gradebook 成绩录入等 surface 仍未在该单文件中逐一覆盖。设置中心可继续覆盖显示时区、周起始日、默认等级表和账户资料；历史模型相关初稿已被 P4 拒绝。冻结时必须把其余 surface 标成“新增设计 / 可按系统推导 / 当前版本不覆盖”。
 
-2026-08-13 新增的头像个人中心、设置与偏好、账户与隐私、DeepSeek API Key 配置、AI 可用状态、提问/生成中回答与规划草稿明确属于 `UI-0002 / UI-0003 / prototyped`，不在 `ui-v1` 的 derived 范围内。当前产品模式为 `AI_PENDING`：账户/普通设置和 Source 手工录入可以进入下一基线；密钥、AI 抽取、Candidate/Review 与助手必须标 `conditional`，P4 `AI_GO` 前不得冻结为生产承诺。若最终 `MANUAL_ONLY`，新基线删除全部 AI surface，只保留普通个人中心及手工资料路径；不得留下永久 disabled AI 卡片。
+2026-08-13 的头像个人中心、设置与偏好、账户与隐私曾与条件 AI surface 共存于未冻结原型；P4 已删除这些混合原型并将 `UI-0002 / UI-0003` 标为 `superseded-rejected`。若以后设计普通设置，必须从当前手工模式重新建立干净基线，不得复制凭据字段、自动解析/审核、助手或永久 disabled 卡片。
 
 ## 7. 项目所有者的下一条指令
 
-设计真正完成后，可直接发送：
+需要新增普通设置设计时，可直接发送：
 
 ```text
-前端设计已完成。请读取 AGENTS.md、docs/design/DESIGN_BASELINE.md、FRONTEND.md、SCOPE.md 和 UI_INTEGRATION_LOG.md，把当前 courseflow-visual-lab-glass.html 冻结为 ui-v2。当前 AI 为 AI_PENDING：只冻结账户/普通设置、Sources 上传预览和手工录入；把 DeepSeek 密钥、AI 抽取、Candidate/Review 与助手状态登记为 conditional，不纳入生产基线。先做 route/状态矩阵与 ux-heuristics/typeui-fundamentals/无障碍审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。通过后保存 HTML 快照、hash、token/交互清单、1280x900 参考截图和 200% 功能检查，更新 UI 条目。不要开始生产页面实现。
+请读取 AGENTS.md、docs/design/DESIGN_BASELINE.md、FRONTEND.md、SCOPE.md 和 UI_INTEGRATION_LOG.md，以 ui-v1 与 p3-manual-v1 为输入，为普通账户/设置建立不含模型配置、自动解析/审核或助手的新视觉实验稿。先做 route/状态矩阵与 ux-heuristics/typeui-fundamentals/无障碍审计；severity 3/4 或产品范围冲突未解决时不要宣布冻结。经我确认后再保存 HTML 快照、hash、token/交互清单、1280x900 参考截图和 200% 功能检查。不要开始生产页面实现。
 ```
 
-`p3-manual-v1` 已冻结并验证，仓库当前正确的开发起点是实施计划中标为 `next` 的 P4。任何真实调用必须继续使用已冻结的 `ai-eval-policy-v1`，完成真实能力/隐私/成本评测与三方签署后，只能选择 `AI_GO` 或 `MANUAL_ONLY`；目前仍是 `AI_PENDING`。
-
-历史上用于启动 P3 的指令保留如下，不能再据此重复实现或绕过 P4：
-
-```text
-ui-v2 已确认冻结。请按 IMPLEMENTATION_PLAN.md 和 DEVELOPMENT_WORKFLOW.md 执行当前 next 的 P3：先做 Sources 上传/预览/手工录入闭环；AI 仍按 conditional contract/fake 隔离，未经过 P4 AI_GO 不装配生产 route、migration 或 UI。所有可见实现引用 ui-v2 矩阵行，先对齐 contract fixture，再接真实 view model；不得静默重设计或把原型 mock 带入生产。
-```
+`p3-manual-v1` 已冻结并验证，仓库当前正确开发起点是 P5。P4 签署与删除证明见 [P4 报告](../quality/P4_MANUAL_ONLY_SIGNOFF.md)；不得依据旧条件原型重复实现被拒绝 surface。

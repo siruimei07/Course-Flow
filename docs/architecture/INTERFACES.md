@@ -1,395 +1,157 @@
 # 模块与 HTTP Interface
 
-本文规定调用者必须知道的 interface：命令、查询、contract、错误和并发语义。实现应围绕这些行为，而不是生成每张表的通用 CRUD。
+本文定义 P4 `MANUAL_ONLY` 发布面的模块调用与传输约定。页面、Route Handler 和 adapter 都只能经过模块公开入口；数据库实体不是 interface。
 
 ## 1. Interface 原则
 
-- 命令按用户意图命名，返回业务结果；`updateEntity(data)` 之类无语义方法不进入 core。
-- 查询返回只读 snapshot/view model，页面不拼 repository entity。
-- ID、当前用户和请求输入都在 transport 边缘校验；core 仍验证所有权与业务不变量。
-- 命令不返回数据库模型或 `Response`；HTTP adapter 完成 DTO/状态码映射。
-- 远程/存储 port 位于使用它的模块内部；供应商 adapter 实现它，测试用 fake adapter。
-- 仅在 web/worker composition root 构造 concrete adapter。
+- command 接收 `UserScope`、显式 input、可选 idempotency key 与 expected version。
+- query 返回页面需要的 view model/snapshot，不暴露数据库 row 或 storage credential。
+- 所有跨 owner ID 都在 repository/core 边界拒绝；不存在无 scope 的查找。
+- 时间、成绩、负荷和冲突规则在 core；Route Handler 只做 auth、parse、invoke、error mapping。
+- P4 发布面没有远程模型、自动解析、候选审核或助手 interface。
 
-## 2. Core interface 草图
-
-最终类型名可微调，但行为和深度不得被拆成浅层 helper 链。
+## 2. Core interface
 
 ### 2.1 Academics
 
 ```ts
-interface AcademicsCommands {
-  createTerm(scope: UserScope, input: CreateTerm): Promise<Term>;
-  updateTerm(scope: UserScope, input: UpdateTerm): Promise<Term>;
+interface AcademicsService {
+  createTerm(scope: UserScope, input: CreateTermInput): Promise<TermView>;
+  updateTerm(scope: UserScope, input: UpdateTermInput): Promise<TermView>;
   setActiveTerm(scope: UserScope, termId: TermId): Promise<void>;
-  createCourse(scope: UserScope, input: CreateCourse): Promise<Course>;
-  updateCourse(scope: UserScope, input: UpdateCourse): Promise<Course>;
-  saveCalendarException(
-    scope: UserScope,
-    input: SaveCalendarException,
-  ): Promise<AcademicCalendarException>;
-  deleteCalendarException(scope: UserScope, input: DeleteCalendarException): Promise<void>;
-  saveMeetingPattern(scope: UserScope, input: SaveMeetingPattern): Promise<MeetingPattern>;
-  setMeetingPatternArchived(
-    scope: UserScope,
-    input: SetMeetingPatternArchived,
-  ): Promise<MeetingPattern>;
-  setMeetingException(scope: UserScope, input: SetMeetingException): Promise<MeetingException>;
-  deleteMeetingException(scope: UserScope, input: DeleteMeetingException): Promise<void>;
-  setCourseArchived(scope: UserScope, input: SetCourseArchived): Promise<Course>;
-}
-
-interface CourseSetupCommands {
-  createCourseWithSchedule(
-    scope: UserScope,
-    input: CreateCourseWithSchedule,
-  ): Promise<CourseSetupView>;
-}
-
-interface AcademicsQueries {
-  listTerms(scope: UserScope): Promise<TermSummary[]>;
-  getCourse(scope: UserScope, courseId: CourseId): Promise<CourseDetail | null>;
-  getCourseSetup(scope: UserScope, courseId: CourseId): Promise<CourseSetupView | null>;
+  createCourseSetup(scope: UserScope, input: CreateCourseSetupInput): Promise<CourseView>;
+  saveMeetingException(scope: UserScope, input: SaveMeetingExceptionInput): Promise<void>;
 }
 ```
-
-`CourseSetupCommands` 是 academics 模块公开入口的一部分，用一个 transaction 组合课程、课节和所需学期例外引用，供分步表单最终提交；它不是跨模块 workflow engine。`Update*`/`save*` 必须对已有目标携带 `expectedVersion`。`timeZone` 接受 IANA zone；学期范围、课节本地起止时间和例外 target 非法返回 validation error，且不把课节规则复制进 Course entity。
 
 ### 2.2 Planning
 
 ```ts
-interface PlanningCommands {
-  createCourseItem(scope: UserScope, input: CreateCourseItem): Promise<CourseItem>;
-  updateCourseItem(scope: UserScope, input: UpdateCourseItem): Promise<CourseItem>;
-  setCourseItemState(scope: UserScope, input: SetCourseItemState): Promise<CourseItem>;
-  deleteCourseItem(scope: UserScope, input: DeleteCourseItem): Promise<void>;
-  saveGradingScheme(scope: UserScope, input: SaveGradingScheme): Promise<GradingScheme>;
-  saveGradeResult(scope: UserScope, input: SaveGradeResult): Promise<GradeResult>;
-  deleteGradeResult(scope: UserScope, input: DeleteGradeResult): Promise<void>;
-  saveLetterGradeScale(scope: UserScope, input: SaveLetterGradeScale): Promise<LetterGradeScale>;
-  saveTaskLabel(scope: UserScope, input: SaveTaskLabel): Promise<TaskLabel>;
-  deleteTaskLabel(scope: UserScope, input: DeleteTaskLabel): Promise<void>;
-  setCourseItemLabels(scope: UserScope, input: SetCourseItemLabels): Promise<CourseItem>;
-  applyReviewedCandidate(
-    tx: TransactionContext,
-    input: ReviewedCandidateApplication,
-  ): Promise<AppliedRecords>;
-}
-
-interface PlanningQueries {
-  getCoursePlanning(scope: UserScope, courseId: CourseId): Promise<CoursePlanningDetail>;
-  getGradebook(scope: UserScope, courseId: CourseId): Promise<GradebookSnapshot>;
+interface PlanningService {
+  createCourseItem(scope: UserScope, input: CreateCourseItemInput): Promise<CourseItemView>;
+  updateCourseItem(scope: UserScope, input: UpdateCourseItemInput): Promise<CourseItemView>;
+  setCourseItemState(scope: UserScope, input: SetCourseItemStateInput): Promise<CourseItemView>;
+  saveTaskLabel(scope: UserScope, input: SaveTaskLabelInput): Promise<TaskLabelView>;
+  saveGradingScheme(scope: UserScope, input: SaveGradingSchemeInput): Promise<GradebookView>;
+  saveGradeResult(scope: UserScope, input: SaveGradeResultInput): Promise<GradebookView>;
 }
 ```
 
-`applyReviewedCandidate` 只在 Ingestion 的审核 transaction 中调用，不暴露到 HTTP。输入明确 `create` 或 `update_existing(targetId, expectedVersion)`；它重新执行与手工命令相同的日期、评分、目标兼容性和所有权规则。
-
-`GradebookSnapshot` 同时返回 `earnedCourseBps`（已获总评百分点）、`gradedPortionPercentBps`、`gradedWeightBps`、未知权重/未出分计数与可选 `currentLetter`；`currentLetter` 只按 graded portion 换算并且不能脱离覆盖权重单独显示。`CourseItem.progressBps` 是行动进度，不进入 Gradebook。
-
-### 2.3 Ingestion
-
-见 [导入流水线](./INGESTION.md)。额外 query：
+### 2.3 Sources
 
 ```ts
-interface SourceQueries {
-  listSources(scope: UserScope, query: SourceLibraryQuery): Promise<SourceLibrarySnapshot>;
-  listCourseSources(scope: UserScope, courseId: CourseId): Promise<SourceSummary[]>;
-  getSourcePreview(scope: UserScope, sourceId: SourceDocumentId): Promise<SourcePreview>;
-}
-
-// 只由 AI_ENABLED composition 导出
-interface AiIngestionQueries {
-  getImportRun(scope: UserScope, runId: ImportRunId): Promise<ImportRunView | null>;
-  getImportReview(scope: UserScope, runId: ImportRunId): Promise<ImportReviewView | null>;
+interface SourcesService {
+  beginUpload(scope: UserScope, input: BeginSourceUploadInput): Promise<SourceUploadGrant>;
+  completeUpload(
+    scope: UserScope,
+    sourceId: SourceDocumentId,
+    expectedVersion: number,
+  ): Promise<SourceView>;
+  listSources(scope: UserScope, filter: SourceFilter): Promise<SourceView[]>;
+  getPreview(scope: UserScope, sourceId: SourceDocumentId, assetId: SourceAssetId): Promise<Preview>;
+  deleteSource(
+    scope: UserScope,
+    sourceId: SourceDocumentId,
+    expectedVersion: number,
+  ): Promise<void>;
 }
 ```
 
-所有模式都有 Source list/upload/preview/delete contract；页面用现有 Planning/Academics commands 手工录入。只有 `AI_ENABLED` composition 才装配 `startImport`、Import query 和 review command。`completeUpload` 只把 Source Document 变为 `ready`；`startImport(scope, sourceId)` 在确认用户 AI 凭据可用后才创建 Import Run 和队列任务。`MANUAL_ONLY` 的最终 OpenAPI/route manifest 中不存在这些 AI 端点，而不是返回一个永久 disabled 状态。
+`completeUpload` 只让原文进入 ready，不创建或修改课程事实。用户在预览旁打开已有 Planning/Academics 表单，并通过对应 command 提交。
 
 ### 2.4 Schedule
 
 ```ts
-interface ScheduleQueries {
-  getDashboard(scope: UserScope, query: DashboardQuery): Promise<DashboardSnapshot>;
-  getTodaySchedule(scope: UserScope, query: TodayScheduleQuery): Promise<TodayScheduleSnapshot>;
+interface ScheduleQueryService {
+  getDashboard(scope: UserScope, query: ScheduleQuery): Promise<DashboardSnapshot>;
   getTaskBoard(scope: UserScope, query: TaskBoardQuery): Promise<TaskBoardSnapshot>;
-  getCourseTimeline(scope: UserScope, query: CourseTimelineQuery): Promise<CourseTimeline>;
   getCalendar(scope: UserScope, query: CalendarQuery): Promise<CalendarSnapshot>;
-  exportCalendar(scope: UserScope, query: CalendarQuery): Promise<CalendarFile>;
+  exportCalendar(scope: UserScope, query: CalendarQuery): Promise<CalendarExport>;
 }
 ```
 
-所有输出带 `generatedAt`、显示 `timeZone` 和相关 `policyVersions`。`DashboardSnapshot`/`CalendarSnapshot` 的课节实例由 academics 的正式 `MeetingPattern`、校历例外和单次例外统一展开；`termProgress` 同时返回状态、百分比、教学周编号和当前例外；`nextMeeting` 返回目标 instant、状态和地点，客户端不得另选“下一节”。查询范围有限制，例如 dashboard 最长一学期、任意自定义范围不超过配置上限。
+这些 query 消费相同正式 snapshot/policy；页面不能分别重算课节、Reading Week、任务分组或冲突。
 
 ### 2.5 Insights
 
-```ts
-type Insight = {
-  key: string;
-  titleKey: string;
-  descriptionKey: string;
-  value: InsightValue;
-  definitionKey: string;
-  dataQuality: "complete" | "partial" | "insufficient";
-};
-
-interface InsightQueries {
-  getTermInsights(scope: UserScope, termId: TermId): Promise<Insight[]>;
-}
-```
-
-首版可以返回空数组和 `insufficient` 页面状态。新增 Insight 是在代码中添加一个纯计算器及测试，并由显式 registry 组合；不执行存储在数据库中的代码/SQL，也不建立动态插件系统。
-
-### 2.6 个人 AI
-
-本节 interface 只在 [去留门禁](./AI_ASSISTANT.md#3-deepseek-ai-去留门禁) 签署 `AI_GO` 后存在。`AI_PENDING` 仅允许 test package/隔离 composition；`MANUAL_ONLY` 必须删除本节 interface、route 和依赖，不建立通用 provider abstraction 等待未来模型。
-
-```ts
-interface AssistantCommands {
-  configureDeepSeekCredential(
-    scope: UserScope,
-    input: ConfigureDeepSeekCredential,
-  ): Promise<AiCredentialStatus>;
-  revokeDeepSeekCredential(
-    scope: UserScope,
-    input: RevokeDeepSeekCredential,
-  ): Promise<void>;
-  askPlanningAssistant(
-    scope: UserScope,
-    input: AskPlanningAssistant,
-  ): Promise<AssistantTurnAccepted>;
-  cancelAssistantTurn(scope: UserScope, turnId: AssistantTurnId): Promise<void>;
-}
-
-interface AssistantQueries {
-  getAiAvailability(scope: UserScope): Promise<AiAvailabilityView>;
-  getAssistantTurn(scope: UserScope, turnId: AssistantTurnId): Promise<AssistantTurnView | null>;
-}
-
-interface SecretVaultPort {
-  seal(scope: UserScope, secret: SensitiveString): Promise<SealedSecret>;
-  open(
-    scope: UserScope,
-    sealed: SealedSecret,
-    purpose: "deepseek_call",
-  ): Promise<SensitiveString>;
-}
-
-interface PlanningContextPort {
-  buildAuthorizedContext(scope: UserScope, request: PlanningContextRequest): Promise<PlanningContext>;
-}
-```
-
-`configureDeepSeekCredential` 使用固定 DeepSeek endpoint，验证 bearer key 能列出 `deepseek-v4-pro` 后再密封保存；返回值不含 key。`askPlanningAssistant` 只接受范围、意图和用户文本，不接受 client 提交的课程 snapshot、userId、baseURL、任意 system prompt 或工具定义。服务端通过 `PlanningContextPort` 读取有界正式数据。
-
-`AiAvailabilityView` 在 `available` 时可以包含 server 生成的 `providerDisplayName: "DeepSeek"`、`requestedModelAlias: "deepseek-v4-pro"` 与 `verifiedAt`，用于个人中心展示当前 AI 提供商；这些是非敏感只读元数据，不是 client 配置面。未配置/无效时不得由 UI 猜测 provider，且 contract 不暴露 endpoint、密钥明文、可逆 fingerprint 或 provider SDK 类型。
-
-Assistant adapter 只允许返回 `answer + citations + optional planningDraft`。`planningDraft` 是现有表单可表达的预填值；没有 `applyDraft` 或通用 `executeTool` HTTP 入口。用户从表单提交时走原有 academics/planning command，因此所有权、领域验证、幂等和 `expectedVersion` 不会被模型绕过。
-
-页面与 HTTP contract 不暴露 prompt、schema 或 provider request。暂定内部实现由 `assistant` 依次完成 `PlanningContextPort → AssistantPromptRegistry → DeepSeekResponsesPort → AssistantResultValidator → AssistantTurnView mapper`；`AssistantPromptRegistry` 只按受控 `purpose` 返回代码内版本化完整 spec，不能读取数据库中的可执行 prompt。`DeepSeekResponsesPort` 是内部 seam，只有 deterministic fake 与固定 DeepSeek live adapter 两种实现；它不是多供应商插件接口。
-
-`AssistantTurnView` 必须是可安全渲染的状态 union：
-
-```ts
-type AssistantTurnView =
-  | { status: "queued" | "generating"; question: string; result: null; problem: null }
-  | { status: "completed"; question: string; result: AssistantResultView; problem: null }
-  | { status: "cancelled"; question: string; result: null; problem: null }
-  | { status: "failed"; question: string; result: null; problem: SafeAiProblemView };
-
-type AssistantResultView = {
-  blocks: Array<
-    | { kind: "paragraph"; text: string }
-    | { kind: "list"; items: string[] }
-  >;
-  citations: Array<{ recordId: string; label: string; href: string }>;
-  assumptions: string[];
-  planningDraft: PlanningDraftView | null;
-  generatedByLabel: string;
-};
-```
-
-`blocks` 由 server mapper 从已校验结构生成，不接受 HTML 或任意 Markdown。`SafeAiProblemView` 只含稳定 code、用户语言、恢复操作和 `retryable`；不含供应商正文、prompt、key、stack 或原始 output。失败/取消保留 `question`，以便用户重试或改走手工表单。
+只有指标定义包含输入范围、公式、最小数据量、质量说明与版本后，才通过 `getInsights(scope, query)` 暴露。未定义指标返回稳定空状态，不返回 fixture。
 
 ## 3. HTTP 约定
 
-基础路径 `/api/v1`。浏览器使用 same-origin session cookie；所有 mutation 要有 CSRF 防护（框架/同源策略加显式 Origin 校验），不接受客户端传 `userId`。
+- JSON API 位于 `/api/v1`；页面 server query 可直接调用 composition 中的 core service。
+- mutation 使用明确资源/命令名、`Content-Type: application/json`、CSRF/same-origin 防护和 request ID。
+- 上传分 begin/complete 两步；文件正文通过私有 object storage 授权传输。
+- 私有响应默认 `Cache-Control: private, no-store`；Source 预览还设置 `X-Content-Type-Options: nosniff` 与安全 disposition。
+- 所有 schema 在 `packages/contracts` 以 Zod 为单一来源；未知字段按 contract 明确 strip 或 reject。
 
-### 3.1 资源与命令端点
+推荐资源：
 
-| 方法与路径                                                  | 用途                                | 成功响应                         |
-| ----------------------------------------------------------- | ----------------------------------- | -------------------------------- |
-| `GET /terms`                                                | 学期列表                            | `200 { data: TermSummary[] }`    |
-| `POST /terms`                                               | 创建学期                            | `201 { data: TermView }`         |
-| `PATCH /terms/:termId`                                      | 带 version 修改                     | `200`                            |
-| `PUT /profile/active-term`                                  | 设置当前学期                        | `204`                            |
-| `POST /courses`                                             | 创建课程                            | `201`                            |
-| `POST /course-setups`                                       | 原子创建课程及零到多个课节          | `201`                            |
-| `GET /courses/:courseId`                                    | 课程详情                            | `200`                            |
-| `PATCH /courses/:courseId`                                  | 修改课程                            | `200`                            |
-| `POST /terms/:termId/calendar-exceptions`                   | 新增 Reading Week 等校历例外        | `201`                            |
-| `PUT /terms/:termId/calendar-exceptions/:exceptionId`       | 带 version 修改例外                 | `200`                            |
-| `DELETE /terms/:termId/calendar-exceptions/:exceptionId`    | 带影响预览删除校历例外              | `204`                            |
-| `POST /courses/:courseId/meeting-patterns`                  | 新增 Lecture/TUT/PRA 课节           | `201`                            |
-| `PUT /courses/:courseId/meeting-patterns/:patternId`        | 带 version 修改课节                 | `200`                            |
-| `DELETE /courses/:courseId/meeting-patterns/:patternId`     | 归档课节规则                        | `204`                            |
-| `PUT /meeting-patterns/:patternId/exceptions/:localDate`    | 取消、改期或显式保留一次课          | `200`                            |
-| `DELETE /meeting-patterns/:patternId/exceptions/:localDate` | 删除单次覆盖、恢复派生规则          | `204`                            |
-| `POST /courses/:courseId/items`                             | 手工新增事项                        | `201`                            |
-| `PATCH /course-items/:itemId`                               | 修改事项                            | `200`                            |
-| `DELETE /course-items/:itemId`                              | 软删除事项                          | `204`                            |
-| `POST /courses/:courseId/grading-schemes`                   | 创建完整评分 aggregate              | `201`                            |
-| `PUT /courses/:courseId/grading-schemes/:schemeId`          | 带 version 替换评分 aggregate       | `200`                            |
-| `PUT /grade-components/:componentId/result`                 | 手工新增/替换出分结果               | `200/201`                        |
-| `DELETE /grade-components/:componentId/result`              | 删除误录结果，使其恢复未知          | `204`                            |
-| `PUT /profile/letter-grade-scales/:scaleId`                 | 保存 A/B/C/D/F 边界                 | `200/201`                        |
-| `POST /terms/:termId/task-labels`                           | 创建自定义任务标签                  | `201`                            |
-| `DELETE /task-labels/:labelId`                              | 删除标签并移除关联，不删除事项      | `204`                            |
-| `PUT /course-items/:itemId/labels`                          | 原子替换事项标签集合                | `200`                            |
-| `POST /courses/:courseId/source-uploads`                    | 获取上传计划                        | `201`                            |
-| `POST /source-documents/:sourceId/complete`                 | 完成上传；资料进入 `ready`          | `200 { data: SourceDocumentView }` |
-| `GET /source-documents/:sourceId/preview`                   | owner-scoped 原文件预览/下载         | `200` 或短期私有 URL             |
-| `DELETE /source-documents/:sourceId`                        | 撤销预览并排队清理；AI 模式另取消 run | `202/204`                      |
-| `GET /dashboard?termId=...`                                 | 雷达 snapshot                       | `200`                            |
-| `GET /calendar?termId=...`                                  | 日历 snapshot                       | `200`                            |
-| `GET /tasks?termId=...`                                     | 短期/中长期任务 snapshot 与标签筛选 | `200`                            |
-| `GET /courses/:courseId/gradebook`                          | 评分组成、结果与覆盖口径            | `200`                            |
-| `GET /calendar/export.ics?...`                              | ICS                                 | `200 text/calendar`              |
-| `GET /terms/:termId/insights`                               | 统计洞察                            | `200`                            |
-
-以下端点组只在 `AI_ENABLED` 的 route manifest 中安装；`MANUAL_ONLY` 中应为“路由不存在”，而不是假装存在后统一返回 `AI_UNAVAILABLE`：
-
-- `POST /source-documents/:sourceId/import-runs`
-- `POST /source-documents/:sourceId/retry`
-- `GET|POST /import-runs/...` 与 `PUT /candidates/:candidateId/decision`
-- `GET /profile/ai`、`PUT|DELETE /profile/ai/deepseek-credential`
-- `POST|GET /assistant/turns...` 与取消端点
-
-Next.js Server Components 可以在进程内直接调用相同 query interface，避免自请求 HTTP；Client Component、上传和外部集成使用上述 contract。两条路径必须共享同一 mapper/schema，不能返回两种页面模型。
-
-完成上传不隐式排队。`MANUAL_ONLY` 随后只显示预览与手工录入；`AI_ENABLED` 若选择“上传后立即解析”，也必须顺序调用 complete 与 import-runs 两个意图，第二步失败时保留已上传资料并显示手工恢复操作。
-
-### 3.2 JSON 形状
-
-成功：
-
-```json
-{
-  "data": {},
-  "meta": {
-    "requestId": "req_opaque"
-  }
-}
+```text
+POST   /api/v1/terms
+POST   /api/v1/courses
+POST   /api/v1/course-items
+PATCH  /api/v1/course-items/:itemId
+POST   /api/v1/sources/uploads
+POST   /api/v1/sources/:sourceId/complete
+GET    /api/v1/sources/:sourceId/assets/:assetId/preview
+DELETE /api/v1/sources/:sourceId
+GET    /api/v1/calendar/export.ics
 ```
 
-失败遵循 Problem Details 风格：
+实现可以在 Server Action/Route Handler 间调整，但公开 contract、auth、version 与错误语义保持一致。
 
-```json
-{
-  "type": "https://courseflow.local/problems/validation",
-  "title": "提交内容无效",
-  "status": 422,
-  "code": "VALIDATION_FAILED",
-  "detail": "请检查标出的字段。",
-  "requestId": "req_opaque",
-  "errors": [{ "path": "/temporal/date", "code": "INVALID_LOCAL_DATE", "message": "日期不存在。" }]
-}
+## 4. JSON 与错误
+
+成功响应使用 `{ data, meta? }`；问题响应使用稳定 problem shape：
+
+```ts
+type Problem = {
+  code: string;
+  message: string;
+  fieldErrors?: Record<string, string[]>;
+  requestId: string;
+};
 ```
 
-- `code` 稳定、可供前端分支；`message/detail` 可本地化，不作为逻辑条件。
-- `errors.path` 使用 JSON Pointer。
-- 生产响应不含 stack、SQL、对象键、供应商错误正文或模型 prompt。
+映射基线：
 
-### 3.3 状态码映射
+- 400：JSON/字段/领域输入非法。
+- 401：未认证。
+- 403：已认证但无 owner 权限；不得泄露资源存在性时可返回 404。
+- 404：当前 scope 看不到资源。
+- 409：expected version、idempotency hash 或唯一约束冲突。
+- 413/415/422：文件容量、类型或内容签名不符合上传 contract。
+- 429：明确限流；安全 mutation 不无限重试。
+- 500/503：未知内部或依赖失败，响应不含堆栈、存储 URL 或正文。
 
-| 领域结果                 | HTTP                                                 |
-| ------------------------ | ---------------------------------------------------- |
-| 未认证                   | `401`                                                |
-| 已认证但无权访问         | 对私有 ID 默认 `404`，避免枚举；明确权限操作才 `403` |
-| 不存在                   | `404`                                                |
-| schema/领域输入无效      | `422`                                                |
-| version/idempotency 冲突 | `409`                                                |
-| 上传过大                 | `413`                                                |
-| MIME 不支持              | `415`                                                |
-| 限流                     | `429` + `Retry-After`                                |
-| 外部依赖暂不可用         | 同步入口 `503`；异步导入通常记录 run failure/retry   |
-| `AI_ENABLED`：AI 未配置/已撤销 | `409 AI_UNAVAILABLE`，并返回个人中心恢复入口     |
-| `AI_ENABLED`：AI key 无效      | 配置入口 `422 AI_CREDENTIAL_INVALID`             |
-| `AI_ENABLED`：AI 余额不足      | `402 AI_INSUFFICIENT_BALANCE`，不自动重试        |
+## 5. 日期 Contract
 
-`MANUAL_ONLY` 没有 AI route，因此不会产生上述业务错误；请求旧 AI URL 按普通不存在处理，不向 UI 暴露被移除能力。
+- 纯日期用 `YYYY-MM-DD`；不能序列化成午夜 instant。
+- instant 用带 offset ISO 8601；显示时另带 IANA zone。
+- interval 明确 start/end；deadline 只有一个 due instant。
+- server snapshot 带 `generatedAt` 与 policy version，客户端倒计时只做显示并定期以 server truth 校正。
+- query range 有上限；所有日期由 Zod 和 core 双重校验。
 
-## 4. 日期 Contract
+## 6. 幂等、并发、列表与缓存
 
-JSON 不用一个含糊 `dueDate`：
-
-```json
-{ "kind": "unscheduled", "note": "Week 6; exact date TBA" }
-```
-
-```json
-{ "kind": "date", "date": "2026-10-10", "note": null }
-```
-
-```json
-{
-  "kind": "deadline",
-  "at": "2026-10-11T03:59:00Z",
-  "timeZone": "America/Toronto",
-  "note": "Due 11:59 PM local course time"
-}
-```
-
-```json
-{
-  "kind": "interval",
-  "startsAt": "2026-10-10T17:00:00Z",
-  "endsAt": "2026-10-10T19:00:00Z",
-  "timeZone": "America/Toronto",
-  "note": null
-}
-```
-
-LocalDate 必须是严格 Gregorian `YYYY-MM-DD`；instant 必须含 offset，server 规范化为 UTC `Z` 输出。view model 可额外返回已格式化标签，但标签不是可回传真相。
-
-## 5. 幂等与并发
-
-- 创建上传、完成上传、审核决定等重试敏感 mutation 接受 `Idempotency-Key` header；作用域为 `(user, endpoint intent)`，服务端保存 request hash 和 response 摘要。
-- 同 key 不同 body 返回 `409 IDEMPOTENCY_MISMATCH`。
-- 可变实体 update body 含 `expectedVersion`；成功后版本 +1。
-- 表单得到 `409 VERSION_CONFLICT` 时保留用户输入，显示服务端最新版本并让用户决定覆盖/合并；不能静默 last-write-wins。
-- background job 通过 run state 和 artifact unique key 保持幂等，不依赖 HTTP idempotency 表。
-
-## 6. 列表、筛选与缓存
-
-- 列表使用 opaque cursor，不用 offset；稳定排序如 `(createdAt desc, id desc)`。
-- `limit` 默认 25、最大 100。页面需要“全部当前学期事项”时使用有界 term snapshot，而不是无限列表。
-- 私有响应默认 `Cache-Control: private, no-store`。Server Component 可按用户/term 做短生命周期缓存，但 mutation 必须按 tag 精确失效。
-- ImportRun 轻量轮询返回 `ETag`；`If-None-Match` 未变化时 `304`。
-- 所有日期范围、course IDs 和 include flags 通过 Zod 白名单，禁止把 query 参数直接拼入 SQL。
+- create/complete/delete 等关键 mutation 接受 idempotency key；相同 key + 不同 request hash 返回 409。
+- update/delete 使用 expected version；失败不覆盖其他标签页的更新。
+- 列表默认稳定排序和有界 limit；游标包含排序键与 ID。
+- private server snapshot 可短时缓存，key 包含 owner、term、range 与 policy/source versions；mutation 精确失效。
+- Source preview 与包含个人计划的响应不进入共享缓存。
 
 ## 7. ICS Interface
 
-`schedule.exportCalendar` 先构建中立 `CalendarEvent[]`，ICS adapter 只负责序列化：
+`schedule.exportCalendar` 先构建中立 `CalendarEvent[]`，serializer 只负责 RFC 5545：
 
-- `UID` 从 stable Course Item ID 和应用域生成，重复导出不变。
-- 课节实例可按导出筛选包含，UID 从 Meeting Pattern ID + 原 occurrence date 生成；Reading Week/取消实例不导出，改期沿用原 occurrence UID。
-- `DTSTAMP` 是生成时刻；`LAST-MODIFIED` 来自事项 `updated_at`。
-- `SEQUENCE` 使用正式记录 version，便于兼容客户端识别更新。
-- `date` 使用 `VALUE=DATE` 且 `DTEND` 为次日（非 inclusive）。
-- `deadline` 在 MVP 导出为带 `DTSTART=dueAt`、不含 `DTEND` 的零时长 VEVENT，标题前缀为本地化的“截止”；不虚构占用时长。
-- `interval` 导出起止 instant/时区。
-- exact instant/interval 默认用 UTC `...Z` 序列化，避免不完整 `VTIMEZONE`；说明中保留 CourseFlow 显示时区。若未来改用 `TZID`，serializer 必须同时生成正确 `VTIMEZONE` 并新增跨客户端 golden tests。
-- cancelled/deleted 不进入普通下载；未来订阅 feed 需要用 `STATUS:CANCELLED` 传播删除时另立 contract。
-- `unscheduled` 跳过，export summary 返回 skipped 数量和原因；下载页面先提示。
-- 文本按 RFC 5545 转义和折行，防止内容注入破坏文件。
-- MVP 不写 `VALARM`；以后加入默认提醒时必须由用户设置驱动并更新 export contract。
-
-MVP 提供授权后即时 `.ics` 下载，不提供带长期秘密 URL 的订阅 feed。
+- UID 从稳定正式 ID/课节 occurrence identity 生成。
+- 纯日期使用 `VALUE=DATE` 且 DTEND 为次日；deadline 不虚构时长。
+- cancelled/deleted 与 unscheduled 默认跳过，并在页面返回遗漏摘要。
+- 文本正确转义、折行；生成时间与记录 version 驱动 DTSTAMP/LAST-MODIFIED/SEQUENCE。
 
 ## 8. Contract 演进
 
-- `/api/v1` 内新增可选 response 字段是兼容变更；删除、改义或变更 union 需要新版本/迁移期。
-- Zod schema 与导出的 TypeScript DTO 在 `packages/contracts` 为单一来源。
-- 数据库 entity、AI schema 和 HTTP schema 是三个不同层次，使用明确 mapper；不把一个 Zod object 到处复用。
-- contract tests 固定关键示例：所有 temporal variant、problem response、review decision、dashboard snapshot、ICS golden file。
+- 可选响应字段通常兼容；删字段、改语义或修改 union 需要版本/迁移窗口。
+- 数据库 row、HTTP DTO 和 UI view model 使用明确 mapper，不复用一个 schema 到所有层。
+- contract tests 覆盖时间 union、problem response、owner scope、Source 上传/预览/删除、Dashboard snapshot 与 ICS golden file。
+- `pnpm test:manual-only` 是 P4 发布 contract 的一部分，防止已删除的远程模型 surface 回流。
