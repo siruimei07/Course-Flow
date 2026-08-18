@@ -1,7 +1,7 @@
 # CourseFlow UI 线框图与页面说明
 
-> 状态：视觉章节已由用户逐段确认，待用户审阅书面规格
-> 版本：0.1
+> 状态：书面 UI 规格已由用户批准
+> 版本：1.0
 > 日期：2026-08-18
 > 方法：Superpowers brainstorming + visual companion
 > 适用平台：macOS / Windows 本地优先桌面应用
