@@ -1,8 +1,8 @@
 # CourseFlow 架构说明
 
 > 状态：候选架构基线（设计已确认，待文档终审）
-> 版本：0.9
-> 日期：2026-08-19
+> 版本：0.12
+> 日期：2026-08-20
 > 适用范围：MVP-A、MVP-A-P、MVP-B、MVP-C1；仅为 C2、C3 和已知后续能力保留接缝
 
 ## 1. 文档目的与权限
@@ -84,9 +84,9 @@ flowchart LR
 | `MOD-WORKSPACE` | 工作区应用模块 | 编排 | 激活与生命周期、用例顺序、一致修订、影响预览、能力/健康聚合、跨模块结果组合 | 可进入 ready、limited、read-only 或 recovery |
 | `MOD-PLAN` | 学习计划核心 | 核心领域 | 学期、课程、假期、课节/任务系列、规则段、例外、任务实例状态与统一计划实例 | 失败影响核心计划查询或写入，不能伪装为空数据 |
 | `MOD-ATTEND` | 出席记录 | 用户可开关外围模块 | 启用周期、出席事实、出席率与覆盖率 | 降级自身；PLAN 回退到基础时间语义 |
-| `MOD-LIBRARY` | 文件资料库 | 次级模块 | 单一根目录、文件身份、磁盘一致索引、标签、冲突、扫描与对账 | 降级自身；结构化模块继续工作 |
+| `MOD-LIBRARY` | 文件资料库 | 次级模块 | 单一本地根、根/文件身份、磁盘一致索引、标签、冲突、扫描、操作恢复、对账与受验证资源授权 | 降级自身；结构化模块继续工作 |
 | `MOD-GRADE` | 成绩与当前 SGPA | 次级模块 | 评分方案、成绩事实、模板版本、结果来源、覆盖范围与确定性结果 | 降级自身；PLAN 和原始成绩事实不受影响 |
-| `MOD-PROTECT` | 数据保护 | 核心支持 | 备份检查点、快照状态、恢复会话、安全快照、暂存与激活编排 | 备份失败不回滚本地成功；激活不确定时进入 recovery |
+| `MOD-PROTECT` | 数据保护 | 核心支持 | 备份集、完整不可变快照、发布/保留状态、恢复会话、安全快照、暂存与激活编排 | 备份失败不回滚本地成功；激活不确定时进入 recovery |
 | `MOD-DATA` | 活动数据协议 | 基础端口 | 修订、幂等提交、一致读取、持久后续动作、导出、暂存与激活协议 | 可读不可写时进入 read-only；完整性不确定时进入 recovery |
 | `MOD-PLATFORM` | 平台接缝 | 基础端口 | 时钟/时区、文件系统、监听、选择器、系统打开及平台能力 | 故障按所影响能力传播，不形成全局“平台失败”布尔值 |
 
@@ -95,7 +95,7 @@ flowchart LR
 - `MOD-SHELL` 拥有当前编辑体验；`MOD-WORKSPACE` 只持久化版本化 `DraftCheckpoint`。无效草稿不是 PLAN、GRADE 或其他领域事实。
 - `MOD-WORKSPACE` 只编排，不实现重复展开、出席分母、成绩公式、文件对账或快照算法。
 - 领域模块拥有事实含义与不变量；`MOD-DATA` 拥有提交协议，不拥有课程、任务或成绩语义。
-- `MOD-PROTECT` 拥有备份/恢复会话；`MOD-DATA` 提供结构化导出和激活；`MOD-LIBRARY` 提供已验证文件清单和暂存能力。
+- `MOD-PROTECT` 拥有备份集、快照格式/发布/保留和恢复会话；`MOD-DATA` 提供一致结构化导出和激活；`MOD-LIBRARY` 提供完整、已验证的文件闭包和暂存能力；`MOD-PLATFORM` 只兑现窄文件系统操作。
 - ATTEND 是用户可开关能力。B 与 C1 的“次级”表示它们不阻塞 A 的发布和运行；某个版本一旦声明包含 B 或 C1，就必须完整满足相应需求。
 - 每个模块产生自身 diagnostics 与 capabilities；Workspace 聚合它们。瞬时 health 可重建，持久操作状态必须可恢复。
 
@@ -129,13 +129,13 @@ flowchart LR
 | OccurrenceOverride、TaskOccurrenceState | `MOD-PLAN` | “仅本次”使用实例覆盖；完成、跳过、删除语义分开 |
 | AttendanceWindow、AttendanceRecord | `MOD-ATTEND` | 引用 MeetingOccurrenceId；未标记不是缺席事实 |
 | GradingScheme、GradeResult、GradeScaleVersion、CourseGradeBinding | `MOD-GRADE` | 版本、来源和覆盖范围不可丢失 |
-| LibraryRecord、CustomTag、FileOperation | `MOD-LIBRARY` | 真实文件内容在磁盘；索引记录对应关系与验证状态 |
-| BackupConfiguration、SnapshotManifest、RestoreSession | `MOD-PROTECT` | 快照在激活前不是活动真相 |
+| LibraryRootId、RootGeneration、LibraryRecord、CustomTag、FileOperation | `MOD-LIBRARY` | 真实文件内容在磁盘；根 marker 提供逻辑根身份；索引记录对应关系与验证状态 |
+| BackupConfiguration、BackupSet、SnapshotManifest、SnapshotPublication、RestoreSession | `MOD-PROTECT` | 每个备份配置拥有独立 BackupSet；快照在激活前不是活动真相 |
 | Revision、CommandReceipt、DurableFollowUp 持久记录 | `MOD-DATA` | DATA 拥有原子记录/恢复协议；每个 follow-up 的业务含义与完成策略仍归其命名模块 |
 
 ### 4.2 稳定身份
 
-至少使用 `WorkspaceId`、`TermId`、`CourseId`、`MeetingSeriesId`、`TaskSeriesId`、`MeetingOccurrenceId`、`TaskOccurrenceId`、`GradingItemId`、`FileId`、`GradeScaleVersionId`、`SnapshotId` 和 `OperationId`。
+至少使用 `WorkspaceId`、`TermId`、`CourseId`、`MeetingSeriesId`、`TaskSeriesId`、`MeetingOccurrenceId`、`TaskOccurrenceId`、`GradingItemId`、`LibraryRootId`、`RootGeneration`、`FileId`、`GradeScaleVersionId`、`BackupSetId`、`SnapshotId` 和 `OperationId`。
 
 - 规则重算、视图切换、应用重启和缓存重建不得改变同一逻辑对象的身份。
 - 出席记录引用 `MeetingOccurrenceId`；任务状态引用 `TaskOccurrenceId`；成绩项关联任务时引用稳定任务身份。
@@ -151,10 +151,10 @@ flowchart LR
 ### 4.4 三个位置与快照
 
 1. **活动数据目录**：正式结构化事实和可恢复操作状态；
-2. **资料库根目录**：真实课程文件；MVP 只监控一个根目录；
-3. **云盘备份目录**：用户选择的独立位置，只保存已验证快照。
+2. **资料库根目录**：真实课程文件与最小根身份 marker；MVP 只接受一个通过本地卷/已知云目录检查的活动根，已知云盘/远程位置拒绝，无法排除任意第三方同步时必须记录用户确认；
+3. **云盘备份目录**：用户选择的独立位置，只保存 CourseFlow 管理的分 Workspace、分 BackupSet、完整且不可变的快照；不同 BackupSet 不互相自动清理。
 
-三者不得重叠。Watcher 事件只是扫描线索；磁盘扫描与验证决定索引状态。快照只有在验证、影响预览、用户确认、暂存和可恢复激活完成后才成为新的活动数据。
+三者不得重叠。Watcher 事件只是扫描线索；磁盘扫描与验证决定索引状态。根可访问且应用持续运行时，完整资料库核对最迟每五分钟启动一次；未映射普通文件仍属于资料库事实并保持待归类。备份快照只有在所选目录本地完整发布并重新验证后才是成功快照；这不证明外部云盘同步已经完成。恢复候选只有在当次验证、影响预览、用户确认、暂存和可恢复激活完成后才成为新的活动数据。
 
 ## 5. Workspace Interface 概览
 
@@ -166,7 +166,7 @@ Shell 只使用以下五种逻辑能力；规范字段和结果见 [MODULE_CONTR
 | `execute` | 提交幂等领域意图或启动长操作 | 同步返回 committed，或异步返回 accepted + OperationHandle |
 | `preview` | 返回高影响操作的影响、选择和确认令牌 | 令牌绑定 revision；过期必须重新预览 |
 | `observe` | 提示 revision、operation、capability、health 变化 | 通知是重查提示，不是事实源 |
-| `accessResource` | 按 FileId 预览、定位或系统打开文件 | 使用前重新验证路径、权限和 verification stamp；大内容不进入普通投影 |
+| `accessResource` | 按 FileId 预览、定位或请求系统打开文件 | 每次用途独立重新验证路径、权限和 verification stamp；大内容不进入普通投影；非高风险普通文件的平台动作只报告 requested/failed，高风险可启动文件只允许定位 |
 
 公共协议包括 `CommandEnvelope`、`ProjectionEnvelope`、`ImpactPreview`、`CommandOutcome`、`StructuredProblem`、`UndoCapability`、`DraftCheckpoint`、`OperationHandle`、`DurableFollowUp` 和 `PostCommitChange`。
 
@@ -177,8 +177,8 @@ Shell 只使用以下五种逻辑能力；规范字段和结果见 [MODULE_CONTR
 | `FLOW-00` | Workspace 激活与生命周期 | 活动数据完成验证；可恢复操作已判定；路由到 setup、today 或 recovery | 可选模块异常进入 health；数据不可读或激活不确定进入 recovery |
 | `FLOW-01` | 结构化命令与本地提交 | 事实、revision 与 DurableFollowUp 在一个逻辑提交中成立 | 提交前失败不改变正式事实；主事实成功但后续动作待处理时明确显示 pending |
 | `FLOW-02` | 统一计划投影 | PLAN 在同一 ReadSnapshot 和 EvaluationContext 下生成所有计划实例 | ATTEND 可降级；PLAN 失败不得返回伪空日程 |
-| `FLOW-03` | 资料库对账与资源访问 | 文件操作达到 index-committed，或扫描完成磁盘—索引对账 | disk-applied 中断进入 reconciliation-required；权限丢失时索引标 unverified |
-| `FLOW-04` | 异步备份 | 临时快照写入并验证后发布，成功水位覆盖目标 revision | 本地提交保持成功；上一有效快照和待备份水位保留 |
+| `FLOW-03` | 资料库对账与资源访问 | 文件操作达到 index-committed，当前 RootGeneration 的完整扫描完成磁盘—索引对账，或一次重新验证后的资源请求返回受控预览/平台动作结果 | disk-applied 中断进入 reconciliation-required；身份歧义等待决定；权限/根身份丢失时索引标 unverified；资源失败保持 dataEffect unchanged 且不伪造已打开 |
+| `FLOW-04` | 异步备份 | DATA 实际 revision 与完整 Library 闭包写入同一 BackupSet 的临时目录，完整验证、发布并再次验证后，成功水位覆盖该实际 revision | 本地提交保持成功；任一必需成员失败则不发布部分快照；既有已验证快照和待备份水位保留，外部云盘上传不冒充成功 |
 | `FLOW-05` | 显式整库恢复 | 结构化数据与资料库全部通过激活检查点，并重新验证 Workspace | 激活前失败保留原数据；激活中断只允许继续或回滚，不返回部分成功 |
 | `FLOW-06` | 模块自有的确定性结果投影 | ATTEND/GRADE 分别从同一 revision 产出带来源、覆盖和未知原因的结果 | 模块结果 unavailable 不冒充零或旧的当前结果；PLAN 继续运行 |
 
@@ -209,6 +209,7 @@ Shell 只使用以下五种逻辑能力；规范字段和结果见 [MODULE_CONTR
 - 没有新 revision 就不能返回结构化提交成功，也不能触发正式撤销或备份；
 - 文件已在磁盘改变但索引未提交时，只能报告中间/恢复状态；
 - 主事实已提交但跨模块后续动作仍待处理时，返回“已提交 + pending follow-up”；
+- 备份目录出现候选或本地 rename 完成都不足以报告成功；只有最终目录完整重验与成功水位提交均完成后才成功，且不声称云端上传完成；
 - 恢复只有全部激活成功或未成功两种面向用户的最终结果，不提供“部分恢复成功”。
 
 ## 8. 质量约束
@@ -221,7 +222,7 @@ Shell 只使用以下五种逻辑能力；规范字段和结果见 [MODULE_CONTR
 | `Q-CONSIST-01` | 同一复合投影只使用一个 ReadSnapshot；页面不重复实现计划规则。 | NFR-009 |
 | `Q-TIME-01` | 日期、时刻、范围、倒计时和归档按 Term Zone 解释，覆盖跨日和 DST。 | NFR-004 |
 | `Q-STATE-01` | TBA、未知、零、未出分、未标记、缺失和失败保持不同类型。 | NFR-005、STATE-003/006 |
-| `Q-PROTECT-01` | 三个位置不重叠；快照可验证；高影响操作先预览并可恢复。 | NFR-003/007 |
+| `Q-PROTECT-01` | 三个位置不重叠；每个 BackupSet 的快照完整、不可变、可独立验证且保留最近两份已验证版本；高影响操作先预览并可恢复。 | NFR-003/007 |
 | `Q-ISOLATE-01` | ATTEND、LIBRARY、GRADE、PROTECT 失败不阻塞 PLAN 核心。 | NFR-010/011 |
 | `Q-LOCAL-01` | 核心无需账户、网络、远程后端或 AI；未经明确操作不上传正式内容。 | NFR-001 |
 | `Q-PROVENANCE-01` | 成绩与未来估算携带规则/模板版本、来源、覆盖范围和估算标识。 | NFR-008 |
@@ -236,6 +237,7 @@ Shell 只使用以下五种逻辑能力；规范字段和结果见 [MODULE_CONTR
 ### 8.1 结构性能约束
 
 - Workspace 可用状态不等待资料扫描、备份或可选模块；
+- LIBRARY watcher 只降低发现延迟；启动、用户触发和五分钟限流核对均使用同一可恢复扫描协议，扫描不得并行；
 - 时间视图按窗口查询，长列表分页或增量读取；增加历史学期不得强迫每次扫描全部历史；
 - 大文件经 `accessResource` 旁路，不进入 `ProjectionEnvelope`；
 - 扫描、备份、恢复和跨资源操作可查询、继续、重试或安全取消；
@@ -282,25 +284,25 @@ MVP-A 必须独立通过全部适用 Gate。A-P、B、C1 各自增加模块证�
 | A-VIEW / CALENDAR | `MOD-PLAN`、`MOD-WORKSPACE`、`MOD-SHELL` | 02 | CONSIST、TIME、STATE、ACCESS、RESPOND | Contracts §6、§8.3 |
 | A-DATA / PLATFORM | `MOD-DATA`、`MOD-PROTECT`、`MOD-PLATFORM` | 00、01、04、05 | TRUTH、PROTECT、LOCAL、PORTABLE、EVOLVE、CONTINUITY | Contracts §5.7–§5.9 |
 | A-ATTEND | `MOD-ATTEND` | 01、02、06 | STATE、TIME、ISOLATE、DIAG | Contracts §5.4 |
-| B-FILE | `MOD-LIBRARY`、`MOD-PLATFORM`、`MOD-PROTECT` | 03、04、05 | TRUTH、PROTECT、ISOLATE、RESPOND、PORTABLE | Contracts §5.5 |
+| B-FILE | `MOD-LIBRARY`、`MOD-PLATFORM`、`MOD-PROTECT`、`MOD-SHELL` | 03、04、05 | TRUTH、PROTECT、ISOLATE、LOCAL、ACCESS、RESPOND、PORTABLE、EVOLVE、DIAG | Contracts §5.5、§5.9 |
 | C-GRADE | `MOD-GRADE` | 01、06 | STATE、PROVENANCE、EVOLVE、DIAG | Contracts §5.6 |
 | STATE / NFR / DOD | 跨模块 | 00–06 | 适用的全部 Q | Contracts §9–§11 |
 
 完整 Requirement → MOD → IF → FLOW → Q/G → TEST 映射位于 [MODULE_CONTRACTS.md §11](./MODULE_CONTRACTS.md#11-完整追溯矩阵)。
 
-## 12. 后续 ADR 主题与变更规则
+## 12. ADR 主题与变更规则
 
-以下仅是决策边界，不是已作出的技术选择：
+下表只定义决策边界和状态索引，不在 Architecture 中复制技术结论。带“已接受”链接的主题以对应 ADR 为准；其余主题仍未决：
 
-| ID | 后续 ADR 需要决定 | 必须满足的架构约束 |
+| ID | ADR 决策边界 | 必须满足的架构约束 |
 |---|---|---|
-| `ADR-TOPIC-01` | 桌面运行时、UI 与本地应用边界 | 单一 Workspace Interface、macOS/Windows、离线、可访问性 |
-| `ADR-TOPIC-02` | 模块与进程/线程部署方式 | 逻辑依赖不因部署合并而消失；长操作不阻塞核心路径 |
-| `ADR-TOPIC-03` | 活动数据存储、事务与并发控制 | revision、一致读取、幂等提交、durable follow-up、可恢复激活 |
-| `ADR-TOPIC-04` | schema、迁移与兼容策略 | Q-EVOLVE、未知版本停止、备份/恢复可验证 |
-| `ADR-TOPIC-05` | 资料库监听、索引与文件替换策略 | 磁盘真相、FileOperation 状态机、Watcher 只是提示 |
-| `ADR-TOPIC-06` | 文件预览与系统打开实现 | accessResource 再验证、任意类型可保存、不支持预览仍可打开 |
-| `ADR-TOPIC-07` | 快照格式、完整性与发布方式 | 一致 checkpoint、manifest、临时写入、验证后发布 |
+| `ADR-TOPIC-01`（[ADR-01 已接受](./adr/ADR-01-desktop-runtime-ui-boundary.md)） | 桌面运行时、UI 与本地应用边界 | 单一 Workspace Interface、macOS/Windows、离线、可访问性 |
+| `ADR-TOPIC-02`（[ADR-02 已接受](./adr/ADR-02-process-thread-deployment.md)） | 模块与进程/线程部署方式 | 逻辑依赖不因部署合并而消失；长操作不阻塞核心路径 |
+| `ADR-TOPIC-03`（[ADR-03 已接受](./adr/ADR-03-sqlite-active-data-transactions.md)） | 活动数据存储、事务与并发控制 | revision、一致读取、幂等提交、durable follow-up、可恢复激活 |
+| `ADR-TOPIC-04`（[ADR-04 已接受](./adr/ADR-04-schema-migration-compatibility.md)） | schema、迁移与兼容策略 | Q-EVOLVE、未知版本停止、备份/恢复可验证 |
+| `ADR-TOPIC-05`（[ADR-05 已接受](./adr/ADR-05-library-watching-index-file-operations.md)） | 资料库监听、索引与文件替换策略 | 磁盘真相、FileOperation 状态机、Watcher 只是提示 |
+| `ADR-TOPIC-06`（[ADR-06 已接受](./adr/ADR-06-resource-preview-system-open.md)） | 文件预览与系统打开实现 | accessResource 再验证、受限只读预览、非高风险普通文件可请求系统打开、高风险可启动文件只允许定位 |
+| `ADR-TOPIC-07`（[ADR-07 已接受](./adr/ADR-07-snapshot-format-integrity-publication.md)） | 快照格式、完整性与发布方式 | 一致 checkpoint、完整 Library 闭包、canonical manifest、临时写入、验证后发布与分 BackupSet 保留 |
 | `ADR-TOPIC-08` | 恢复激活、回滚与启动恢复机制 | RestoreSession、单一活动真相、无部分成功 |
 | `ADR-TOPIC-09` | 本地诊断、日志与用户导出 | Q-LOCAL、Q-DIAG，不自动上传正式内容 |
 | `ADR-TOPIC-10` | 打包、签名、更新与平台发布 | Q-PORTABLE、G6；不能造成平台功能缺失 |

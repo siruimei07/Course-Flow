@@ -1,8 +1,8 @@
 # CourseFlow 模块与接口契约
 
 > 状态：候选规范（设计已确认，待文档终审）
-> 版本：0.9
-> 日期：2026-08-19
+> 版本：0.13
+> 日期：2026-08-20
 > 配套总览：[ARCHITECTURE.md](./ARCHITECTURE.md)
 
 ## 1. 契约约定
@@ -79,8 +79,11 @@
 | `GradeSchemeId` | `MOD-GRADE` | 一门课程评分方案的身份 |
 | `GradingItemId` | `MOD-GRADE` | 跨排序、改名和成绩录入稳定；显示顺序或标题不是身份 |
 | `GradeScaleVersionId` | `MOD-GRADE` | 规则版本不可被就地静默改写 |
+| `LibraryRootId` | `MOD-LIBRARY` | 一个逻辑资料库的稳定身份；正常迁移和匹配 marker 的整库重新授权保持不变 |
+| `RootGeneration` | `MOD-LIBRARY` | 每次活动根切换、重新授权或 marker 修复后产生新值；旧 watcher、扫描和操作结果不得提交到新根代 |
 | `FileId` | `MOD-LIBRARY` | 跨应用内重命名/移动稳定；路径不是身份 |
-| `SnapshotId` | `MOD-PROTECT` | 已发布快照的身份；临时文件不获得正式 SnapshotId |
+| `BackupSetId` | `MOD-PROTECT` | 一项持久 BackupConfiguration 下快照集合的身份；跨重启与软件更新稳定，不同配置/设备不得据此互相清理 |
+| `SnapshotId` | `MOD-PROTECT` | 已发布快照的身份；操作可以预留候选值，但临时目录或未完成发布不获得正式 Snapshot 身份 |
 | `OperationId` | 启动操作的模块 | 扫描、文件、备份、恢复等长操作跨重启稳定 |
 | `CommandId` | Workspace Interface 调用方 | 同一用户意图的重试复用，保证幂等 |
 | `Revision` | `MOD-DATA` | 每次正式结构化提交后单调推进，不代表墙上时钟 |
@@ -100,6 +103,8 @@
 | `Score` | `ungraded` / `scored-zero` / `scored-nonzero` / `incomplete-input` | 明确 0 分是成绩事实；未出分不是 0 |
 | `Coverage` | `known(value, numerator, denominator)` / `unknown(reason)` | 分母不足时保持 unknown，不显示 0% |
 | `FileVerification` | `verified(stamp)` / `missing` / `unverified(reason)` / `pending(operation)` / `reconciliation-required` | 只有 verified 可宣称当前可用 |
+| `LibraryPlacement` | `mapped(TermId, CourseId, CategoryId)` / `unassigned` | unassigned 仍是真实资料库文件，不从文件夹名称猜测稳定引用 |
+| `LocationAssessment` | `verified-local(evidence)` / `known-cloud-or-remote(evidence)` / `unknown(limitations)` | known-cloud-or-remote 必须拒绝；unknown 只有展示检测限制并记录用户确认后才可按本地资料库政策接受 |
 
 `Instant` 用于真实时刻，`LocalDate`/`LocalTime` 用于学期时区内的日历语义。调用者不得用系统默认时区替代 `TermZone`。
 
@@ -123,6 +128,13 @@
 | `GradeTaskRef` | `none`、`task-series(TaskSeriesId)` 或 `task-occurrence(TaskOccurrenceId)`；只能由用户显式建立，标题相同不构成关联 |
 | `GradeProjection` | `CourseGradeProjection` 的版本化只读导出，携带 CourseId、input revision、GradeScaleVersionId、result source、coverage、warnings 与估算标识 |
 | `FinalCourseOutcome` | 仅在存在 calculated-final、manual-final 或 user-attested school-record 时导出其值、来源、provenance、credits 与绑定模板；current-estimate 不能冒充最终结果 |
+| `LibraryRoot` | 当前唯一活动根的本地位置、LibraryRootId、RootGeneration、能力与健康；绝对路径不是根身份 |
+| `LibraryMarker` | 根级保留控制文件，绑定 marker format、WorkspaceId 与 LibraryRootId；不是权限凭证或用户资料 |
+| `PathKey` | 在一个 RootGeneration 内指向当前位置的版本化相对组件编码；原样保留大小写/Unicode，不作为 FileId 或 containment 证明 |
+| `VerificationStamp` | 最近一次验证的 RootGeneration、PathKey、类型、size、mtime 与可选版本化对象证据；不是内容摘要或永久身份 |
+| `FileEntryAssessment` | `regular-file` / `directory` / `link-unsupported` / `special-unsupported` / `unclassified`；平台适配器不得泄露原始 API 类型，unclassified 不能冒充普通条目 |
+| `BackupSet` | 一个 Workspace 在一项持久 BackupConfiguration 下的独立不可变快照序列；`backupSequence` 在集合内单调、可有间隙，只用于确定已验证快照的保留顺序 |
+| `SnapshotManifest` | 一份已发布快照的版本化 canonical 成员闭包、来源兼容元数据、限制和完整性摘要；它不是认证签名、活动事实或云端上传回执 |
 | `ImpactPreview` | 基于一个 revision 对高影响意图的影响、选择、警告和确认令牌 |
 | `ReadSnapshot` | 一个 revision 上的一致逻辑读取视图 |
 | `Projection` | 可从正式事实重建的只读结果；缓存不是事实 |
@@ -298,9 +310,28 @@ ResourceAccessRequest {
   expectedVerificationStamp: VerificationStamp
   mode: preview | system-open | reveal-in-folder
 }
+
+PreviewDescriptor {
+  kind: pdf | png | jpeg | webp | text
+  byteLength: canonical unsigned decimal string
+  encoding?: utf-8 | utf-16le-bom | utf-16be-bom
+  animated?: boolean
+  detectionPolicyVersion: Version
+  limitProfileVersion: Version
+}
+
+ResourceAccessOutcome =
+  PreviewReady(descriptor, localSession)
+  | PreviewUnavailable(reason, allowedActions)
+  | PlatformActionRequested(system-open | reveal-in-folder)
+  | ResourceAccessProblem(StructuredProblem)
 ```
 
-执行前必须重新验证 FileId 对应路径仍位于当前根目录、资源存在、权限允许且 stamp 未过期。结果可以是受控预览描述、系统打开确认或 StructuredProblem；普通 `ProjectionEnvelope` 不携带大文件二进制内容。
+执行每一种 mode 前都必须独立重新验证 FileId 对应路径仍位于当前根目录、资源存在、权限允许且 stamp 未过期。`localSession` 是 Shell 侧不可枚举、用途限定、可取消且不跨重启的抽象能力；它不包含真实路径、URL、平台 handle 或进程类型，也不是可持久事实。普通 `ProjectionEnvelope` 和普通 request/response DTO 不携带大文件二进制内容。
+
+`PreviewUnavailable` 的稳定 reason 至少区分 unsupported、type-mismatch、password-required、limit-exceeded、parse-failed、timeout、stale、permission、not-found 和 launch-risk；allowedActions 只能来自当前重新验证结果。通道关闭、epoch/protocol 不匹配、无默认关联和平台调用失败使用 `ResourceAccessProblem`。`PlatformActionRequested` 只证明请求已交给操作系统：system-open 不证明第三方应用已加载内容，reveal-in-folder 是无成功回执的 best-effort 请求。所有资源访问结果的 `dataEffect=unchanged`，不得返回 committed 或 disk-applied。
+
+支持预览且非高风险的普通文件也可以独立请求 system-open。不支持或预览失败但经启动风险政策判为非高风险的普通文件仍可 system-open/reveal；已知可启动的高风险文件只允许 reveal-in-folder，system-open 必须以 launch-risk 拒绝且不提供应用内绕过。文件、根、权限、stamp、epoch 或协议变化使现有 preview session 失效；Shell 必须显示已失效并由用户显式 reload，不得静默切换到新对象。
 
 ### 3.6 `DraftCheckpoint`
 
@@ -405,7 +436,7 @@ Follow-up 必须具有稳定 ID、所有者、前置 revision、状态、重试/
 | GRADE | `IF-GRADE-COMMAND`、`IF-GRADE-QUERY`、`IF-GRADE-EXPORT`、`IF-GRADE-IMPACT` | GRADE；成绩事实、结果、扩展输出与引用影响 |
 | PROTECT | `IF-PROTECT-COMMAND`、`IF-PROTECT-QUERY`、`IF-BACKUP-CHECKPOINT`、`IF-RESTORE-SESSION` | PROTECT；备份/恢复入口和跨模块会话 |
 | DATA | `IF-DATA-READ`、`IF-DATA-COMMIT`、`IF-DATA-RECEIPT`、`IF-DATA-EXPORT`、`IF-DATA-STAGE-ACTIVATE`、`IF-DATA-OPERATION` | DATA；一致读取、提交、幂等、导出与激活 |
-| PLATFORM | `IF-CLOCK`、`IF-ZONE-RULES`、`IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`、`IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW` | PLATFORM；窄操作系统能力 |
+| PLATFORM | `IF-CLOCK`、`IF-ZONE-RULES`、`IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`、`IF-LOCAL-LOCATION-CLASSIFIER`、`IF-SYSTEM-TRASH`、`IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW` | PLATFORM；窄操作系统能力 |
 | State machines | `IF-FILE-OPERATION`、`IF-REVISION-INVALIDATION` | LIBRARY/跨模块；详细状态见 §7 |
 
 名称以本表为准。表中的 `IF-*-*` 不是通配运行时接口；实现工作包必须引用一个或多个具体接口 ID。
@@ -444,6 +475,7 @@ Follow-up 必须具有稳定 ID、所有者、前置 revision、状态、重试/
 4. 状态不只依赖颜色、hover 或拖拽；所有核心动作有键盘路径。
 5. 高影响操作使用 ImpactPreview/确认；完成/跳过等可逆小操作可以附 6 秒 Undo Toast。
 6. Shell 不缓存一套独立领域计算；切换页面后结果仍来自 Workspace query。
+7. 资源预览只按 `PreviewDescriptor` 呈现只读内容和文字状态；不得执行文件中的链接、脚本、表单或标记。session 失效后停止读取并要求显式 reload；平台 action 只显示 requested/failed，不推断第三方应用成功。
 
 **Problems / Degradation**
 
@@ -595,7 +627,7 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 
 **Owns**
 
-- AttendanceWindow（启用日起至关闭前的区间）；
+- AttendanceWindow（以 Instant 表达、半开区间 `[effectiveFrom, closedAt)` 的启用窗口，同时记录开启时的 TermZone LocalDate）；
 - attended/missed 的 AttendanceRecord 与显式更正；
 - unmarked 义务、课程计数、出席率、覆盖率和 Today 覆盖投影。
 
@@ -607,20 +639,21 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 
 **Interfaces**
 
-- `IF-ATTEND-COMMAND`：EnableFromDate、DisableAtDate、MarkAttended、MarkMissed、ResetToUnmarked；
+- `IF-ATTEND-COMMAND`：EnableAttendance、DisableAttendance、MarkAttended、MarkMissed、ResetToUnmarked；
 - `IF-ATTEND-QUERY`：TodayOverlay、CourseAttendanceProjection、CapabilityState；
 - `IF-ATTEND-IMPACT`：Meeting/Term 变化对记录引用的核对影响。
 
 **Invariants**
 
-1. 默认 disabled；Enable 从 TermZone 当天生效，包含当天较早已结束课节，不回溯更早日期。
-2. Disable 保留已有窗口和记录；再次 Enable 建立新窗口，不补写关闭期间。
-3. 只有有效窗口内、已开始且应上课的 MeetingOccurrence 可标记；取消、假期抑制和未来实例不产生记录义务。
-4. unmarked 保持未知，不存成 missed。
-5. `attendanceRate = attended / (attended + missed)`；分母为零则 unknown。
-6. `coverageRate = (attended + missed) / eligibleEndedOccurrencesInWindows`；分母为零则 unknown。
-7. Today 在 capability available 时：attended 计完成，已结束 unmarked 待确认，missed 单列，未来/进行中待完成；disabled/unavailable 时退回 PLAN 时间语义。
-8. ATTEND 失败不得阻止 PLAN query/command。
+1. 默认 disabled；首次 Enable，或上一个窗口在更早 TermZone LocalDate 已关闭时，`effectiveFrom` 为本地当天 00:00，包含当天较早已结束课节但不回溯更早日期。
+2. Disable 在该命令的 commit Instant 关闭当前窗口；MeetingOccurrence 的开始 Instant 不早于 `closedAt` 时不产生义务。关闭前已经具备资格或已有记录的实例保留。
+3. 再次 Enable 建立新窗口且不补写关闭间隙；若前一窗口在同一 TermZone LocalDate 关闭，`effectiveFrom` 为本次 Enable 的 commit Instant，否则按第 1 条取当天 00:00。窗口不得重叠且最多一个未关闭窗口。
+4. 只有开始 Instant 落入某个有效窗口、已经开始且应上课的 MeetingOccurrence 可标记；取消、假期抑制、窗口外和未来实例不产生记录义务。
+5. unmarked 保持未知，不存成 missed。
+6. `attendanceRate = attended / (attended + missed)`；分母为零则 unknown。
+7. `coverageRate = (attended + missed) / eligibleEndedOccurrencesInWindows`；分母为零则 unknown。
+8. Today 在 capability available 时：attended 计完成，已结束 unmarked 待确认，missed 单列，未来/进行中待完成；disabled/unavailable 时退回 PLAN 时间语义。
+9. ATTEND 失败不得阻止 PLAN query/command。
 
 **Problems / Degradation**
 
@@ -638,26 +671,26 @@ feature-disabled、outside-window、occurrence-ineligible、conflict、not-commi
 
 **Purpose**
 
-管理一个本地资料库根目录，使磁盘文件、稳定索引、目录派生标签和自定义标签保持可解释一致。
+管理一个符合本地资料库位置政策的根目录，使根身份、磁盘文件、稳定索引、目录派生标签和自定义标签保持可解释一致。
 
 **Owns**
 
-- LibraryRoot 配置与健康；
-- FileId/LibraryRecord、验证标记和最后扫描状态；
+- LibraryRootId、RootGeneration、marker、根配置与健康；
+- FileId/LibraryRecord、PathKey、验证标记、placement 和最后完整扫描状态；
 - Term/Course/Category 文件夹映射、建议/自定义分类；
 - 目录派生标签与独立 CustomTag；
-- FileOperation、扫描/对账、同名冲突和资源访问前置验证。
+- FileOperation、扫描/对账、同名/身份冲突、marker 修复、资源访问前置验证、版本化预览/启动风险分类和短期资源 lease。
 
 **Does not own**
 
 - Term/Course 的名称与生命周期；只保存稳定引用和文件夹映射；
-- 文件系统实现、选择器、系统默认应用；
+- 文件系统/watcher/回收站实现、选择器、系统默认应用；
 - 备份快照发布或恢复激活；
 - 文件内容的 AI 分类。
 
 **Interfaces**
 
-- `IF-LIBRARY-COMMAND`：配置/更换根目录、分类/标签、复制导入、重命名、移动、删除、扫描、冲突决策；
+- `IF-LIBRARY-COMMAND`：创建/迁移/重新授权根、当前路径 marker 修复、分类/标签、复制导入、重命名、移动、删除、扫描、冲突/身份决策；
 - `IF-LIBRARY-QUERY`：根健康、搜索/筛选、列表、详情、FileOperation/对账状态；
 - `IF-LIBRARY-RESOURCE`：FileId + stamp 的预览/系统打开/定位验证；
 - `IF-LIBRARY-MANIFEST`：向 PROTECT 提供已验证 manifest/content source，向 restore 提供暂存/对账；
@@ -665,30 +698,38 @@ feature-disabled、outside-window、occurrence-ineligible、conflict、not-commi
 
 **Invariants**
 
-1. MVP 同时只管理一个根目录；根目录可更换但必须先 preview、验证可读写且不与活动数据/备份目录重叠。
-2. 真实文件内容与存在性以磁盘为准；索引只声明最后验证事实。
-3. Watcher 事件是 hint；启动或用户重扫必须能够发现关闭期间的变化。
-4. FileOperation 遵循 `planned → disk-applied → index-committed`；中断后进入 reconciliation-required。
-5. 文件操作只有 index-committed 后才面向用户完整成功；disk-applied 必须说明磁盘可能已改变。
-6. 应用导入复制原文件，不移动源文件；源文件后续变化不影响资料库副本。
-7. 同名文件不得覆盖，直到用户选择 keep-both、replace 或 cancel；keep-both 先预览新名称。
-8. 默认建议分类为“考试、笔记、作业、练习、其他”；用户可以增删或重命名分类。删除非空分类前必须 preview 文件数与目标路径，并只接受“移动到用户选择的其他分类”或 cancel；分类变化不得静默删除文件。目录派生标签随已验证路径变化；CustomTag 独立保存，不因移动或分类更名删除。
-9. 课程重命名以 CourseId 保持映射。物理目录后续动作失败时核心课程事实可以已提交，但 Library 必须显示 pending/reconciliation 状态，不声称整体完成。
-10. 任意文件类型可以保存；PDF、PNG、JPEG、WebP 和纯文本提供内置预览，其他类型仍可 system-open/reveal。
-11. 权限丢失时索引标 unverified；不得继续显示“可用”，但旧列表上下文可保留并明确状态。
-12. 搜索/组合筛选只返回索引中的真实记录及验证状态，不合成示例文件。
+1. MVP 同时只管理一个根目录。默认 Documents 和用户候选都先取得 LocationAssessment：known-cloud-or-remote 拒绝；unknown 必须展示“无法识别任意第三方同步”的限制并记录用户确认；任何候选还必须 preview、验证读写能力，且与活动数据/备份位置既不相同也不互为祖先/后代。
+2. 正常 ChangeRoot 只迁移到 CourseFlow 新建或确认为空的新根；Reauthorize 只接受匹配 WorkspaceId + LibraryRootId marker 的非空原资料库。RepairLibraryMarker 只允许数据库当前路径，经只读完整扫描、影响预览和确认后执行。任一路径在提交前后都只有一个 current RootGeneration。
+3. 真实文件内容与存在性以磁盘为准；索引只声明最后验证事实。LibraryRootId、FileId、PathKey、对象证据和内容摘要彼此不可替代。
+4. PathKey 原样保留目录枚举返回的大小写与 Unicode；不以 lowercase、Unicode normalization、字符串前缀或跨 root 键比较决定身份、containment 或重名。名称无法在当前平台表示与 UTF-8 scalar 序列间严格 round-trip 时不得以替换字符造键，受影响范围标 unverified。
+5. 当前根或受管理树中被 PLATFORM 分类为 `link-unsupported` 的条目（目标平台可识别的 symlink/junction）不得跟随；解析后越出 current root 或被分类为 `special-unsupported` 的条目也拒绝。当前平台能力不承诺识别操作系统的每一种特殊文件元数据；无法枚举或分类的范围必须标 unverified。普通 hard-link 路径分别获得 FileId，共享对象证据时不得自动关联为移动。
+6. Watcher 事件只是 scan-required hint。启动、用户重扫、watcher 异常和应用持续运行期间最迟每五分钟启动的完整核对使用同一 ScanOperation；扫描串行，RootGeneration 改变或枚举不完整时不得提交完整结果。
+7. FileOperation 遵循 `planned → disk-applied → index-committed`，payload/version 持久化且同一根的应用管理 mutation 串行；中断后按磁盘实况继续、补偿或进入 reconciliation-required。
+8. 文件操作只有 index-committed 后才面向用户完整成功；disk-applied 必须说明磁盘可能已改变。operation-owned 临时项只有与持久 Operation 精确匹配时才可从用户索引排除。
+9. 应用导入复制原文件，不移动源文件；复制前后必须验证源未变化并验证目标字节，源文件后续变化不影响资料库副本。
+10. 应用内 rename/move 保留源 FileId。同名文件不得覆盖，直到用户选择 keep-both、replace 或 cancel；keep-both 先预览名称且执行时仍使用非覆盖语义。replace 的逻辑身份跟随操作源，原目标 retired，其 CustomTag 不转移。
+11. Delete 只通过系统废纸篓/回收站执行；平台失败不得降级为永久删除。结果丢失且只能证明原路径消失时进入 reconciliation，不宣称可恢复删除成功。
+12. 外部移动只有在当前根/卷内的版本化对象证据唯一且无冲突时自动保留 FileId；证据不足时进入等待决定，不以文件名、size、mtime 或 content hash 单独猜测。可靠对象证据证明同路径物理替换时获得新 FileId；同路径 stamp 已变化但对象证据缺失或不可靠时，旧 record 标 unverified 并进入 `ambiguous-file-identity`，用户确认前不得自动转移 FileId、历史或 CustomTag。
+13. 已验证根内但不属于既有 Term/Course/Category mapping 的普通文件仍建立 record，placement=unassigned、CustomTag 为空，并进入 manifest；不得从文件夹名称创建或匹配 PLAN 身份。
+14. 默认建议分类为“考试、笔记、作业、练习、其他”；用户可以增删或重命名分类。删除非空分类前必须 preview 文件数与目标路径，并只接受“移动到用户选择的其他分类”或 cancel；分类变化不得静默删除文件。目录派生标签随已验证路径变化；CustomTag 独立保存，不因移动或分类更名删除。
+15. 课程重命名以 CourseId 保持映射。物理目录后续动作失败时核心课程事实可以已提交，但 Library 必须显示 pending/reconciliation 状态，不声称整体完成。
+16. 根迁移在旧根完成扫描且无其他未决文件操作后复制/验证新根；新根完整对账并提交新 RootGeneration 后才启动新 watcher。清理旧根前再次验证 marker、最终 manifest/stamps 和 cutover 后变化；任何新增/变化、验证或回收失败都只产生明确的非活动副本 follow-up，不删除未知变化，也不恢复双活动根。
+17. 任意文件类型可以保存；PDF、PNG、JPEG、WebP 和纯文本候选只有通过版本化类型政策后才获得只读内置预览。加密、类型不一致、超限、解析失败或 session 失效不显示部分内容。经启动风险政策判为非高风险的普通文件无论是否支持预览，都可在每次完整重验后请求 system-open/reveal；已知可启动的高风险文件只可 reveal，不得由 CourseFlow 启动或在应用内绕过。
+18. 权限、marker 或根可用性丢失时索引标 unverified；不得继续显示“可用”，但旧列表上下文可保留并明确状态。只有 watcher 降级且五分钟扫描仍可用时，经逐次验证的文件能力可以继续。
+19. 搜索/组合筛选只返回索引中的真实记录及验证状态，不合成示例文件。
+20. marker format、PathKey encoding、ObjectEvidence provider 和 FileOperation payload 均版本化；未知仍在生命周期内的版本使 LIBRARY recovery，不重置 FileId、索引或磁盘。
 
 **Problems / Degradation**
 
-permission、root-unavailable、resource-stale、name-conflict、disk-applied、reconciliation-required、not-found 和 unsupported-preview。LIBRARY unavailable 时其他结构化模块继续；文件写操作关闭，重新授权/扫描/换根入口保留。
+permission、root-unavailable、root-not-local、root-overlap、root-identity-mismatch、marker-missing、entry-link-unsupported、entry-type-unsupported、entry-name-unsupported、watcher-degraded、scan-incomplete、resource-stale、resource-timeout、resource-channel-closed、resource-epoch-mismatch、preview-type-mismatch、preview-password-required、preview-limit-exceeded、preview-parse-failed、launch-risk-blocked、platform-no-association、platform-open-failed、ambiguous-file-identity、name-conflict、trash-failed、disk-applied、reconciliation-required、operation-version-unsupported、not-found 和 unsupported-preview。不得把解析失败命名为“文件损坏”，除非独立验证已经证明该事实。LIBRARY unavailable 时其他结构化模块继续；文件写操作关闭，适用的重新授权、当前路径 marker 修复、扫描或换根入口保留。
 
 **Test seams**
 
-虚拟 FileSystemPort、Watcher、权限变化、路径大小写/分隔差异、逐阶段 failpoint、同名策略、外部移动、重启扫描、资源 stamp 失效和 macOS/Windows conformance。
+虚拟 FileSystemPort、Watcher、LocalLocationClassifier、SystemTrash、五分钟可控时钟、权限变化、路径大小写/Unicode/分隔差异、link/hard-link fixture、逐阶段 failpoint、同名/身份策略、外部移动/替换、marker 损坏/修复、重启扫描、资源 stamp/epoch/root 失效、类型/启动风险 fixture、有界 range/lease driver 和 macOS/Windows conformance。
 
 **Trace**
 
-`B-FILE-001–013`、`NFR-003/010`；`FLOW-03–05`；`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-RESPOND-01`、`Q-PORTABLE-01`；`TEST-LIBRARY-001–007`。
+`B-FILE-001–013`、`NFR-001/002/003/006/010`；`FLOW-03–05`；`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-LOCAL-01`、`Q-ACCESS-01`、`Q-RESPOND-01`、`Q-PORTABLE-01`、`Q-EVOLVE-01`、`Q-DIAG-01`；`TEST-LIBRARY-001–007`。
 
 ### 5.6 `MOD-GRADE` — 成绩与当前学期 SGPA
 
@@ -753,53 +794,60 @@ unknown-weight、incomplete-score、invalid-scale、coverage-insufficient、sour
 
 **Purpose**
 
-在不阻塞本地正式保存的前提下生成可验证快照，并通过显式、可恢复会话替换整个活动数据集。
+在不阻塞本地正式保存的前提下生成完整、不可变且可独立验证的快照，并通过显式、可恢复会话替换整个活动数据集。
 
 **Owns**
 
-- BackupConfiguration、backup-needed/success watermarks、最后成功/错误；
-- BackupCheckpoint、SnapshotManifest、Snapshot 发布状态；
+- BackupConfiguration、BackupSetId、集合内 backupSequence、backup-needed/success watermarks、最后成功/错误；
+- BackupCheckpoint、SnapshotManifest、Snapshot 发布/验证/保留/清理状态；
 - RestoreSession、影响预览、安全快照、暂存/验证/激活编排；
 - “不自动合并副本”的恢复策略。
 
 **Does not own**
 
 - 活动结构化提交、Library 文件真相；
-- 云盘同步工具或远程一致性；
+- 云盘同步工具、提供商上传完成状态或远程一致性；
 - 用户业务数据的语义迁移规则；
 - 当前 Workspace 路由和 UI。
 
 **Interfaces**
 
 - `IF-PROTECT-COMMAND`：配置/清除目的地、立即备份、重试、开始恢复、确认、继续、回滚、取消；
-- `IF-PROTECT-QUERY`：备份状态、快照目录、RestoreSession；
+- `IF-PROTECT-QUERY`：备份状态、分 BackupSet 的 SnapshotList/Detail 与 `verified | incomplete-or-sync-pending | corrupt | incompatible | unknown-entry` 状态、清理状态、RestoreSession；
 - `IF-BACKUP-CHECKPOINT`：从 DATA 获取一致 revision，从 LIBRARY 获取已验证 manifest/content；
 - `IF-RESTORE-SESSION`：协调 DATA/LIBRARY 的暂存、验证与激活。
 
 **Invariants**
 
 1. 未配置备份目录是合法“仅保存在本机”，不是持续错误。
-2. 目的地不得与活动数据目录或 LibraryRoot 重叠。
-3. 正式结构化提交或 Library index-committed 原子推进 backup-needed 水位；PostCommitChange 只负责唤醒。
-4. 备份可以合并多个 revision 请求，但发布快照必须声明实际覆盖 revision 和文件 manifest。
-5. 快照先写临时目标，完成格式/manifest/完整性验证后才发布并推进成功水位。
-6. 备份失败保留本地成功和上一有效快照；错误、最后成功时间和待备份水位可查询。
-7. 恢复依次执行选择、版本/完整性验证、影响预览、确认、安全快照、暂存、验证、激活检查点、重新打开/对账。
-8. 激活前失败保持原活动数据；激活中断进入 recovery，可继续或回滚；不返回部分成功。
-9. MVP 不自动扫描并选择“最新云盘副本”，不双向合并不同副本。
-10. B 已交付时，快照包含 Library 文件及课程/分类/自定义标签映射；恢复后必须一致。
+2. 目的地不得与活动数据目录或 LibraryRoot 重叠；PROTECT 只管理带当前 repository/Workspace/BackupSet 身份的边界，不取得同目录其他文件的所有权。
+3. 每项持久 BackupConfiguration 拥有稳定 BackupSetId 和独立、单调但允许间隙的 backupSequence；不同 BackupSet 不互相计数、选新或自动清理。
+4. 正式结构化提交或 Library index-committed 原子推进 backup-needed 水位；PostCommitChange 只负责唤醒。
+5. 备份可以合并多个 revision 请求，但发布快照必须声明 DATA Online Backup 的实际 revision 和与该副本完全一致的文件闭包。
+6. B 已交付时，闭包包含根 marker、全部 active/unassigned 且已验证的普通文件及数据库中的课程/分类/自定义标签映射；任一项缺失、未验证、复制期间变化或存在未收敛物理操作时整份停止，不发布部分快照。
+7. 快照自包含且发布后不可变；manifest/member locator 不引用共享对象、外部绝对路径或活动文件，不包含 preview cache、lease、解析投影和操作临时产物。完整数据库副本中既有的设备路径/目的地/operation 字段只作待失效的历史元数据，不构成 snapshot capability 或成员引用。
+8. SnapshotManifest、成员摘要、格式上限和兼容轴均版本化；严格格式、SHA-256 覆盖、无压缩目录布局及数值上限由 [ADR-07](./adr/ADR-07-snapshot-format-integrity-publication.md) 唯一决定。checksum 只证明损坏/不一致检测，不声明认证或保密。
+9. 发布遵循持久 operation、同 BackupSet 临时写、完整 staging 验证、发布到此前不存在且不得有意覆盖的本地 final 名称、final 全量重验、成功记录/水位提交的顺序；任一步失败都不得提前显示成功。
+10. “备份成功”只表示所选目录的 final snapshot 已在本机发布、重新验证并记录；不得解释为外部云盘工具已上传完成。
+11. 新快照成功记录后，每个 BackupSet 只保留 backupSequence 最大的两份已验证快照。清理只处理本机精确登记且身份一致的旧快照，并先同父目录改名到 operation-owned quarantine，再可恢复地删除。
+12. 清理失败不回滚新快照或水位；其他 BackupSet、未知、无法验证、身份冲突或未登记条目永不自动删除。空间不足不得通过删除该集合最后或倒数第二份已验证快照强行制造成功。
+13. 快照选择每次重新验证；只有 `verified` 可以进入 RestoreSession。缺失成员是 `incomplete-or-sync-pending`，明确摘要/数据库/闭包矛盾是 `corrupt`，未知未来版本是 `incompatible`，不能按目录时间自动选择最新。
+14. 恢复依次执行选择、版本/完整性验证、影响预览、确认、安全快照、暂存、验证、激活检查点、重新打开/对账。
+15. 激活前失败保持原活动数据；激活中断进入 recovery，可继续或回滚；不返回部分成功。
+16. MVP 不自动扫描并选择“最新云盘副本”，不双向合并不同副本。
+17. checkpoint 禁止携带会改变活动 DATA/Library 闭包的 disk-applied、reconciliation、root cutover、recovery-file 等物理未收敛操作。纯 planned/waiting-decision 记录可以随数据库保存；本次 backup operation 在副本中只允许处于没有 source/final 效果、最多存在 operation-owned staging 的 queued 状态。恢复后所有目的地能力、外部路径/证据和 backup/cleanup operation 均失效，只能重配、重验、重新决定或取消，绝不盲目重放；未知 operation/follow-up 版本不兼容。
 
 **Problems / Degradation**
 
-destination-unset、permission、snapshot-corrupt、incompatible-version、impact-changed、staging-failed、activation-pending、rollback-required。Backup unavailable 只使保护能力 degraded；Restore activation 不确定使 Workspace recovery。
+destination-unset、permission、snapshot-incomplete、snapshot-corrupt、snapshot-format-limit、incompatible-version、storage-full、cleanup-pending、identity-conflict、impact-changed、staging-failed、activation-pending、rollback-required。Backup unavailable 或 cleanup pending 只使保护能力 degraded；已发布快照与活动数据不回滚。Restore activation 不确定使 Workspace recovery。
 
 **Test seams**
 
-可替换 checkpoint source/destination、临时发布与每阶段 failpoint；损坏、旧/新版本、目录不可写、应用重启、激活中断、回滚和 Library 大清单 fixtures。
+可替换 checkpoint source/destination、目录枚举/同步/rename、success record、quarantine/delete 与每阶段 failpoint；canonical golden vectors、每个格式上限 exact/one-over、source-before/after 变化、两个 BackupSet、部分云同步、空间满、损坏、旧/当前/未来版本、应用重启、激活中断、回滚和 Library 大清单 fixtures。
 
 **Trace**
 
-`A-DATA-002–006`、`B-FILE-012`、`STATE-002`；`FLOW-04/05`；`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-EVOLVE-01`、`Q-CONTINUITY-01`；`TEST-PROTECT-001–006`。
+`A-DATA-002–006`、`B-FILE-012`、`STATE-002`、`NFR-003`；`FLOW-04/05`；`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-LOCAL-01`、`Q-PORTABLE-01`、`Q-RESPOND-01`、`Q-EVOLVE-01`、`Q-CONTINUITY-01`、`Q-DIAG-01`；`TEST-PROTECT-001–006`。
 
 ### 5.8 `MOD-DATA` — 活动数据协议
 
@@ -862,8 +910,9 @@ CommitPort failpoint 覆盖提交每个阶段、幂等重放、并发版本冲�
 **Owns**
 
 - `IF-CLOCK`、`IF-ZONE-RULES`；
-- `IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`；
-- `IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW`；
+- `IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`、`IF-LOCAL-LOCATION-CLASSIFIER`；
+- `IF-SYSTEM-TRASH`；
+- `IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW` 的窄平台兑现能力；
 - 平台 capability 与结构化错误映射。
 
 **Does not own**
@@ -875,8 +924,8 @@ CommitPort failpoint 覆盖提交每个阶段、幂等重放、并发版本冲�
 **Interfaces**
 
 - 时间：`IF-CLOCK`、`IF-ZONE-RULES`；
-- 文件：`IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`；
-- 资源：`IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW`。
+- 文件：`IF-FILESYSTEM`、`IF-WATCHER`、`IF-DIRECTORY-CHOOSER`、`IF-LOCAL-LOCATION-CLASSIFIER`、`IF-SYSTEM-TRASH`；
+- 资源：`IF-SYSTEM-OPEN`、`IF-RESOURCE-PREVIEW`；前者只接受一次性 system-open/reveal 动作，后者只兑现已授权、有界且可取消的读取，不暴露原始平台 handle。
 
 这些接口只返回规范 capability/result/problem；调用方不得依赖原始平台异常或路径 API。
 
@@ -885,21 +934,25 @@ CommitPort failpoint 覆盖提交每个阶段、幂等重放、并发版本冲�
 1. Clock/ZoneRules 可注入并在两个平台产生相同领域日期语义。
 2. 文件操作准确报告 planned request 的物理结果、权限和路径；不得把失败报告为成功。
 3. Watcher 明确是 best-effort hint，不提供“已完整扫描”保证。
-4. 选择器取消是用户取消，不是 permission error。
-5. system-open/preview 只处理已由 LIBRARY 重新验证的资源描述。
-6. 平台错误映射为稳定 capability/problem，不泄露为领域分支所依赖的原始异常类型。
+4. 文件条目检查只返回 `FileEntryAssessment`；`unclassified` 不得降级为 regular-file/directory，平台特有的原始类型或错误不进入领域分支。
+5. location classifier 只报告 `verified-local | known-cloud-or-remote | unknown` 及证据/限制；不得把 unknown 伪装为已证明 local，是否在明确用户确认后按产品政策接受由 LIBRARY 决定。
+6. system trash 准确区分 completed、failed 与 outcome-unknown；不得自行 permanent-delete fallback。
+7. 选择器取消是用户取消，不是 permission error。
+8. system-open/preview 只处理已由 LIBRARY 为当前用途重新验证的资源描述；system-open 不接收命令行参数、URL 动作或被判定为高风险的可启动资源。
+9. system-open 只区分 requested 与 failed，不把平台 API 接受请求解释为第三方应用成功；reveal-in-folder 是 best-effort requested。无默认关联与平台失败保持不同稳定原因。
+10. 平台错误映射为稳定 capability/problem，不泄露为领域分支所依赖的原始异常类型。
 
 **Problems / Degradation**
 
-permission、not-found、temporarily-unavailable、unsupported-preview、user-cancelled。能力故障只传播到实际消费者；Clock/ZoneRules 无法可信计算时，时间相关核心投影 unavailable，而非使用猜测时区。
+permission、not-found、temporarily-unavailable、location-not-local、location-unknown、trash-failed、trash-outcome-unknown、unsupported-preview、resource-timeout、resource-channel-closed、platform-no-association、platform-open-failed、user-cancelled。能力故障只传播到实际消费者；Clock/ZoneRules 无法可信计算时，时间相关核心投影 unavailable，而非使用猜测时区。
 
 **Test seams**
 
-Fake Clock/Zone/FS/Watcher/Chooser/Open，外加 macOS 与 Windows 同一 conformance suite 和真实权限 E2E。
+Fake Clock/Zone/FS/Watcher/Chooser/LocationClassifier/Trash/Open/BoundedResource，外加打包后的 macOS 与 Windows 同一 conformance suite、真实权限、位置分类、回收站、默认应用/无关联、文件夹定位、Unicode/空格路径和资源取消 E2E。
 
 **Trace**
 
-`A-PLATFORM-001`、`NFR-004/010`；全部涉及时间/文件的 FLOW；`Q-TIME-01`、`Q-PORTABLE-01`、`Q-RESPOND-01`；`TEST-PLATFORM-001–004`。
+`A-PLATFORM-001`、`B-FILE-009/010`、`NFR-001/002/004/006/010`；全部涉及时间/文件的 FLOW；`Q-TRUTH-01`、`Q-TIME-01`、`Q-LOCAL-01`、`Q-ACCESS-01`、`Q-PORTABLE-01`、`Q-RESPOND-01`、`Q-EVOLVE-01`、`Q-DIAG-01`；`TEST-PLATFORM-001–004`。
 
 ## 6. Intent 与 Query 目录
 
@@ -933,7 +986,7 @@ Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDeta
 
 ### 6.3 ATTEND
 
-Intents：`EnableAttendanceFromToday`、`DisableAttendanceAtToday`、`MarkAttended`、`MarkMissed`、`ResetAttendanceToUnmarked`。
+Intents：`EnableAttendance`、`DisableAttendance`、`MarkAttended`、`MarkMissed`、`ResetAttendanceToUnmarked`。启停时刻由 Workspace 的可信 Clock 在正式 commit 边界确定，不接受 Shell 自报时刻。
 
 Queries：`AttendanceCapability`、`TodayAttendanceOverlay`、`CourseAttendanceProjection`、`AttendanceImpactProjection`。
 
@@ -941,13 +994,15 @@ Queries：`AttendanceCapability`、`TodayAttendanceOverlay`、`CourseAttendanceP
 
 | Intent family | 变体 |
 |---|---|
-| Root | `CreateDefaultLibraryRoot`、`ChangeLibraryRoot`、`ReauthorizeLibraryRoot` |
+| Root | `CreateDefaultLibraryRoot`、`ChangeLibraryRoot`、`ReauthorizeLibraryRoot`、`RepairLibraryMarker` |
 | Taxonomy | `CreateCategory`、`RenameCategory`、`DeleteCategoryWithResolution`、`AddCustomTag`、`RenameCustomTag`、`RemoveCustomTag` |
 | File mutation | `CopyFileIntoLibrary`、`RenameFile`、`MoveFile`、`DeleteFile` |
 | Conflict | `ResolveNameConflict(keep-both|replace|cancel)` |
-| Reconciliation | `StartLibraryScan`、`ResumeFileOperation`、`ResolveReconciliation` |
+| Reconciliation | `StartLibraryScan`、`ResumeFileOperation`、`ResolveReconciliation`、`ResolveExternalFileIdentity` |
 
 Queries：`LibraryRootStatus`、`LibrarySearch`、`LibraryFileDetail`、`FileOperationStatus`、`LibraryConflicts`、`LibraryImpactProjection`。文件预览/系统打开使用 `accessResource`，不是普通 Query。
+
+`ResolveExternalFileIdentity` 对同路径歧义只接受 `same-file | replacement-file`：前者在重新验证后保留旧 FileId/历史/CustomTag，后者 retire 旧 record、创建新 FileId 且不继承 CustomTag；确认前旧 record 保持 unverified，不能通过 `accessResource` 冒充已验证资源。
 
 ### 6.5 GRADE
 
@@ -993,10 +1048,13 @@ planned -> disk-applied -> index-committed -> succeeded
 规则：
 
 - 每个阶段变更必须幂等并可从持久状态恢复；
-- 磁盘动作开始前必须持久化 planned；
+- 磁盘动作开始前必须持久化 operation kind/version、RootGeneration、expected stamps、源/目标、resolution 和精确 operation-owned 临时/恢复位置；
+- 同一根的应用管理磁盘 mutation 串行；外部变化仍可发生，因此每个动作前后都重新验证；
 - disk-applied 之后取消只有在存在安全补偿时可用；
 - 外部文件管理器变化不伪造 planned operation，而由 Scan/ReconciliationOperation 发现并产生明确索引 ChangeSet；
-- 删除/替换优先使用产品允许的可恢复方式；具体平台实现由 ADR 决定。
+- 删除使用系统废纸篓/回收站且不永久删除 fallback；replace 先保留 operation-owned recovery 文件，再发布操作源，身份跟随源；
+- 启动恢复不得盲目重放 delete/replace；只根据持久计划与磁盘实况继续、补偿或等待决定；
+- 具体平台适配、PathKey/marker encoding、transfer digest、扫描协调与发布步骤以 [ADR-05](./adr/ADR-05-library-watching-index-file-operations.md) 为准。
 
 ### 7.2 `IF-BACKUP-CHECKPOINT`
 
@@ -1005,25 +1063,40 @@ planned -> disk-applied -> index-committed -> succeeded
 ```text
 BackupCheckpoint {
   checkpointId
+  operationId
+  backupSetId
+  backupSequence
+  targetRevision
   activityRevision
   activityFormatVersion
   structuredDataSource
-  libraryManifest { rootIdentity, records, verification stamps, content sources }
+  libraryManifest { markerFormat, WorkspaceId, LibraryRootId, RootGeneration, pathKeyEncoding, activeOrUnassignedRecords, verificationStamps, contentSources }
   createdAt
 }
 ```
 
+备份 operation 的规范阶段为：
+
+```text
+queued -> database-checkpoint -> library-copy -> staging-validation
+       -> publishing -> published-pending-record -> succeeded
+```
+
+任一阶段可以进入 `failed`；已产生需要启动收敛的物理结果时进入 `recovery-required`。`published-pending-record` 表示 final 目录已在本机命名空间发布、但成功记录/水位尚未提交，不等于面向用户的成功。
+
 协议：
 
-1. DATA 在 revision R 建立一致结构化 export；
-2. LIBRARY 提供与 R 对应的索引元数据和逐文件已验证状态；
-3. 未验证/缺失文件必须列为问题或根据已确认策略停止，不能静默遗漏后仍声称完整；
-4. PROTECT 写临时快照；
-5. 验证格式、manifest 和完整性；
-6. 仅验证通过后发布 SnapshotId 并推进 `backupSucceededThrough`；
-7. `backupNeededThrough` 大于成功水位时仍显示 pending/failed。
+1. PROTECT 持久化没有 source/final 效果的 queued OperationId、BackupSetId、不可复用的 backupSequence、候选 SnapshotId 与合并后的目标 revision T，但不清除水位；database/library/validation 阶段在对应输出验证成立后才推进，publishing 是 rename 前的持久意图；
+2. DATA 通过 Online Backup 建立一致 structured export，并从副本重新读出实际 revision R、WorkspaceId、格式/schema 与完整性；R 不得早于 T；
+3. LIBRARY 只在 marker/root generation 稳定、完整扫描成功且没有未决 disk-applied/reconciliation/root cutover/recovery-file 时，提供与 R 对应的全部 active/unassigned 索引元数据和逐文件已验证状态；
+4. PROTECT 对每个必需普通文件和 marker 执行 source-before 验证、流式复制/摘要、目标同步/关闭和 source-after 重验。任一未验证、缺失、变化或失败都停止整份快照；
+5. PROTECT 在同一 BackupSet 的 operation-owned 临时目录中最后写 canonical manifest，并以不信任输入的同一 validator 枚举全部成员、拒绝额外/重复/链接/特殊项、检查版本/上限/摘要/数据库/Library 闭包；
+6. staging 全量验证后才发布到此前不存在的 final SnapshotId 目录；发布后重新打开 final 并执行同一全量验证；
+7. final 验证通过后，DATA transaction 才登记 SnapshotId、最后成功和 `backupSucceededThrough=R`。若在本地发布后、登记前中断，重启按持久 operation 与候选身份全量验证后幂等补记或保持失败/恢复，不重复计数；
+8. 新 snapshot 与水位提交后才按同 BackupSet 最近两份已验证快照执行 retention；cleanup pending 不回滚成功；
+9. `backupNeededThrough` 大于 R 时仍显示 pending 并安排下一次。
 
-备份目的地未配置时，watermark 可以记录“本地有未保护 revision”，但用户状态是合法“仅保存在本机”，不是无限重试错误。
+备份目的地未配置时，watermark 可以记录“本地有未保护 revision”，但用户状态是合法“仅保存在本机”，不是无限重试错误。备份查询不得把外部云盘上传状态推断为成功；候选列表必须按 `verified | incomplete-or-sync-pending | corrupt | incompatible | unknown-entry` 区分，且不得以目录时间替代 backupSequence 或验证结果。
 
 ### 7.3 `IF-RESTORE-SESSION`
 
@@ -1120,52 +1193,58 @@ RestoreSession 必须持久保存候选身份、版本、验证结果、预览�
 
 **Root setup/change branch**
 
-1. preview 目标、重叠、权限和已知映射影响；
-2. PLATFORM 验证目录能力；
-3. accepted Operation 迁移/采用/重建映射；
-4. LIBRARY 对账并在 index commit 后切换 current root；
-5. 失败保留原 root 或进入明确 recovery，不同时宣称两个活动 root。
+1. preview 目标本地性、三位置重叠、权限、marker 和已知映射影响；
+2. CreateDefault 仅在 Documents=`verified-local`，或 Documents=`unknown` 且已展示限制并记录用户确认时创建；`known-cloud-or-remote` 拒绝。ChangeRoot 只接受新建/空目录；Reauthorize 只接受匹配 marker 的非空原资料库；RepairMarker 只允许数据库当前路径并先展示只读完整扫描差异；
+3. PLATFORM 验证目录能力，LIBRARY 持久化带旧/新 RootGeneration、manifest 与精确 staging/cleanup 的 Operation；
+4. ChangeRoot 在旧根无其他未决 mutation 且刚完成扫描后复制并以 source-before/source-after stamp + ADR 选定的版本化 transfer digest 验证全部普通文件和 marker；最终 cutover 期间再次对账 dirty 变化；
+5. LIBRARY 只有在新根完整验证后才提交唯一 current RootGeneration、映射和 stamps，再安装新 watcher；
+6. 已提交后先重验旧根 marker、最终 manifest/stamps 和 cutover 后变化；只有精确一致才送入系统回收站。新增/变化、验证或回收失败都留下明确非活动副本 follow-up。提交前失败保留旧根，未知物理结果进入 recovery，任何时刻不宣称两个活动 root。
 
 **App-managed mutation branch**
 
-1. preview 同名/删除/移动影响并收集 ResolutionChoice；
-2. 持久化 FileOperation planned；
-3. PLATFORM 执行磁盘动作；
-4. 标记 disk-applied，验证结果；
-5. 提交 LibraryRecord/path/tags/verification 与 backup follow-up；
-6. 达到 index-committed 后返回成功。
+1. preview 同名/删除/移动影响并收集 ResolutionChoice，绑定 RootGeneration 与 expected stamps；
+2. 持久化带版本、源/目标和临时/恢复位置的 FileOperation planned；
+3. PLATFORM 执行非覆盖 Copy/Rename、系统 Trash 或 staged Replace；Copy/Replace 验证源未变化和目标字节；
+4. 标记 disk-applied，重新验证 containment、对象证据和最终位置；
+5. 提交 LibraryRecord/PathKey/placement/tags/verification 与 backup/cleanup follow-up；replace 保留源 FileId 并 retire 原目标；
+6. 达到 index-committed 后返回成功。平台结果丢失或磁盘组合矛盾只进入 reconciliation。
 
 **External discovery branch**
 
-1. Watcher/启动产生 scan hint；
-2. ScanOperation 枚举受管理 root 并与索引比较；
-3. 无歧义变化产生确定性 ChangeSet；同名/身份歧义进入 waiting-decision；
-4. index commit 后发布新 revision/最后扫描时间。
+1. 启动、用户命令、watcher hint/error 或五分钟兜底期限产生 scan-required；watcher 事件本身不解释为文件动作；
+2. 串行 ScanOperation 在一个 RootGeneration 内验证 marker，并枚举受管理 root；不跟随 `link-unsupported`，拒绝解析后越界和 `special-unsupported`，`unclassified` 范围标 unverified；扫描期间新 hint 只设置 dirty 并在完成后安排下一轮；
+3. exact-path/object continuity、唯一同卷对象移动、外部替换、新文件、missing 和 unassigned 按契约产生 ChangeSet；外部移动证据不足，或同路径 stamp 变化但对象证据缺失/不可靠时进入 waiting-decision，确认前不转移身份或标签；
+4. 枚举错误只把受影响范围标 unverified，不把未观察到的记录批量判 missing，也不推进最后完整扫描时间；
+5. 完整结果在 RootGeneration 仍匹配时 index commit，发布新 revision/最后完整扫描时间。
 
 **Resource access branch**
 
-1. Shell 提交 FileId + verification stamp + mode；
-2. LIBRARY/PLATFORM 重新验证 root containment、路径、存在性、权限和 stamp；
-3. 返回受控 preview/system-open/reveal，或 resource-stale/permission problem。
+1. Shell 提交 FileId + verification stamp + 单一 mode；Workspace 校验调用方、版本、epoch 和请求边界；
+2. LIBRARY 为该 mode 重新验证 current RootGeneration、root containment、普通文件、路径、对象、存在性、权限和 stamp；preview 还执行版本化类型/限制政策，system-open 还执行版本化启动风险政策；
+3. preview 返回 `PreviewReady` 与有界、可取消 session，或带当前 allowedActions 的 `PreviewUnavailable`。大字节只经资源数据面读取；每次 range 仍验证 session、purpose、边界和当前对象；
+4. system-open/reveal 不复用 preview session。非高风险普通文件的 system-open 通过窄 PLATFORM adapter 提交一次性平台请求；高风险可启动文件拒绝 system-open 且只保留 reveal。结果只可为 requested 或稳定 problem，不能宣称第三方应用成功；
+5. 文件/根/权限/stamp/epoch/protocol 变化、页面离开、超时或进程退出会撤销 session。旧画面只保留“已失效”说明，用户显式 reload 后从第 1 步重新开始。
 
-**Completion criterion**：每个展示为可用的文件都有当前 verified stamp；每个中断操作都有可查询的真实阶段和恢复动作。
+**Completion criterion**：每个展示为可用的文件都有当前 RootGeneration 的 verified stamp；每个中断操作都有可查询的真实阶段和恢复动作；根可访问且应用持续运行时完整核对最迟每五分钟启动。资源请求只返回当前验证对应的受控 preview、requested 平台动作或可解释 problem，不产生正式数据效果。
 
-**Failure semantics**：planned 失败保持磁盘/索引 unchanged；disk-applied 后失败进入 reconciliation-required 并说明物理变化；权限/根不可用使 LIBRARY degraded，但 PLAN、ATTEND、GRADE 与结构化本地数据继续。
+**Failure semantics**：planned 失败保持磁盘/索引 unchanged；disk-applied 后失败进入 reconciliation-required 并说明物理变化；任何预览、数据通道、system-open 或 reveal 失败均保持 dataEffect unchanged，只影响当前资源表面。权限/根不可用使 LIBRARY degraded，但 PLAN、ATTEND、GRADE 与结构化本地数据继续。
 
 ### 8.5 `FLOW-04` — 异步备份
 
 **Trigger**：结构化 commit 或 Library index-committed 推进 `backupNeededThrough`，或用户手工启动。
 
-1. PROTECT 合并待备份 revision，但不清除水位。
-2. DATA/LIBRARY 建立 BackupCheckpoint。
-3. PROTECT 向临时目标写结构化数据、manifest 和文件内容。
-4. 验证格式、版本、清单和完整性。
-5. 发布 SnapshotId，更新最后成功时间和 success watermark。
-6. 若期间有新 revision，继续保持其 pending 水位并安排下一次。
+1. PROTECT 合并待备份 revision T，在当前 BackupSet 中持久化 operation、backupSequence 与候选身份，但不清除水位。
+2. DATA 生成 Online Backup 并验证副本，取得实际 revision R；LIBRARY 为 R 建立完整、稳定且无物理未决操作的 verified closure。
+3. PROTECT 向同 BackupSet 的临时目标复制结构化数据、root marker 和全部必需普通文件；逐成员摘要、同步/关闭并重验来源，最后写 canonical manifest。
+4. 使用同一 hostile-input validator 全量验证 staging 的格式、版本、上限、成员集合、摘要、数据库与 Library 闭包；任何一项失败都不发布部分快照。
+5. staging 通过后在同一父目录发布到唯一 final SnapshotId；重新打开 final 并再次全量验证。
+6. final 验证通过后才记录 SnapshotId、最后成功时间与 `backupSucceededThrough=R`。发布后、记录前崩溃由持久 operation 幂等收敛。
+7. 成功记录后保留该 BackupSet 中 backupSequence 最大的两份已验证快照；旧快照清理失败只进入 cleanup pending，不回滚新快照或水位。
+8. 若期间有新 revision，继续保持其 pending 水位并安排下一次。
 
-**Completion criterion**：已发布快照可独立验证其 revision 与 manifest；水位准确说明已保护/未保护范围。
+**Completion criterion**：final snapshot 可独立验证其实际 revision、canonical manifest、全部成员与 Library 闭包，成功记录已提交，水位准确说明已保护/未保护范围。“成功”只覆盖所选目录的本地发布与验证，不声明云盘上传完成。
 
-**Failure semantics**：当前本地数据与上一有效快照不变；显示原因、最后成功和 retry/change destination。
+**Failure semantics**：当前本地数据、既有已验证快照和 pending 水位不变；显示具体阶段、最后成功与 retry/free-space/change-destination。空间不足不删除最后两份好快照；其他 BackupSet、未知、无法验证或身份冲突条目不自动清理。
 
 ### 8.6 `FLOW-05` — 显式整库恢复
 
@@ -1213,7 +1292,12 @@ RestoreSession 必须持久保存候选身份、版本、验证结果、预览�
 | `resource-stale` | operation/module | unchanged | requery/rescan |
 | `name-conflict` | operation | unchanged | keep-both/replace/cancel |
 | `integrity` | module/workspace | 明确实际阶段 | retry/restore/recovery |
+| `snapshot-incomplete` | operation/module | unchanged | wait-for-sync/revalidate/choose-other |
+| `snapshot-corrupt` | operation/module | unchanged | choose-other/diagnostic |
+| `snapshot-format-limit` | operation/module | unchanged | reduce-source/choose-supported-snapshot |
 | `incompatible-version` | operation/workspace | unchanged | choose other/migrate/restore |
+| `storage-full` | operation/module | unchanged | free-space/change-destination/retry |
+| `cleanup-pending` | module | active data unchanged；新 snapshot 已发布 | retry-cleanup/diagnostic |
 | `calculation-unavailable` | module | unchanged | correct/retry |
 | `operation-in-progress` | operation | 当前 handle dataEffect | observe/resume/cancel-if-safe |
 | `reconciliation-required` | module | disk-applied 或未知物理差异 | rescan/decide/resume |
@@ -1253,9 +1337,9 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-SHELL-001` | 每个空、unknown、unavailable、stale、problem 和 Operation state 有文字原因、dataEffect 与下一步 |
-| `TEST-SHELL-002` | 所有核心旅程可键盘完成；焦点不被顶栏/抽屉/Toast 遮挡；状态消息可感知 |
+| `TEST-SHELL-002` | 所有核心旅程可键盘完成；焦点不被顶栏/抽屉/Toast 遮挡；状态消息可感知；文件预览的页码/缩放/适合页面、失效/扫描件/动画暂停/失败提示和适用文本结构可由键盘与辅助技术使用 |
 | `TEST-SHELL-003` | not-committed/conflict/decision-required 保留输入；committed 后才更新正式状态；Undo Toast 语义正确 |
-| `TEST-SHELL-004` | 23 个正式页面/表面只使用 Workspace 投影和命令，不包含独立领域公式 |
+| `TEST-SHELL-004` | 23 个正式页面/表面只使用 `IF-WORKSPACE` 五种能力及其 outcome，不绕过到领域/平台能力，也不包含独立领域公式 |
 | `TEST-WORKSPACE-001` | 每个复合 Envelope 使用单一 revision/EvaluationContext，跨页面结果一致 |
 | `TEST-WORKSPACE-002` | CommandId 幂等、entity conflict、preview token 过期、recoverability 声明和 UndoCapability 一次性 |
 | `TEST-WORKSPACE-003` | healthy/degraded/unavailable/recovering 模块组合产生正确 capability、health 与 Workspace mode |
@@ -1280,7 +1364,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 | ID | 必须证明 |
 |---|---|
-| `TEST-ATTEND-001` | 默认关闭、当天启用不回溯、关闭保留、再次启用不补关闭期 |
+| `TEST-ATTEND-001` | 默认关闭；跨日启用从 TermZone 当天 00:00 生效且不回溯更早日期；关闭在 commit Instant 立即生效并保留关闭前资格/记录；同日重开从重开 Instant 生效；任何重开都不补关闭间隙 |
 | `TEST-ATTEND-002` | attended/missed/unmarked 更正，取消/假期/未来实例资格 |
 | `TEST-ATTEND-003` | 出席率、覆盖率、分母为零 unknown 和 Today overlay 公式 |
 | `TEST-ATTEND-004` | ATTEND 保存/统计/整个模块失败时 PLAN 核心旅程继续 |
@@ -1289,13 +1373,13 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 | ID | 必须证明 |
 |---|---|
-| `TEST-LIBRARY-001` | 根目录创建/更换、三位置不重叠、不可写和恢复原 root |
-| `TEST-LIBRARY-002` | planned/disk-applied/index-committed 每个 failpoint 与重启恢复 |
-| `TEST-LIBRARY-003` | 应用复制导入、外部放入/移动、关闭期间变化和重新扫描 |
-| `TEST-LIBRARY-004` | 同名 keep-both/replace/cancel、删除/移动失败不伪成功 |
-| `TEST-LIBRARY-005` | 五个建议分类、非空分类 move-or-cancel、目录派生标签与 CustomTag 独立、Course 重命名 pending follow-up |
-| `TEST-LIBRARY-006` | 权限丢失、unverified 索引、reauthorize/reconcile 和其他模块继续 |
-| `TEST-LIBRARY-007` | 任意类型保存，PDF/PNG/JPEG/WebP/纯文本预览，其他类型 system-open/reveal，stamp 失效阻止访问 |
+| `TEST-LIBRARY-001` | Documents verified-local/known-cloud-or-remote/unknown 默认根、unknown 限制确认、三位置不重叠、ChangeRoot 只迁移新建/空根、唯一 RootGeneration、旧根 cutover 后变化/验证/回收失败不误删、匹配 marker reauthorize、当前路径 marker 预览修复及错误 Workspace marker |
+| `TEST-LIBRARY-002` | versioned planned/disk-applied/index-committed、operation-owned temp/recovery 每个 failpoint、响应丢失、kill/restart、未知旧 operation version 停止而不重置 |
+| `TEST-LIBRARY-003` | 应用复制导入、外部放入/编辑/删除/唯一与模糊移动、同路径证据连续/明确替换/证据缺失歧义及用户选择、关闭期间变化、watcher 丢失/null/error 和五分钟完整核对 |
+| `TEST-LIBRARY-004` | keep-both 预览名竞争、replace 身份跟随源且目标标签不继承、cancel、Trash 成功/失败/结果未知、rename/move 失败不伪成功 |
+| `TEST-LIBRARY-005` | 五个建议分类、布局外文件 unassigned、非空分类持久批量 move-or-cancel、目录派生标签与 CustomTag 独立、Course 重命名 pending follow-up |
+| `TEST-LIBRARY-006` | 大小写/Unicode/分隔、名称编码 round-trip 失败、hard link、平台可识别 symlink/junction 拒绝、解析后越界、特殊类型、无法分类范围 unverified、操作系统特殊元数据不作全识别承诺、权限丢失、watcher-degraded、reauthorize/reconcile 和其他模块继续 |
+| `TEST-LIBRARY-007` | 任意类型保存；PDF/PNG/JPEG/WebP/纯文本的真/伪后缀、header/结构、严格 UTF-8 与 BOM UTF-16、加密 PDF、动画 WebP、截断/畸形/超限输入；PDF 脚本/XFA/表单/链接/附件不执行且预览不联网；unsupported/type-mismatch/password/limit/parse/timeout 的 allowedActions；高风险可启动文件只 reveal；stamp/root/permission/object/epoch 变化撤销 lease 且显式 reload；range/credit/并发/超时边界与 no-partial-content |
 
 ### 10.5 GRADE
 
@@ -1313,12 +1397,12 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 | ID | 必须证明 |
 |---|---|
-| `TEST-PROTECT-001` | 未配置目录合法；配置目录验证与三位置隔离 |
-| `TEST-PROTECT-002` | backup watermark 持久、请求合并、临时写/验证/发布顺序 |
-| `TEST-PROTECT-003` | 目的地不可写/备份失败保留本地成功、旧快照、最后成功与 pending |
-| `TEST-PROTECT-004` | 损坏/不兼容快照在激活前停止，原数据 unchanged |
+| `TEST-PROTECT-001` | 未配置目录合法；配置目录验证与三位置隔离；repository/Workspace/BackupSet 身份隔离且两个 BackupSet 互不选择、计数或清理 |
+| `TEST-PROTECT-002` | backup watermark 持久与请求合并；actual revision；canonical manifest golden vectors；全部格式上限 exact/one-over；逐成员摘要；每个临时写/验证/发布/final 验证/成功登记 failpoint 顺序与重启收敛 |
+| `TEST-PROTECT-003` | 目的地不可写/空间满/备份或清理失败保留本地成功、最近两份已验证快照、最后成功与 pending；quarantine 重启恢复，未知/其他集合/身份冲突条目不自动删除 |
+| `TEST-PROTECT-004` | 同步中或不完整、损坏、当前/旧/未来不兼容和未知候选状态严格区分；只有重新验证的 snapshot 在激活前继续，原数据 unchanged |
 | `TEST-PROTECT-005` | Restore 每个阶段中断、重启继续/回滚、无部分成功 |
-| `TEST-PROTECT-006` | B 已交付时 snapshot/restore 文件与课程/分类/自定义标签映射一致 |
+| `TEST-PROTECT-006` | B 已交付时 root marker、全部 active/unassigned verified 文件与课程/分类/自定义标签映射形成精确闭包；missing/unverified/source-changed/未收敛 operation 均整份停止，snapshot/restore 一致 |
 | `TEST-DATA-001` | commit 每阶段 failpoint：全成或全不成，revision/receipt/follow-up 一致 |
 | `TEST-DATA-002` | 同 CommandId 重放返回同结果；不同 payload 复用被拒绝 |
 | `TEST-DATA-003` | expected entity conflict、并发 ReadSnapshot 和不混 revision |
@@ -1331,15 +1415,15 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-PLATFORM-001` | macOS/Windows Clock/ZoneRules 通过同一日期/DST conformance |
-| `TEST-PLATFORM-002` | 两平台文件权限、路径、选择器取消、Watcher hint 语义一致 |
-| `TEST-PLATFORM-003` | 两平台支持类型 preview、其他类型 system-open/reveal，错误映射稳定 |
+| `TEST-PLATFORM-002` | 两平台文件权限、路径/Unicode、local/known-cloud-or-remote/unknown 分类、选择器取消、Watcher hint/error、系统 Trash completed/failed/unknown 语义一致 |
+| `TEST-PLATFORM-003` | 打包后的两平台支持类型 preview 数据面取消/释放且无网络读取；非高风险普通文件 system-open 只返回 requested/failed，reveal 为 best-effort；高风险 system-open 请求不会到达平台；无默认关联、权限、消失、平台失败、Unicode/空格路径与错误映射稳定 |
 | `TEST-PLATFORM-004` | 禁网运行全部 MVP-A 核心旅程，应用不要求账户/远程/AI |
 | `TEST-FLOW-00-LIFECYCLE` | 新建、未完成设置、重启、自动归档后不退回首次设置、历史与空白新学期路由 |
 | `TEST-FLOW-01-COMMIT` | preview/confirm/commit/undo/conflict/follow-up 的完整数据效果 |
 | `TEST-FLOW-02-UNIFIED-PLAN` | 多视图同源、Reading Week、TBA 和 ATTEND 降级 |
-| `TEST-FLOW-03-LIBRARY-RECOVERY` | 根、扫描、变更、disk-applied 中断、对账与受验证访问 |
-| `TEST-FLOW-04-BACKUP-FAILURE` | 本地成功/备份失败、旧快照、水位、重试和重启 |
-| `TEST-FLOW-05-RESTORE-RECOVERY` | 损坏候选、预览过期、stage/activation 中断、继续/回滚 |
+| `TEST-FLOW-03-LIBRARY-RECOVERY` | 根 marker/generation、扫描/五分钟兜底、外部变化、每种 disk-applied 中断、根迁移、对账；受验证 preview/system-open/reveal 的独立重验、session 撤销、utility/Renderer 退出、协议/epoch 更新和 unchanged 失败语义 |
+| `TEST-FLOW-04-BACKUP-FAILURE` | 本地成功/备份失败、旧快照、水位、source change、partial cloud、两个 BackupSet、retention/cleanup、重试和每阶段重启 |
+| `TEST-FLOW-05-RESTORE-RECOVERY` | 不完整/损坏/不兼容候选、预览过期、stage/activation 中断、继续/回滚 |
 | `TEST-FLOW-06-DERIVED-RESULTS` | ATTEND/GRADE 来源、coverage、unknown、stale 与隔离 |
 | `TEST-USABILITY-001` | 首次用户约 20 分钟完成参考最低设置，可提前进入并继续 |
 
@@ -1347,21 +1431,21 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 | Q | 最小证据集合 |
 |---|---|
-| `Q-TRUTH-01` | DATA-001/002、LIBRARY-002/004、PROTECT-002–005 |
+| `Q-TRUTH-01` | DATA-001/002、LIBRARY-002/004/007、PROTECT-002–005、FLOW-03 |
 | `Q-CONSIST-01` | WORKSPACE-001、PLAN-008、FLOW-02 |
 | `Q-TIME-01` | PLAN-003/006/007、ATTEND-001–003、PLATFORM-001 |
 | `Q-STATE-01` | SHELL-001、PLAN-006、ATTEND-002/003、GRADE-001/002 |
 | `Q-PROTECT-01` | LIBRARY-001、PROTECT-001–006、FLOW-05 |
-| `Q-ISOLATE-01` | WORKSPACE-003、ATTEND-004、LIBRARY-006、PROTECT-003 |
-| `Q-LOCAL-01` | PLATFORM-004、FLOW-00/04/05 的无网络变体 |
+| `Q-ISOLATE-01` | WORKSPACE-003、ATTEND-004、LIBRARY-006/007、PROTECT-003 |
+| `Q-LOCAL-01` | PLATFORM-003/004、FLOW-00/03/04/05 的无网络变体 |
 | `Q-PROVENANCE-01` | GRADE-003–007、FLOW-06 |
-| `Q-ACCESS-01` | SHELL-001–004、两个平台核心 E2E |
+| `Q-ACCESS-01` | SHELL-001–004、LIBRARY-007 的 PDF/文本/状态公告变体、两个平台核心 E2E |
 | `Q-PORTABLE-01` | PLATFORM-001–003、所有已交付模块的 macOS/Windows E2E |
-| `Q-RESPOND-01` | FLOW-00 不等待、窗口化 PLAN query、LIBRARY/PROTECT OperationHandle 契约测试 |
-| `Q-EVOLVE-01` | DATA-006、PROTECT-004/005、GRADE-004 |
+| `Q-RESPOND-01` | FLOW-00 不等待、窗口化 PLAN query、LIBRARY/PROTECT OperationHandle、LIBRARY-007 资源限制与 G7 |
+| `Q-EVOLVE-01` | DATA-006、PROTECT-004/005、GRADE-004、LIBRARY-007/PLATFORM-003 的策略/协议更新 fixture |
 | `Q-USABILITY-01` | USABILITY-001、WORKSPACE-004 |
 | `Q-CONTINUITY-01` | WORKSPACE-005、LIBRARY-002、PROTECT-002/005、DATA-004/006 |
-| `Q-DIAG-01` | SHELL-001/003、WORKSPACE-003/006、全部 failpoint 的 Problem/dataEffect 断言 |
+| `Q-DIAG-01` | SHELL-001/003、WORKSPACE-003/006、LIBRARY-007、PLATFORM-003、全部 failpoint 的 Problem/dataEffect 断言 |
 
 ## 11. 完整追溯矩阵
 
@@ -1383,7 +1467,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `A-VIEW-005–006` | PLAN / ATTEND / WORKSPACE | IF-PLAN-QUERY、IF-ATTEND-QUERY | 02、06 | CONSIST、TIME、ISOLATE | PLAN-008、ATTEND-003/004 |
 | `A-CALENDAR-001–003` | PLAN / WORKSPACE / SHELL | IF-PLAN-QUERY、IF-WORKSPACE | 02 | CONSIST、TIME、ACCESS、RESPOND | PLAN-003/006/008、FLOW-02 |
 | `A-DATA-001–003` | DATA / PROTECT / WORKSPACE | IF-DATA-*、IF-PROTECT-QUERY | 00、01 | LOCAL、TRUTH、PROTECT | DATA-001/005、PROTECT-001、PLATFORM-004 |
-| `A-DATA-004` | PROTECT / DATA / LIBRARY | IF-DURABLE-FOLLOWUP、IF-BACKUP-CHECKPOINT | 01、03、04 | TRUTH、PROTECT、RESPOND、CONTINUITY | PROTECT-002/003、DATA-004、FLOW-04 |
+| `A-DATA-004` | PROTECT / DATA / LIBRARY | IF-DURABLE-FOLLOWUP、IF-BACKUP-CHECKPOINT | 01、03、04 | TRUTH、PROTECT、RESPOND、EVOLVE、CONTINUITY | PROTECT-002/003、DATA-004、FLOW-04 |
 | `A-DATA-005` | PROTECT / DATA / LIBRARY | IF-RESTORE-SESSION | 05 | TRUTH、PROTECT、EVOLVE、CONTINUITY | PROTECT-004–006、DATA-006、FLOW-05 |
 | `A-DATA-006` | PROTECT / WORKSPACE | IF-RESTORE-SESSION、IF-IMPACT-PREVIEW | 05 | PROTECT、DIAG | PROTECT-004/005、FLOW-05 |
 | `A-PLATFORM-001` | PLATFORM / all shipped modules | IF-CLOCK/ZONE/FILESYSTEM/CHOOSER/SYSTEM-OPEN | 00–06 | PORTABLE、ACCESS、LOCAL | PLATFORM-001–004、G6 |
@@ -1391,11 +1475,11 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `A-ATTEND-002–003` | ATTEND | IF-ATTEND-COMMAND/QUERY | 01、02 | STATE、TRUTH | ATTEND-001/002 |
 | `A-ATTEND-004–005` | ATTEND / PLAN / WORKSPACE | IF-ATTEND-QUERY | 02、06 | STATE、TIME、PROVENANCE | ATTEND-003、FLOW-06 |
 | `A-ATTEND-006` | ATTEND / DATA / PROTECT / WORKSPACE | IF-ATTEND-*、IF-DATA-COMMIT | 01、04、06 | ISOLATE、TRUTH | ATTEND-004、WORKSPACE-003 |
-| `B-FILE-001` | LIBRARY / PLATFORM / WORKSPACE | IF-LIBRARY-COMMAND、IF-IMPACT-PREVIEW | 03 | PROTECT、PORTABLE、DIAG | LIBRARY-001、FLOW-03 |
+| `B-FILE-001` | LIBRARY / PLATFORM / WORKSPACE | IF-LIBRARY-COMMAND、IF-IMPACT-PREVIEW、IF-LOCAL-LOCATION-CLASSIFIER | 03 | PROTECT、PORTABLE、DIAG | LIBRARY-001、PLATFORM-002、FLOW-03 |
 | `B-FILE-002–003` | LIBRARY / PLAN refs | IF-LIBRARY-COMMAND/IMPACT | 01、03 | TRUTH、CONTINUITY | LIBRARY-005、WORKSPACE-006 |
 | `B-FILE-004–005` | LIBRARY / PLATFORM | IF-FILE-OPERATION、IF-WATCHER | 03 | TRUTH、RESPOND、PORTABLE | LIBRARY-002/003、FLOW-03 |
 | `B-FILE-006–008` | LIBRARY | IF-LIBRARY-COMMAND/QUERY | 03 | CONSIST、STATE | LIBRARY-003/005/006 |
-| `B-FILE-009–011` | LIBRARY / PLATFORM / SHELL | IF-FILE-OPERATION、IF-LIBRARY-RESOURCE | 03 | TRUTH、PROTECT、ACCESS、DIAG | LIBRARY-002/004/007、SHELL-003 |
+| `B-FILE-009–011` | LIBRARY / PLATFORM / SHELL | IF-FILE-OPERATION、IF-SYSTEM-TRASH、IF-LIBRARY-RESOURCE、IF-SYSTEM-OPEN、IF-RESOURCE-PREVIEW | 03 | TRUTH、PROTECT、ISOLATE、LOCAL、ACCESS、RESPOND、PORTABLE、EVOLVE、DIAG | LIBRARY-002/004/007、PLATFORM-002/003、FLOW-03、SHELL-001–004 |
 | `B-FILE-012` | LIBRARY / PROTECT | IF-LIBRARY-MANIFEST、IF-BACKUP-CHECKPOINT、IF-RESTORE-SESSION | 04、05 | PROTECT、EVOLVE | PROTECT-006、FLOW-04/05 |
 | `B-FILE-013` | LIBRARY | IF-LIBRARY-COMMAND/QUERY | 03 | PROTECT、DIAG | LIBRARY-001 |
 | `C-GRADE-001–004` | GRADE | IF-GRADE-COMMAND/QUERY | 01、06 | STATE、PROVENANCE、TRUTH | GRADE-001/002/005/007 |
@@ -1418,16 +1502,16 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `STATE-004` | IF-IMPACT-PREVIEW、规则分段 | Q-PROTECT、Q-DIAG、G3 | PLAN-004、WORKSPACE-002 |
 | `STATE-005` | ResultSource、GradeProjection | Q-PROVENANCE、G3 | GRADE-005/006 |
 | `STATE-006` | Attendance 状态枚举与统计 | Q-STATE、Q-ISOLATE、G3/G5 | ATTEND-001–004 |
-| `NFR-001` | MOD-DATA/PROTECT/PLATFORM、无远程业务依赖 | Q-LOCAL、G6 | PLATFORM-004 |
-| `NFR-002` | IF-DATA-COMMIT、IF-FILE-OPERATION、IF-RESTORE-SESSION | Q-TRUTH、G4 | DATA-001、LIBRARY-002、PROTECT-005 |
-| `NFR-003` | 三位置边界、BackupCheckpoint/Manifest | Q-PROTECT、G4 | LIBRARY-001、PROTECT-001/002/006 |
+| `NFR-001` | MOD-DATA/PROTECT/PLATFORM、无远程业务依赖 | Q-LOCAL、G6 | PLATFORM-003/004 |
+| `NFR-002` | IF-DATA-COMMIT、IF-FILE-OPERATION、IF-LIBRARY-RESOURCE、IF-RESTORE-SESSION | Q-TRUTH、G4 | DATA-001、LIBRARY-002/007、PLATFORM-003、PROTECT-005 |
+| `NFR-003` | 三位置边界、BackupSet、BackupCheckpoint/Manifest/retention | Q-PROTECT、G4 | LIBRARY-001、PROTECT-001–004/006 |
 | `NFR-004` | TermZone、Clock/ZoneRules、PLAN evaluator | Q-TIME、G3/G6 | PLAN-007、PLATFORM-001 |
 | `NFR-005` | 显式未知状态 | Q-STATE、G3 | SHELL-001、PLAN-006、GRADE-001/002 |
-| `NFR-006` | MOD-SHELL 呈现契约 | Q-ACCESS、G6 | SHELL-001–004 |
-| `NFR-007` | IF-IMPACT-PREVIEW、Undo/恢复协议 | Q-PROTECT、G3/G4 | WORKSPACE-002、PLAN-004、FLOW-05 |
+| `NFR-006` | MOD-SHELL 呈现契约 | Q-ACCESS、G6 | SHELL-001–004、LIBRARY-007 |
+| `NFR-007` | IF-IMPACT-PREVIEW、Undo/恢复协议 | Q-PROTECT、G3/G4 | WORKSPACE-002、PLAN-004、LIBRARY-004、FLOW-05 |
 | `NFR-008` | GradeProjection/EXT-C2 输出契约 | Q-PROVENANCE、G3 | GRADE-003–007 |
 | `NFR-009` | PLAN 单一 evaluator、RevisionEnvelope | Q-CONSIST、G2/G3 | PLAN-008、WORKSPACE-001、FLOW-02 |
-| `NFR-010` | LIBRARY/PLATFORM degradation | Q-ISOLATE、Q-DIAG、G5/G6 | LIBRARY-006、WORKSPACE-003 |
+| `NFR-010` | LIBRARY/PLATFORM degradation | Q-ISOLATE、Q-DIAG、G5/G6 | LIBRARY-006/007、PLATFORM-003、WORKSPACE-003 |
 | `NFR-011` | ATTEND 窗口、记录与 fallback | Q-ISOLATE、Q-STATE、G5 | ATTEND-001–004 |
 
 ### 11.3 完成定义（12）
@@ -1439,7 +1523,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `MVP-DOD-003` | TEST-PLAN-003/008、FLOW-02 |
 | `MVP-DOD-004` | TEST-PLAN-004/005、FLOW-01/02 |
 | `MVP-DOD-005` | Q-LOCAL/Q-CONTINUITY；TEST-WORKSPACE-005、DATA-006、PLATFORM-004 |
-| `MVP-DOD-006` | Q-TRUTH/Q-PROTECT；TEST-DATA-001、PROTECT-003–005、LIBRARY-002 |
+| `MVP-DOD-006` | Q-TRUTH/Q-PROTECT；TEST-DATA-001、PROTECT-002–005、LIBRARY-002 |
 | `MVP-DOD-007` | Q-PORTABLE、G6；TEST-PLATFORM-001–003 和两平台核心 E2E |
 | `MVP-DOD-008` | Q-LOCAL；TEST-PLATFORM-004 |
 | `MVP-A-P-DOD-001` | TEST-ATTEND-001 |
@@ -1477,7 +1561,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `UI-CALENDAR-01`、`UI-CALENDAR-02` | CalendarWindowProjection、AgendaProjection、TbaProjection |
 | `UI-FILE-01` | LibraryRootStatus、LibrarySearch、Library intents/OperationStatus |
 | `UI-FILE-02` | LibraryFileDetail、accessResource、file intents |
-| `UI-FILE-03` | LibraryConflicts、FileOperationStatus、ResolveNameConflict/Reconciliation |
+| `UI-FILE-03` | LibraryConflicts、FileOperationStatus、ResolveNameConflict/Reconciliation/ExternalFileIdentity、Change/ReauthorizeRoot、RepairLibraryMarker |
 | `UI-GRADE-01` | CurrentTermGradeOverview |
 | `UI-GRADE-02` | CourseGradeProjection、Grade intents |
 | `UI-GRADE-03` | DraftCheckpoint、RecordScore/ClearScore |
