@@ -5,6 +5,7 @@
 - 决策主题：`ADR-TOPIC-06`
 - 资料范围：Electron/Node/Chromium/PDF.js/WHATWG/W3C/Google/Microsoft 的官方文档、规范或上游源码；链接均指向一手来源。
 - 后续裁定：[ADR-06](../architecture/adr/ADR-06-resource-preview-system-open.md) 已接受；产品规范随后明确高风险可启动文件只允许定位。因此本文所有“可 system-open”候选都必须读作“经最终启动风险政策允许后可 system-open”，不得用研究稿绕过正式决议。
+- 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本文当时关于 diagnosticRef/持久字段的提案已被取代。
 
 ## 1. 问题、范围与既有不变量
 
@@ -81,17 +82,17 @@ Windows 的 `ShellExecute` 可因无关联、拒绝访问、文件/路径不存�
 |---|---|---|---|
 | A. Chromium 内建 PDF + 自定义 protocol | Main 对每次 lease 响应受限 URL，Chromium plugin/`<embed>` 负责 PDF；图片也由 URL 解码。 | 少自有 viewer 代码、浏览器可 range。 | 没有 Electron 公开稳定的 CourseFlow-level PDF 控制面；plugin/embed/权限/CSP/新窗口/下载行为和 blob compatibility 都必须逐 Electron 版证实，且 URL/Range/TOCTOU bridge 仍需自建。与“不要嵌入不可信内容”的安全证据相冲突。 |
 | B. `MessagePort` credit/range + PDF.js display API | `accessResource` 发 lease；preload 私有地创建 port，Main/utility 以 credit 发 ArrayBuffer；PDF.js 用自定义 range transport，图片/小文本只在 size/pixel/line 上限内组 Blob/文本。 | 授权、取消、stamp 失效、背压和 PDF range 全在 versioned DTO；Renderer 无路径、无 protocol privilege；不用 iframe/webview/plugin。 | 须实现小型 chunk/credit、lease teardown、PDF.js worker/升级审查；图片仍可能需要完整受限 Blob。 |
-| C. lease token custom protocol + PDF.js/原生 image fetch | Main 注册非特权或最小 `secure + supportFetchAPI + stream` resource scheme，随机单用途 URL 仅映射短 lease；handler 通过 utility range bridge 返回带正确 Content-Range 的 stream。 | 图片可直接由 Chromium 流式解码，PDF.js URL 可使用浏览器 Range；可避免大 ArrayBuffer 进入 Renderer JS。 | handler/HTTP range/session binding/stream cancel/TOCTOU 更复杂；URL 是 bearer capability，CSP/导航/缓存/referrer/日志都要处理；不得用 `file://`、`standard`/`bypassCSP`/ServiceWorker。需要大量 packaged proof。 |
+| C. lease token custom protocol + PDF.js/原生 image fetch | Main 注册非特权或最小 `secure + supportFetchAPI + stream` resource scheme，随机单用途 URL 仅映射短 lease；handler 通过 utility range bridge 返回带正确 Content-Range 的 stream。 | 图片可直接由 Chromium 流式解码，PDF.js URL 可使用浏览器 Range；可避免大 ArrayBuffer 进入 Renderer JS。 | handler/HTTP range/session binding/stream cancel/TOCTOU 更复杂；URL 是 bearer capability，CSP/导航/缓存/referrer 泄露面都要处理；不得用 `file://`、`standard`/`bypassCSP`/ServiceWorker。需要大量 packaged proof。 |
 
 从 YAGNI/KISS 和当前已批准边界推导，**B 是最小可验证的基线候选**；并非本研究替用户作出的 ADR 决定。A 的关键行为是未承诺的实现细节，C 在当前仅五类预览的范围内比 B 多出 URL/protocol 权限面。若 G7 证明 B 的大 PDF 或图片内存/延迟不能过线，才以测量为依据重新在 B/C 间取舍，不应把失败隐藏为无限增大 IPC buffer。
 
 ## 4. 无论选择哪案都应写入 ADR 的资源政策
 
-1. **分类与输出**：返回稳定 `PreviewDescriptor { kind, size, detectionEvidenceVersion, limits }`；`kind` 只能为 `pdf | png | jpeg | webp | utf8-text | unsupported`。扩展名/魔数不一致是可诊断的 `unsupported`，不是异常内容执行。
+1. **分类与输出**：返回稳定 `PreviewDescriptor { kind, size, detectionEvidenceVersion, limits }`；`kind` 只能为 `pdf | png | jpeg | webp | utf8-text | unsupported`。扩展名/魔数不一致是可解释的 `unsupported`，不是异常内容执行。
 2. **限制作为契约参数**：定义版本化 `PreviewLimitsV1`（header sample、单 range、in-flight bytes、lease 数/总 bytes、PDF 同时页/画布像素、图像 decoded pixels、文本总 bytes/行/单行长度、timeout）。具体数字留待 G7 参考工作区和双平台测量；超限要明确提示并可 system-open/reveal，不能 OOM/卡死。
 3. **资源生命周期**：单个打开 tab/请求拥有 lease；切换文件、关闭 tab、Renderer navigation、utility epoch change、stamp invalidation、超时均 cancel；在数据面停止、销毁 parser/worker page render、关闭 `ImageBitmap`、revoke `blob:` URL。旧渲染位可保留静态“已失效”说明，但不可继续读取。
 4. **失败隔离**：PDF.js 解析/渲染可在 Worker，异常只影响该 preview；若 G7/崩溃证据显示它会影响 Workspace utility，再依 ADR-02 条件放入临时 worker thread，worker 只收候选输入、不持有 DB 或正式状态。
-5. **隐私与诊断**：默认不联网；禁止 remote fonts/CMap/wasm/链接 URL，所有 PDF.js asset 仅来自签名的 app bundle。诊断只存 kind、size bucket、版本、problem/OS code 与 diagnosticRef，不存内容、绝对路径、lease token 或完整外链。
+5. **隐私与当前问题**：默认不联网；禁止 remote fonts/CMap/wasm/链接 URL，所有 PDF.js asset 仅来自签名的 app bundle。按后续 ADR-09 不保存诊断；当前 Problem 只含驱动文案/动作所需的 kind、size bucket、版本和 problem/platform code，不含 diagnosticRef、内容、绝对路径、lease token 或完整外链。
 6. **无障碍**：预览 toolbar/错误/截断提示可键盘完成、有可见焦点和文字状态；canvas PDF 至少提供页码、缩放、加载/失败语义。文本保留可选取的真实文本节点；若 PDF text layer 因安全/性能未启用，须明确其可访问性缺口并在验收前解决，而非将 canvas 视为已满足 `Q-ACCESS-01`。
 
 ## 5. ADR-10 发布门与时效风险

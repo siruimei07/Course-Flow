@@ -117,7 +117,7 @@ Electron 官方文档说明 `utilityProcess` 创建带 Node.js 与 MessagePort �
 - ADR-04 必须定义 IPC protocol version 与数据 schema version 的兼容/停止策略；
 - ADR-05/06 必须决定文件监听、原子替换、资源租约、流与 PDF/image/text preview；
 - ADR-07/08 必须定义 utility 崩溃点下的快照发布与恢复激活；
-- ADR-09 必须限制诊断内容并关联 request/operation/epoch；
+- 后续 [ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不持久化诊断内容；request/operation/epoch 只在正式当前状态或 owner 内存错误映射中按需存在；
 - ADR-10 必须验证 utility/worker 脚本、原生依赖、签名、公证和升级后的协议兼容。
 
 若后续实测显示额外进程使 `G7` 无法达标，或某必要驱动不能在签名后的 utility process 中稳定运行，应重新打开 ADR-02；在此之前不引入 per-module process 或常驻 worker pool。

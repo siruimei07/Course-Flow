@@ -6,6 +6,7 @@
 >
 > 结论类型：技术事实、约束与候选方案；**不替代项目负责人作 ADR 决定**。
 > 外部来源限制：仅 SQLite、Node.js、Electron 官方文档及 IETF/ECMA 标准规范。
+> 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本文中相关候选仅是历史研究，不得实现为持久诊断能力。
 
 ## 1. 研究边界与当前契约
 
@@ -23,7 +24,7 @@
 |---|---|---|---|
 | `application_id` | database header offset 68 的 32-bit signed big-endian Application ID；SQLite 建议将它设为应用独有整数，以便工具识别文件类型。[SQLite PRAGMA](https://www.sqlite.org/pragma.html#pragma_application_id) | 快速拒绝“不是 CourseFlow 活动库/候选库”的身份哨兵；仅是**文件族**标记。 | 具体业务 schema 兼容性、snapshot manifest 身份、授权或防篡改证明。 |
 | `user_version` | header offset 60 的 application-owned integer；SQLite 本身完全不使用它。[SQLite PRAGMA](https://www.sqlite.org/pragma.html#pragma_user_version) | 可作为单调的 CourseFlow structured-data format/schema level，随每个成功 migration 同事务推进。 | SQLite 内部 schema change detector；版本之外的迁移历史、feature/capability matrix。 |
-| `schema_version` | header offset 40 的 schema cookie；SQLite 会在 schema 变化时自动递增，用于检查 prepared statement 是否过期。手工改值可能导致旧 schema 执行和损坏；defensive mode 下写入是 silent no-op。[SQLite PRAGMA](https://www.sqlite.org/pragma.html#pragma_schema_version) | 只读观察/诊断项。 | 绝不可作为 product migration version，绝不可由应用写入。 |
+| `schema_version` | header offset 40 的 schema cookie；SQLite 会在 schema 变化时自动递增，用于检查 prepared statement 是否过期。手工改值可能导致旧 schema 执行和损坏；defensive mode 下写入是 silent no-op。[SQLite PRAGMA](https://www.sqlite.org/pragma.html#pragma_schema_version) | 只读观察项。 | 绝不可作为 product migration version，绝不可由应用写入。 |
 
 SQLite file-format 还区分自身的 schema format number（offset 44）与 WAL/rollback 的 read/write file-format version（offset 18/19）；二者都是 SQLite 文件格式，不等于 CourseFlow 逻辑格式。[SQLite database file format](https://www.sqlite.org/fileformat.html#the_database_header) 因此启动判定至少要把「SQLite 文件可读」与「CourseFlow 身份、data format、迁移能力可判定」分开。
 
@@ -56,15 +57,15 @@ SQLite FK 必须在**每个连接**上显式 `PRAGMA foreign_keys=ON`；默认 h
 4. 若版本等于当前，验证必需 schema shape/metadata，再做完整 `integrity_check`，**另做** `foreign_key_check`；只有正常启动的性能证据另行证明需要时，才讨论以 `quick_check` 作为较快但覆盖较少的预筛。候选 snapshot/restore activation 不应仅以 `quick_check` 接受。
 5. 若旧且每一 upgrade migration 均可用，先建立可恢复前置条件，再迁移；若较新、缺失、重复或 migration chain 不可判定，返回 `incompatible-version`/`recovery-required`，不普通写入、不重置、不尝试“向下迁移”。
 
-这符合当前 `FLOW-00` 的 mode 计算：不可读、兼容性无法判定或 activation-pending 必须进入 `recovery`，`recovery` 只开放 resume/rollback/restore/diagnostic 动作，而非普通命令。[MODULE_CONTRACTS §8.1、§9.2–9.4](../architecture/MODULE_CONTRACTS.md)
+这符合当前 `FLOW-00` 的 mode 计算：不可读、兼容性无法判定或 activation-pending 必须进入 `recovery`；无未决 activation 时可 restore，nonterminal activation 只开放证据支持的 resume/rollback，若均不安全则不提供物理动作。[MODULE_CONTRACTS §8.1、§9.2–9.4](../architecture/MODULE_CONTRACTS.md)
 
 ### 3.2 可以采用的版本记账方案
 
 | 方案 | 形式 | 优势 | 缺口/风险 |
 |---|---|---|---|
 | A：仅 `user_version` | 一个 application-owned 单调整数 | SQLite 内建、备份后自然携带、无额外表；适合严格 forward-only chain。 | 无 migration identity、applied timestamp、代码/format compatibility audit；仅靠单个数字不能解释“为何不能继续”。 |
-| B：`user_version` + Bootstrap metadata | header level + 单行 CourseFlow metadata（如 Workspace identity、format contract、creation lineage） | identity、format 与 business WorkspaceId 可分离；启动能给更精确诊断。 | 要定义 bootstrap table 的存在/shape/不变量，并防止它被误作版本真相的第二来源。 |
-| C：B + append-only `schema_migrations` ledger | user_version 是已达 level；ledger 记录 migration ID、from/to、app build、完成事实 | 支持审计、故障诊断、duplicate/gap detection 与 fixture 断言。 | 有两处要保持一致；必须在同一 SQLite transaction 中写 DDL/data transform、ledger 与 user_version，且规定恢复逻辑绝不“猜补”记录。 |
+| B：`user_version` + Bootstrap metadata | header level + 单行 CourseFlow metadata（如 Workspace identity、format contract、creation lineage） | identity、format 与 business WorkspaceId 可分离；启动能给更精确的失败分类。 | 要定义 bootstrap table 的存在/shape/不变量，并防止它被误作版本真相的第二来源。 |
+| C：B + append-only `schema_migrations` ledger | user_version 是已达 level；ledger 记录 migration ID、from/to、app build、完成事实 | 支持审计、故障分类、duplicate/gap detection 与 fixture 断言。 | 有两处要保持一致；必须在同一 SQLite transaction 中写 DDL/data transform、ledger 与 user_version，且规定恢复逻辑绝不“猜补”记录。 |
 
 SQLite 明确把 `user_version` 留给应用，而把 `schema_version` 留给 SQLite 内部机制；这支持 A/B/C 的分层，但不在官方文档中规定 CourseFlow 必选哪一种。[SQLite PRAGMA](https://www.sqlite.org/pragma.html#pragma_user_version) [SQLite schema_version warning](https://www.sqlite.org/pragma.html#pragma_schema_version)
 
@@ -120,7 +121,7 @@ Node `MessagePort`/worker message 同样按 HTML structured clone；它会去掉
 无论哪项，建议 handshake 在任何业务消息前完成并记录 `protocolVersion`、Electron/Node/SQLite versions、utility build ID、`workspaceEpoch`。协议不匹配应是明确 `incompatible-version`/unavailable，而非把 DTO decode exception 转为 empty result。对于 `Revision`、`EntityVersion` 等 64-bit 值，虽然当前 Electron structured clone 可传 BigInt，仍需决定 public DTO 的稳定表示：
 
 - **BigInt-native**：在两个当前 Electron seam 上可精确传输，但 SDK/test tooling、JSON logging/export、future transport 与 command digest 都须有额外 BigInt rule。
-- **decimal-string**：在 structured clone 和 JSON 中均可表示，跨日志/diagnostic/manifest 容易；decode 时必须是 canonical integer grammar 并做 range check，禁止转 `Number`。
+- **decimal-string**：在 structured clone、Workspace DTO 与 manifest 中均可表示；decode 时必须是 canonical integer grammar 并做 range check，禁止转 `Number`。
 - **safe Number only**：只在产品明确把每个此类值限制在 `Number.MAX_SAFE_INTEGER` 内才成立；与 ADR-03 的“不得静默转 Number”不相容，除非另有严格上限与 exhaustion plan。
 
 ## 6. `CommandReceipt` canonical payload encoding 与 digest

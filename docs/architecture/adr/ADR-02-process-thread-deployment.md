@@ -165,7 +165,7 @@ worker error/exit 只影响所属 Operation。命名 Module 按已持久状态�
 
 - 每次 Workspace 调用增加 Main gateway 和 utility 消息传递；
 - DTO 必须可序列化并维护协议版本；
-- utility 增加一个进程的启动、内存、诊断和打包成本；
+- utility 增加一个进程的启动、内存、故障隔离验证和打包成本；
 - Main 同时承载 Workspace gateway 与部分 PLATFORM adapter，需要依赖守卫防止业务逻辑渗入；
 - 单一 Workspace process 不能隔离任意未捕获的 native crash，因此高风险实现必须进入 worker，外围 Module 必须可受控降级；
 - G7 必须实测 IPC、启动、内存和后台任务影响。

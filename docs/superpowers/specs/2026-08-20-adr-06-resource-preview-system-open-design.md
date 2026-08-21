@@ -4,6 +4,7 @@
 > 日期：2026-08-20
 > 方法：Superpowers brainstorming + primary-source research + Ponytail dependency check
 > 权限：非规范性过程记录；技术结论以 [ADR-06](../../architecture/adr/ADR-06-resource-preview-system-open.md) 为唯一真相
+> 后续约束：[ADR-09](../../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本文当时的诊断提案不得实现。
 
 ## 1. 讨论目标
 
@@ -14,7 +15,7 @@
 - 大 PDF 的 range、背压、取消、过期和外部变化如何处理；
 - PDF、图片、文本的功能、资源限制、安全与无障碍边界；
 - system-open/reveal 能诚实承诺什么，哪些高风险文件不得由 CourseFlow 启动；
-- 解析/平台失败、诊断和软件更新如何保持隔离、隐私与兼容；
+- 解析/平台失败、当前 Problem 和软件更新如何保持隔离、隐私与兼容；
 - ADR-06 与 ADR-07/08/09/10 的边界在哪里。
 
 ## 2. 决策前审阅
@@ -64,10 +65,10 @@ Ponytail 依赖检查据此只批准精确锁定的 `pdfjs-dist` library + 同�
 12. `PreviewLimitsV1` 使用已确认的精确数值：4 KiB header、64 KiB range、4/256 KiB lease 并发/in-flight、1/window 与 2/app session、5 分钟 lease、5 秒 range、PDF 512 MiB/10,000 页/16 MP/50,000 text items/30 秒 parse/15 秒 render、图片 64 MiB/40 MP/16,384 px、文本 8 MiB/100,000 行/64 KiB 单行/2,000 DOM 行。
 13. PDF.js 只使用 Display API + 本地同版 worker；不使用 generic viewer、Chromium plugin、iframe/embed/webview/WebContentsView，也不允许网络 asset fallback。
 14. `PreviewReady`、`PreviewUnavailable`、`PlatformActionRequested`、`ResourceAccessProblem` 保持稳定区分；所有资源访问 `dataEffect=unchanged`，解析失败不推断“文件损坏”。
-15. 诊断只包含 code、平台/kind/size bucket、版本、时长与计数；不含内容、名称、路径、FileId、标签、metadata、URL、密码、token 或原始错误。
+15. 后续 ADR-09 已进一步收紧：不保存诊断。当前 Problem 只包含驱动文案/动作所需的 code、平台/kind/size bucket、版本与必要计数；不含内容、名称、路径、FileId、标签、metadata、URL、密码、token、耗时历史或原始错误。
 16. preview session 全部易失，软件更新后重新验证；运行时、PDF.js、worker/assets 和政策版本进入 ADR-10 发布清单与双平台更新门。
 
-随后用户逐段确认了：责任与数据流、类型/描述符、lease 生命周期、精确限制、渲染/安全/无障碍、系统动作与高风险政策、outcome/失败/诊断，以及测试/更新兼容/复议条件。
+随后用户逐段确认了：责任与数据流、类型/描述符、lease 生命周期、精确限制、渲染/安全/无障碍、系统动作与高风险政策、outcome/失败/当时的问题最小化提案，以及测试/更新兼容/复议条件；问题字段现以 ADR-09 为准。
 
 ## 5. 审阅中发现并补回的上游行为
 

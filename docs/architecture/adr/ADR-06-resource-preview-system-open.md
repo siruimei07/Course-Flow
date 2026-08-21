@@ -11,7 +11,7 @@
 
 CourseFlow MVP-B 允许保存任意普通文件，并在应用内只读预览 PDF、PNG、JPEG、WebP 和纯文本。用户还需要把非高风险普通文件交给系统默认应用，或在 Finder/资源管理器中定位任意受管理文件。该能力同时跨越不可信文件内容、Renderer、Preload、Electron Main、Workspace utility、真实文件系统和外部应用，不能把扩展名、显示路径、旧 stamp 或已打开的页面当成持续授权。
 
-ADR-01 已要求 sandbox、context isolation、限制导航和 Renderer 无 Node/Electron 文件能力；ADR-02 已确定控制面完整经过 Renderer → Main → Workspace utility，Main 只可托管 Workspace 授权后的资源数据面；ADR-04 要求 exact protocol/build/epoch；ADR-05 拥有 FileId、RootGeneration、containment、对象证据与 verification stamp。本文只决定这些边界之上的类型识别、字节数据面、解析/渲染、资源限制、system-open/reveal、诊断和更新门禁。
+ADR-01 已要求 sandbox、context isolation、限制导航和 Renderer 无 Node/Electron 文件能力；ADR-02 已确定控制面完整经过 Renderer → Main → Workspace utility，Main 只可托管 Workspace 授权后的资源数据面；ADR-04 要求 exact protocol/build/epoch；ADR-05 拥有 FileId、RootGeneration、containment、对象证据与 verification stamp。本文只决定这些边界之上的类型识别、字节数据面、解析/渲染、资源限制、system-open/reveal、当前问题和更新门禁。
 
 WHATWG 指出扩展名不可靠，且 PDF、HTML/XML 等具有脚本处理模型；Electron 要求限制不可信内容的能力、校验 IPC sender、保持 sandbox/context isolation/CSP，并建议避免 `file://`；Electron 的系统打开 API 只能说明请求结果，不能证明第三方程序最终成功展示内容。[WHATWG MIME Sniffing](https://mimesniff.spec.whatwg.org/)、[Electron Security](https://www.electronjs.org/docs/latest/tutorial/security)、[Electron `shell`](https://www.electronjs.org/docs/latest/api/shell)
 
@@ -92,7 +92,7 @@ Workspace utility 中的 LIBRARY 是授权与分类的唯一所有者：
 - 读取有界 header，执行 `PreviewDetectionPolicyV1` 与 `LaunchRiskPolicyV1`；
 - 以只读 handle 和当前对象证据建立 lease，兑现合法 range；
 - 在每次 range、renew 和平台动作前验证 session、purpose、边界、RootGeneration、stamp、权限与当前对象；
-- 产生规范 outcome/problem 和脱敏诊断字段。
+- 产生规范 outcome/problem 和最小 typed safe details。
 
 普通文件 I/O 使用 Node core 的异步 `FileHandle.read`；初始实现不增加通用 streaming server、native 文件 addon、图片 parser 或常驻 worker pool。Node 的 highWaterMark 不是全局内存硬上限，因此 CourseFlow 自己的 credit 与配额仍是强制契约。[Node FileHandle read](https://nodejs.org/api/fs.html#filehandlereadbuffer-options)、[Node stream buffering](https://nodejs.org/api/stream.html#buffering)
 
@@ -273,7 +273,7 @@ system-open/reveal 必须来自明确用户手势，且不能复用 preview leas
 
 Windows Shell 可以通过文件关联、Shell extension 或 COM handler 处理文件，并会因无关联、权限、路径等原因失败；macOS 的 Workspace open/reveal 同样把后续行为交给外部应用。因此跨平台契约只承诺受控请求，不承诺外部程序结果。[Microsoft `ShellExecute`](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecutea)、[Apple `NSWorkspace`](https://developer.apple.com/documentation/appkit/nsworkspace)
 
-## 9. Outcome、失败隔离与诊断
+## 9. Outcome、失败隔离与当前问题
 
 ### 9.1 规范 outcome
 
@@ -289,16 +289,16 @@ ResourceAccessOutcome =
 
 所有 outcome 都是 `dataEffect=unchanged`，不能返回 committed、disk-applied 或修改索引。单文件失败只影响当前资源表面；utility/Main/Renderer 退出会关闭全部 session，新 epoch 不重连旧 session。旧静态画面必须标失效，不能继续互动。
 
-### 9.2 诊断最小化
+### 9.2 当前 Problem 最小化
 
-允许记录：
+按 [ADR-09](./ADR-09-no-production-diagnostics.md)，资源路径不建立诊断记录、日志或导出。当前 `PreviewUnavailable`/`StructuredProblem` 只可携带：
 
-- 稳定 problem/platform code 与消息类别 fingerprint；
-- `platform`、PreviewKind、文件大小 bucket；
-- app/protocol/build、Electron/Chromium/Node/PDF.js、policy/limit 版本；
-- parse/render/range 时长 bucket、range/页/文本项计数和峰值资源 bucket。
+- 稳定 reason/problem/platform code；
+- `platform`、PreviewKind、文件大小/资源限制 bucket，仅当它改变用户文案或 allowedActions；
+- app/protocol/build、runtime、policy/limit 版本，仅当它用于 incompatible/unsupported 判定；
+- 当前 limit 的计数/阈值，仅当用户可以据此选择其他文件或动作。
 
-禁止记录或自动上传：文件内容、名称、绝对路径、FileId、标签、PDF metadata、外链/URL、密码、lease/token、原始平台错误文本或任意内容片段。ADR-09 可以进一步收紧、定义用户导出和保留期，但不能放宽本文的资源诊断最小线。
+Problem、Operation 和任何持久状态都不得包含文件内容、名称、绝对路径、FileId、标签、PDF metadata、外链/URL、密码、lease/token、原始平台错误文本、任意内容片段、parse/render 历史或性能 trace。原始错误映射后丢弃，不自动上传。
 
 ## 10. 软件更新与发布兼容
 
@@ -385,7 +385,7 @@ ADR-06 只有在以下自动化与真实环境证据通过后才视为已落实�
 4. **数据面协议**：负数/溢出/越界 range、超额 credit、重复/乱序 ID、慢消费者、取消、5 秒 timeout、5 分钟 expiry/renew、窗口/页面/port 关闭和 app-wide quota。
 5. **失效与崩溃**：文件 replace/move/delete、权限/root/stamp/object/epoch/protocol 改变，Renderer/Main/utility/PDF worker 退出；旧 session 不重连、不切换对象、不泄漏资源，显式 reload 重新验证。
 6. **平台动作**：打包后的 macOS/Windows 对普通支持/不支持类型、无默认关联、路径消失、权限拒绝、Unicode/空格路径、system-open requested/failed、best-effort reveal；全部高风险 fixture 在 Main 调用前拒绝且无 override。
-7. **安全与隐私**：静态依赖守卫证明 Renderer 无 Node/Electron/path action/raw port，Main 无 DB/领域分类；CSP/navigation/new-window/download/IPC sender probe；禁网运行；日志/诊断不含内容、名称、路径、ID、URL、密码或 token。
+7. **安全与隐私**：静态依赖守卫证明 Renderer 无 Node/Electron/path action/raw port，Main 无 DB/领域分类；CSP/navigation/new-window/download/IPC sender probe；禁网运行；`TEST-PRIVACY-001` 证明无 app-owned 诊断/log/crash/telemetry artifact，Problem 不含内容、名称、路径、ID、URL、密码或 token。
 8. **无障碍**：PDF 页码/跳转/缩放/适合页面、文本/结构层、扫描件提示、图片说明、文本选择、动画暂停、失效/错误状态的键盘、焦点、可见文字和 live-region 验收。
 9. **G7**：在版本化参考设备/工作区记录 p50/p95/p99 初始 parse、页 render、range latency，Main/utility/Renderer event-loop delay、CPU、峰值 RSS、canvas/worker/blob/session 释放和重复开关稳定性；证明一个窗口/全应用上限不阻塞 PLAN 核心交互。
 10. **更新 fixture**：旧 session 在新 build 中失效；exact build/protocol/epoch 和 policy version 停止；Electron/Chromium/Node/PDF.js/asset digest 变化重跑上述矩阵。
@@ -396,7 +396,7 @@ ADR-06 只有在以下自动化与真实环境证据通过后才视为已落实�
 
 - **[ADR-07 快照](./ADR-07-snapshot-format-integrity-publication.md)**：保存原始资料库文件和可验证 manifest，不保存 preview cache、lease 或解析投影；本 ADR 不决定快照编码、压缩或发布。
 - **[ADR-08 恢复](./ADR-08-restore-activation-recovery.md)**：activation、RootGeneration 或 Workspace epoch 改变会撤销全部 session；本 ADR 不决定跨 DB/Library 激活和 rollback。
-- **ADR-09 诊断**：决定本地日志格式、保留和用户导出；不得放宽 §9.2 的内容、路径、秘密和自动上传禁令。
+- **[ADR-09 无生产诊断](./ADR-09-no-production-diagnostics.md)**：不建设本地日志、崩溃收集、遥测或用户诊断导出；§9.2 只定义当前 Problem 的 typed safe details。
 - **ADR-10 打包更新**：锁定 runtime/依赖、签名、更新器、rollback 与双平台发布集合，并执行 §10/§13 的 release gate。
 
 ## 15. 重新评审条件

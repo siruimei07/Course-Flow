@@ -6,6 +6,7 @@
 > 前置决议：[ADR-01](../architecture/adr/ADR-01-desktop-runtime-ui-boundary.md)、[ADR-02](../architecture/adr/ADR-02-process-thread-deployment.md)
 > 后续决议：[ADR-03 已接受](../architecture/adr/ADR-03-sqlite-active-data-transactions.md)
 > 结论类型：架构可行性与需求覆盖审计，不代替实现、打包或发布测试
+> 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已删除本研究当时假设的 diagnosticRef/日志/导出；错误只映射为当前 typed StructuredProblem。
 
 ## 1. 审计结论
 
@@ -65,7 +66,7 @@ First Principles 边界如下：
 - Watcher、文件替换和资源访问实现（ADR-05/06）；
 - snapshot manifest、Library 内容打包、digest、压缩与发布（ADR-07）；
 - 数据库 + Library 的 activation marker、目录切换、继续/回滚（ADR-08）；
-- 诊断内容和导出（ADR-09）；
+- 错误呈现与生产日志/导出边界（后续 ADR-09 已决定不建设后两者）；
 - 安装包、签名、公证和更新通道（ADR-10）。
 
 ## 4. 产品 Requirement 逐项审计
@@ -247,7 +248,7 @@ WAL + `synchronous=FULL` 满足本项目“commit 返回后不能在掉电时轻
 | `Q-EVOLVE-01` | 可实现，依赖 ADR-04 | SQLite 支持版本标识和事务迁移；未知新版停止策略尚未正式定义。 |
 | `Q-USABILITY-01` | 不受阻 | 本地短提交可支持设置流程；具体预算由 G7/用户旅程。 |
 | `Q-CONTINUITY-01` | 通过 | receipt、operation、follow-up、draft checkpoint 可持久；重启从 DB 恢复。 |
-| `Q-DIAG-01` | 通过但需错误映射 | SQLite result/extended code 映射稳定 ProblemCode + diagnosticRef；不得泄露原始异常作为业务分支。 |
+| `Q-DIAG-01` | 通过但需错误映射 | SQLite result/extended code 在 owner 内存中映射为稳定 ProblemCode + typed safe details 后丢弃原始异常；没有 diagnosticRef。 |
 
 ### 9.2 `G1–G7`
 
@@ -334,7 +335,7 @@ read-only backup/validation:
 - restore validation 只执行固定白名单查询、版本/完整性检查和必要 authorizer；
 - extension 永不因用户数据库内容开启；
 - 活动路径、staging 路径和 publish 路径使用 canonical identity 验证，不用字符串前缀比较安全边界；
-- 数据库原始错误只进入受限 diagnosticRef，不能把用户课程/成绩/路径内容自动上传。
+- 数据库原始错误只在 DATA owner 内存中用于一次映射，随后丢弃；不进入 diagnosticRef、持久日志或上传，也不携带用户课程/成绩/路径内容。
 
 ## 12. 实际证据与未验证项
 

@@ -166,10 +166,10 @@ Online Backup 期间活动 writer 可以继续提交。不同 source connection 
 - 候选数据库不得 `ATTACH` 到活动库，不执行候选自带的任意 extension 或不受信 SQL。
 - preview 和用户确认仍由 `MOD-PROTECT`/`MOD-WORKSPACE` 所有。
 - activation 前 Workspace 停止新命令、drain，并关闭 writer、backup 和 validation 连接。
-- SQLite transaction 只能保证数据库内部原子性，不能原子替换“数据库 + Library 文件 + 外部激活日志”。[ADR-08](./ADR-08-restore-activation-recovery.md) 定义跨文件 activation、继续与回滚；ADR-03 不把部分切换报告为成功。
-- activation 后必须重新打开、验证并执行 `FLOW-00`。不确定时只允许 ADR-08 证据支持的 resume、rollback 或 diagnostic。
+- SQLite transaction 只能保证数据库内部原子性，不能原子替换“数据库 + Library 文件 + 外部激活协调记录”。[ADR-08](./ADR-08-restore-activation-recovery.md) 定义跨文件 activation、继续与回滚；ADR-03 不把部分切换报告为成功。
+- activation 后必须重新打开、验证并执行 `FLOW-00`。不确定时只允许 ADR-08 证据支持的 resume 或 rollback；若两者都不安全则保持 recovery 并展示当前可证明状态。
 
-### 2.8 错误、模式与诊断
+### 2.8 错误、模式与当前问题
 
 DATA adapter 将 SQLite primary/extended result、操作阶段和实际 transaction state 映射为稳定 `StructuredProblem`；原始异常字符串不作为调用方分支。
 
@@ -178,7 +178,7 @@ DATA adapter 将 SQLite primary/extended result、操作阶段和实际 transact
 - 数据不可读、损坏、版本未知、COMMIT 无法判定或 activation 未决：`recovery`/`recovery-required`；
 - backup destination/发布失败：PROTECT degraded，活动 DB 与 PLAN 核心继续；
 - `PostCommitChange` 丢失、合并或重复：通过持久 follow-up/watermark 恢复；
-- 诊断可以记录受限的 SQLite code、operation/request/epoch 和版本，但不得自动上传课程、成绩、文件内容或原始路径。
+- 只有会改变当前问题分类、dataEffect 或允许动作的 SQLite code、operation/epoch 和版本可以进入封闭 typed problem details。原始异常映射后丢弃；按 [ADR-09](./ADR-09-no-production-diagnostics.md) 不建立持久诊断、日志或上传。
 
 ## 3. Architecture 映射
 
@@ -299,7 +299,7 @@ Drizzle、Kysely 或自建 repository 不能替代 CourseFlow 的 revision、rec
 - `ADR-TOPIC-06`（[ADR-06 已接受](./ADR-06-resource-preview-system-open.md)）：资源访问、预览与平台打开行为；
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest、Library 内容、digest、无压缩不可变目录、临时发布与保留；
 - `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：外部 activation journal、数据库/Library 切换、继续、回滚和启动恢复；
-- `ADR-TOPIC-09`：SQLite/operation/epoch 诊断、日志脱敏与用户导出；
+- `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：无生产诊断/日志/导出；只保留 typed StructuredProblem 与本 ADR 的正式正确性记录；
 - `ADR-TOPIC-10`：Electron 精确版本、打包、签名、公证、安装与更新。
 
 这些相邻与后续 ADR 不得绕过单一 DATA owner、放宽 COMMIT 成功边界、把云盘变成活动库、把 binding 类型泄露出 DATA，或把跨文件 activation 伪装成 SQLite 原子事务。

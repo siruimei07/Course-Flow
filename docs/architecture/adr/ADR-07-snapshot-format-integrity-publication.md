@@ -137,9 +137,9 @@ SnapshotId 使用 Node `crypto.randomUUID()` 生成的 RFC 4122 v4 UUID。operat
 - 值不因重试、重启、时钟回拨或时区改变而复用；
 - 它只决定同一 BackupSet 内已验证快照的 retention 顺序，不跨集合比较。
 
-同一 BackupSet 中若出现“相同 sequence、不同 SnapshotId”“相同 SnapshotId、不同 root digest”或与本机成功记录矛盾的组合，单个候选仍可独立验证，但集合产生 `identity-conflict`：不得自动判断最新或执行 retention，只能展示、诊断并由用户选择恢复候选。
+同一 BackupSet 中若出现“相同 sequence、不同 SnapshotId”“相同 SnapshotId、不同 root digest”或与本机成功记录矛盾的组合，单个候选仍可独立验证，但集合产生 `identity-conflict`：不得自动判断最新或执行 retention，只能展示当前冲突状态并由用户选择恢复候选。
 
-`.staging-*` 不具有 Snapshot 身份，也不进入恢复候选。nonce 只避免同一 operation 的临时名称冲突，不是授权。`snapshot-<SnapshotId>` 必须在发布前不存在；CourseFlow 串行化同一 BackupSet writer、使用随机身份并在 rename 前后检查冲突，绝不有意覆盖既有 final。已存在、同卷条件不满足或结果身份不符都停止并保留诊断。
+`.staging-*` 不具有 Snapshot 身份，也不进入恢复候选。nonce 只避免同一 operation 的临时名称冲突，不是授权。`snapshot-<SnapshotId>` 必须在发布前不存在；CourseFlow 串行化同一 BackupSet writer、使用随机身份并在 rename 前后检查冲突，绝不有意覆盖既有 final。已存在、同卷条件不满足或结果身份不符都停止并保留当前 Operation/Problem 状态。
 
 ## 5. 快照内容闭包
 
@@ -161,7 +161,7 @@ v1 不包含或引用：
 
 - 活动 `.db`、`-wal`、`-shm`；manifest/member locator 不保存活动数据库、Library 或备份目的地的绝对路径。完整 `workspace.sqlite` 中既有的设备路径/目的地/operation 字段仍可能作为历史元数据存在，但不构成 capability 或成员引用，恢复前必须失效并重新授权；
 - preview cache、PDF/image/text 解析投影、lease、MessagePort、Blob、canvas 或临时资源；
-- watcher event、可重建索引缓存、diagnostic 原始内容；
+- watcher event、可重建索引缓存；
 - symlink、junction/reparse link、special entry、外部 URL/文件、操作 staging/recovery/quarantine；
 - 平台 handle、权限 token、`dev/ino` 等设备对象证据作为跨设备定位；
 - archive、压缩流、共享 chunk 或另一 snapshot 的成员引用。
@@ -206,7 +206,7 @@ totals { memberCount, libraryFileCount, rawBytes }
 digest { algorithm: "sha-256", encoding: "lowercase-hex", value }
 ```
 
-applicationId、snapshot/manifest 数字版本、schemaLevel、actualRevision、backupSequence、count 和 byte length 使用 ADR-04 canonical 非负十进制字符串，不经过 JavaScript Number。limitsVersion、manifestEncoding、module formatVersion、markerFormat 与 pathKeyEncoding 使用各自所有者冻结的 canonical 标识 grammar。`createdAt` 使用规范 UTC RFC 3339 字符串，只供显示和诊断，不参与身份或 retention 顺序。WorkspaceId、BackupSetId、SnapshotId、LibraryRootId 和 FileId 使用 ADR-04 的 canonical lowercase UUID 文本；RootGeneration 使用 ADR-05 冻结的 canonical 表示，不能被目录名或时间替代。
+applicationId、snapshot/manifest 数字版本、schemaLevel、actualRevision、backupSequence、count 和 byte length 使用 ADR-04 canonical 非负十进制字符串，不经过 JavaScript Number。limitsVersion、manifestEncoding、module formatVersion、markerFormat 与 pathKeyEncoding 使用各自所有者冻结的 canonical 标识 grammar。`createdAt` 使用规范 UTC RFC 3339 字符串，只供显示，不参与身份或 retention 顺序。WorkspaceId、BackupSetId、SnapshotId、LibraryRootId 和 FileId 使用 ADR-04 的 canonical lowercase UUID 文本；RootGeneration 使用 ADR-05 冻结的 canonical 表示，不能被目录名或时间替代。
 
 `modules` 以 `moduleId` UTF-8 bytes 升序且无重复；它精确声明实际存在模块及其格式版本。database/application/schema、module format、Library marker/PathKey、operation/follow-up 与 snapshot/manifest/limits 是独立兼容轴，不能互相替代。
 
@@ -238,7 +238,7 @@ root digest 通过成员表中的 SHA-256 间接覆盖所有 member bytes；不�
 
 ### 6.4 安全属性
 
-SHA-256 用于检测随机损坏、短/长读、成员替换和部分同步。任何能修改目录的攻击者也能重算无密钥摘要，所以 UI、日志和文档不得称其为签名、认证、防恶意篡改或加密。
+SHA-256 用于检测随机损坏、短/长读、成员替换和部分同步。任何能修改目录的攻击者也能重算无密钥摘要，所以 UI、状态文案和文档不得称其为签名、认证、防恶意篡改或加密。
 
 MVP 不增加签名密钥、账户、密钥恢复或 snapshot-at-rest 加密。若产品以后需要保密或抵御恶意云端，必须新建安全 ADR，决定密钥所有权、算法、轮换、丢失恢复、旧快照和 UI；不能静默改变 v1。
 
@@ -296,7 +296,7 @@ queued
 6. 所有 member 完成后，从 staging 独立递归枚举，拒绝额外、缺失、重复、link/reparse/special 和越界项；重新计算 digest/size/totals，并与数据库/marker/FileId closure 比较。
 7. 根据实测结果生成 manifest，最后写入、file sync、close；再按 §6–7 从 raw bytes 开始执行完整 staging validator。
 
-所有 file sync/close 是发布前置条件，失败即不发布。平台 adapter 在支持时 best-effort flush staging/parent metadata；不支持或失败须进入诊断，但不能被描述成绝对掉电保证，也不能替代 final validator。
+所有 file sync/close 是发布前置条件，失败即不发布。平台 adapter 在支持时 best-effort flush staging/parent metadata；不支持或失败须返回当前 typed problem 和准确 dataEffect，但不能被描述成绝对掉电保证，也不能替代 final validator。
 
 ### 8.3 本地发布与成功记录
 
@@ -369,7 +369,7 @@ Retention 只在新 SnapshotId、root digest 与 `backupSucceededThrough` transa
 1. 持久创建 cleanup operation，记录 WorkspaceId、BackupSetId、SnapshotId、backupSequence、预期 root digest 和相对路径；
 2. 再次验证 final identity、closure、父目录 containment 和不属于保留前两份；
 3. 同父目录 rename 到唯一 `.quarantine-<OperationId>-<SnapshotId>`；此后它不再出现在 Restore 列表；
-4. 删除前重新枚举 quarantine；若出现额外、未知、link、身份冲突或越界，停止并进入 `cleanup-pending`，只暴露诊断与再次安全检查；
+4. 删除前重新枚举 quarantine；若出现额外、未知、link、身份冲突或越界，停止并进入 `cleanup-pending`，只显示当前状态并允许再次安全检查；
 5. 只有精确匹配 operation-owned closure 时递归删除，并持久完成状态；中断后从相同阶段恢复。
 
 cleanup 失败只报告 `cleanup-pending`，不回滚新 snapshot、success watermark 或本地正式数据。storage full 返回 `storage-full`；不得删除当前最后/倒数第二份已验证快照制造重试空间。终态 operation 精确拥有的 staging/quarantine 可按同样身份规则清理；名字相似但没有持久记录的目录视为 unknown。
@@ -405,7 +405,7 @@ cleanup 失败只报告 `cleanup-pending`，不回滚新 snapshot、success wate
 
 ADR-10 必须把 snapshot reader/writer、Node/SQLite/fs/crypto 运行时与双平台 packaged fixture 纳入同一更新集合。任何 Electron/Node/SQLite/OS 变化都重跑 Online Backup、sync/close、same-parent rename、partial cloud、old/current/future format、operation recovery、retention 和 G7；mixed build/protocol 不运行普通备份。
 
-## 12. 失败语义与诊断
+## 12. 失败语义与当前问题
 
 | 失败 | 结果 |
 |---|---|
@@ -419,7 +419,7 @@ ADR-10 必须把 snapshot reader/writer、Node/SQLite/fs/crypto 运行时与双�
 | retention/quarantine/delete 失败 | 新 snapshot 仍成功，状态 `cleanup-pending` |
 | unknown/future version | `incompatible` 或 `unknown-entry`；不自动删除或激活 |
 
-诊断至少记录稳定 code、operation phase、Workspace/BackupSet/Snapshot 的安全关联引用、版本、count/size bucket、耗时、dataEffect 和下一步；文件名、用户路径、内容、标签和原始数据库字段的收集/保留/导出由 ADR-09 决定。没有 ADR-09 前不得自动上传诊断。
+当前 Operation/StructuredProblem 只保存稳定 code、会改变恢复动作的 operation phase、安全关联引用、版本、count/size bucket、dataEffect 和下一步。snapshot manifest/success record 只保存本 ADR 明确要求的正确性字段。按 [ADR-09](./ADR-09-no-production-diagnostics.md)，不额外收集、保留、导出或上传文件名、用户路径、内容、标签、原始数据库字段、耗时历史或原始错误。
 
 ## 13. 依赖政策与未选择方案
 
@@ -485,7 +485,7 @@ ADR-07 只有在以下证据通过后才视为已落实：
 ## 16. 后续 ADR 边界
 
 - **[ADR-08 恢复激活](./ADR-08-restore-activation-recovery.md)**：决定 RestoreSession staging、跨 database/Library activation checkpoint、RootGeneration/epoch、continue/rollback 与启动恢复。ADR-07 只交付 verified raw snapshot，不把目录 rename 冒充跨位置激活。
-- **ADR-09 诊断**：决定本地日志格式、保留、脱敏和用户导出；不得把 snapshot 内容、文件名/路径或用户数据自动上传。
+- **[ADR-09 无生产诊断](./ADR-09-no-production-diagnostics.md)**：不建设本地日志、诊断导出、崩溃收集或遥测；Operation/Problem 只保留当前 typed safe fields，snapshot 正确性记录不扩张为排障历史。
 - **ADR-10 打包更新**：锁定 Electron/Node/SQLite、签名/公证、更新器、runtime manifest、发布回滚和更新前 safety-copy 生命周期，并执行 §11.3/§15 的 packaged gate。
 
 未来的签名、加密、archive/compression、incremental/dedupe 或 shared object store 都需要新的产品需求、格式版本、迁移/密钥/恢复政策和 ADR；不得作为 v1 的兼容实现细节加入。

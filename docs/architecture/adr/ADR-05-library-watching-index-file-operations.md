@@ -377,7 +377,7 @@ Workspace utility 的 LIBRARY 启动顺序固定为：
 | temp/recovery/目标组合矛盾或 RootGeneration 不匹配 | recovery-required + scan/user decision |
 | 未知 operation/marker/path-key version | LIBRARY recovery；不解释、不重置、不删除 |
 
-原始 OS/Node 错误只映射为稳定 ProblemCode；受限诊断可记录脱敏 platform code 与 diagnosticRef。UI 为满足产品需要可以显示当前真实根/文件路径，但普通 IPC 路径字符串不授予文件能力，诊断不自动上传。
+原始 OS/Node 错误只在 LIBRARY/PLATFORM owner 内存中映射为稳定 ProblemCode 后丢弃。只有会改变当前文案、dataEffect 或安全动作的 platform code 才能进入封闭 typed details；没有 diagnosticRef、持久日志或上传。UI 为满足产品需要可以通过正常投影显示当前真实根/文件路径，但普通 IPC 路径字符串不授予文件能力。
 
 ## 11. 软件更新与持久兼容
 
@@ -454,7 +454,7 @@ Chokidar 可归一化 add/change/unlink 和部分写入噪声，但仍不能替�
 
 ### 14.3 逐事件更新索引
 
-平台事件不是完整日志，无法覆盖 filename 缺失、overflow、关闭期间变化、目录重命名和 watcher 生命周期断裂，违反磁盘真相。
+平台事件不是完整变更历史，无法覆盖 filename 缺失、overflow、关闭期间变化、目录重命名和 watcher 生命周期断裂，违反磁盘真相。
 
 ### 14.4 Path/File object/content hash 作为 FileId
 

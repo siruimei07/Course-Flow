@@ -241,7 +241,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 - Operation 的计划、执行、retry、problem、terminal phase 变化；
 - DurableFollowUp 的 retry/完成状态；
 - `backupSucceededThrough` 推进、健康状态、workspaceEpoch、页面筛选或缓存；
-- 纯投影、watcher 提示和诊断记录。
+- 纯投影和 watcher 提示。
 
 如果一个 Operation 到达正式事实边界，该边界本身仍通过一个正式 commit 推进 Revision；后续物理阶段只推进 operation version。`backupNeededThrough` 只在正式 commit 或 migration 中推进。SQLite checkpoint 可能物理包含 DraftCheckpoint，但 snapshot success 只承诺正式事实、持久 operation/follow-up 和恢复协议；不兼容草稿必须可导出或丢弃，不能使正式快照无效。
 
@@ -370,7 +370,7 @@ digest preimage 必须包含：
 
 - `CommandId` 本身；
 - transport request/correlation ID、protocol version、workspaceEpoch；
-- timeout、日志、trace、性能与观测字段。
+- 开发/测试临时 timeout、trace、性能与观测字段；生产应用按 [ADR-09](./ADR-09-no-production-diagnostics.md) 不持久化这些数据。
 
 使用 Node core `createHash('sha256')` 计算 32-byte digest。receipt 保存 algorithm code、canonical encoding version 和原始 32-byte BLOB，而不是只存未标版本的 hex。
 
@@ -426,10 +426,10 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 | existing nonempty level 0、缺表/列/FK/index、篡改 level | `integrity`/`recovery-required`；不自动补表或重建 |
 | integrity/FK/STRICT/CHECK/关键领域验证失败 | `recovery-required`；不开放普通读写 |
 | migration 某级失败或中断 | 保持最后已提交 level 与 safety copy；重开后从该 level 继续或显式恢复 |
-| ADR-08 external activation journal 未决 | `recovery-required`；只允许证据支持的 resume/rollback/diagnostic |
+| ADR-08 external activation journal nonterminal、损坏或不兼容 | `recovery-required`；只允许证据支持的 resume/rollback；若都不安全则不提供物理动作 |
 | IPC protocol/build mismatch | seam unavailable；不启动 Workspace 业务能力 |
 
-稳定问题至少携带 `code`、`scope`、`dataEffect`、`affectedCapabilities`、`actual/required version`、`diagnosticRef` 与可执行 next actions。原始 SQLite/OS 异常和真实路径只进入受限、脱敏诊断，不作为 UI 分支或自动上传内容。
+稳定问题至少携带 `code`、`scope`、`dataEffect`、`affectedCapabilities`、`actual/required version` 与可执行 next actions。原始 SQLite/OS 异常和真实路径只在 owner 内存中用于映射，随后丢弃；不持久化、不作为 UI 分支或上传内容。
 
 ## 12. Architecture 映射
 
@@ -457,7 +457,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 | `FLOW-02` | normalized facts与窗口化派生投影；不保存第二份真相 |
 | `FLOW-03` | verified Library index 与 typed FileOperation；路径/Watcher 留 ADR-05 |
 | `FLOW-04` | backup watermark、actual DB level/revision、manifest compatibility inputs |
-| `FLOW-05` | candidate stage、旧 level migration、完整验证；外部激活日志与切换见 [ADR-08](./ADR-08-restore-activation-recovery.md) |
+| `FLOW-05` | candidate stage、旧 level migration、完整验证；外部激活协调记录与切换见 [ADR-08](./ADR-08-restore-activation-recovery.md) |
 | `FLOW-06` | ATTEND/GRADE 从同一 Revision 的 exact facts 派生 |
 
 ### 12.3 Quality 与 Gate
@@ -481,7 +481,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 
 - 升级是非对称的：旧应用不能打开已升级库；回退依赖迁移前副本，迁移后新增数据不会自动合并回旧副本；
 - 每个公开 schema level、intent schema 和 digest encoding 都形成长期兼容义务；
-- 没有 migration ledger，诊断依赖精确 user_version、code-owned chain、manifest 和 fixture；
+- 没有 migration ledger；失败分类与兼容性证明依赖精确 user_version、code-owned chain、manifest 和 fixture；
 - STRICT 绑定 SQLite 最低版本，并要求每次 Electron 更新重新验证 bundled SQLite；
 - 关系 DDL 与显式 migration 比通用 JSON 更冗长，但错误和 ownership 更可见；
 - application ID 在首发前仍有一次官方登记/冲突复核门；
@@ -509,7 +509,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 
 ### 14.5 SemVer、SQLite `schema_version` 或 feature flags 作为 schema level
 
-产品版本、SQLite 内部 schema cookie 和运行时 capability 是不同轴。混用会使 restore、诊断和逐级 migration 无法判定。
+产品版本、SQLite 内部 schema cookie 和运行时 capability 是不同轴。混用会使 restore、失败分类和逐级 migration 无法判定。
 
 ### 14.6 浮点事实
 
@@ -558,7 +558,7 @@ CourseFlow 没有跨语言网络互操作需求。完整 RFC 8785 profile 仍需
 - `ADR-TOPIC-06`（[ADR-06 已接受](./ADR-06-resource-preview-system-open.md)）：预览与系统打开、资源授权和 platform handle；
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest 的精确编码、目录布局、压缩、digest、临时发布和保留；
 - `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：external activation journal、数据库/Library 可恢复的逻辑全有或全无切换、continue/rollback；
-- `ADR-TOPIC-09`：本地日志、diagnosticRef、脱敏与用户导出；
+- `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：无生产日志、diagnosticRef 或诊断导出；StructuredProblem 只携带 typed safe details；
 - `ADR-TOPIC-10`：Electron/Node/SQLite 精确版本、application_id 首发登记门、安装更新、safety-copy 保留/清理、签名与双平台发布。
 
 这些下游 ADR 可以细化自己的物理协议，但不得改变本 ADR 的 schema level 单一真相、forward-only 数据政策、unknown-future stop、exact DTO/digest 或“无部分成功”边界。

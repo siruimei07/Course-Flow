@@ -27,7 +27,7 @@
 - `FLOW-03` 已规定：根切换先 preview/验证、应用内 mutation 先持久化 `planned`、平台动作后标 `disk-applied` 并验证、最后提交索引；外部变化经 scan 产生 ChangeSet；资源访问要重新验证 containment、存在性、权限和 stamp。[FLOW-03](../architecture/MODULE_CONTRACTS.md#84-flow-03--资料库对账与受验证资源访问)
 - 因此“完成”不是收到事件、文件 API 返回或数据库有一行索引，而是：该文件在当前 root 内、其路径与磁盘对象仍通过验证，并且对应的索引 ChangeSet 已提交；否则保留明确 `unverified`、`missing`、`disk-applied` 或 `reconciliation-required` 状态。
 
-## 3. 资料事实：Node 与操作系统的 watcher 不是日志
+## 3. 资料事实：Node 与操作系统的 watcher 不是完整变更历史
 
 ### 3.1 `fs.watch` 的实际语义
 
@@ -191,7 +191,7 @@ W1 与 W2 都必须配合 W3 的“按需扫描”最低能力；真正待选的
 | 扫描中出现 Node 可观察 symlink/junction、特殊类型、分类/权限失败、filename `null`、watcher abort/error、Windows notification overflow | 明确 unverified/scan-required/problem；不遗失旧上下文，不报告 complete；恢复后全树收敛 | `B-FILE-005/013`、`TEST-LIBRARY-003/006`、`TEST-FLOW-03-LIBRARY-RECOVERY` |
 | watcher 运行中 root 被移动/删除/同名重建，或应用关闭期间发生批量 move | watcher 只触发 hint/error；重新安装 + scan；不按事件顺序虚构操作 | `TEST-LIBRARY-003`、`TEST-PLATFORM-002` |
 | Copy 的临时写入前/中/后、发布名冲突、verify 后 index commit 前崩溃 | planned / disk-applied / reconciliation-required；重启不覆盖、重扫后可 resume/compensate | `B-FILE-004/009/011`、`TEST-LIBRARY-002/004` |
-| same-volume rename、`EXDEV` move 的 copy 成功/删除源失败、replace 的每种 Windows error、delete 被拒 | 不报完整成功；索引只表明实测磁盘状态，两个副本/原名/备份都可诊断 | `TEST-LIBRARY-002/004` |
+| same-volume rename、`EXDEV` move 的 copy 成功/删除源失败、replace 的每种 Windows error、delete 被拒 | 不报完整成功；索引只表明实测磁盘状态，两个副本/原名/备份状态都可解释并恢复 | `TEST-LIBRARY-002/004` |
 | 外部同名替换、大小写变化、Unicode 等价但不同 code points、hard link、对象 ID 不可得 | 不用字符串/name/hash 单独判为同一 FileId；进入 verified new/missing/unverified/decision | `TEST-LIBRARY-003/006`、`Q-TRUTH-01` |
 | `accessResource` 前后替换/移动文件、权限丢失、stamp 过期 | 重新 containment + open/stat 验证；返回 `resource-stale`/permission，绝不打开旧路径对象 | `B-FILE-009/010`、`TEST-LIBRARY-007`（ADR-06 实现预览/open） |
 | Course rename、非空 Category move、root change 的 commit/follow-up/restart | PLAN 成功不被阻塞；Library pending/reconcile 可见，CustomTag 不丢，任一时刻只有一 current root | `B-FILE-002/003/006/007`、`TEST-LIBRARY-005` |

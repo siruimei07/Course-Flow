@@ -4,6 +4,7 @@
 - 状态：研究记录，含推荐但**不构成 ADR 决议**
 - 决策主题：`ADR-TOPIC-07`
 - 资料方法：仅引用标准、操作系统/API 官方文档或上游项目源码/文档；未使用二手文章或旧实现。
+- 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本文关于“留给 ADR-09”的历史表述由该负向决议收口。
 
 ## 1. First-principles 边界与已有契约
 
@@ -18,7 +19,7 @@
 - ADR-05 已定义 Library checkpoint 的 marker、RootGeneration、verified active/unassigned records、content source 与版本；不可把 platform ObjectEvidence 当作跨设备/快照的永久身份。它把 manifest encoding、content digest、压缩、临时发布、保留和 pending operation 项明确留给 ADR-07。[ADR-05 §12](../architecture/adr/ADR-05-library-watching-index-file-operations.md#12-后续-adr-边界)。
 - ADR-06 要求快照保存原始 Library 文件和可验证 manifest，而**不**保存 preview cache、lease 或解析投影；其 runtime/version 门归 ADR-10。[ADR-06 §14](../architecture/adr/ADR-06-resource-preview-system-open.md#14-后续-adr-边界)。
 
-本 ADR 因而决定：可独立验证的快照容器/目录、manifest canonical bytes 与完整性覆盖、暂存到发布、保留/清理和其 failpoint。它**不**决定 DATA schema/migration（ADR-04）、文件扫描与资料库身份（ADR-05）、预览（ADR-06）、restore 的 staging/activation/continue/rollback（ADR-08）、日志/导出（ADR-09），也不冻结 Electron/Node 版本、签名、更新器或发布策略（ADR-10）。
+本 ADR 因而决定：可独立验证的快照容器/目录、manifest canonical bytes 与完整性覆盖、暂存到发布、保留/清理和其 failpoint。它**不**决定 DATA schema/migration（ADR-04）、文件扫描与资料库身份（ADR-05）、预览（ADR-06）、restore 的 staging/activation/continue/rollback（ADR-08），也不冻结 Electron/Node 版本、签名、更新器或发布策略（ADR-10）；当时留给 ADR-09 的日志/导出问题已由后续决议以“不建设”解决。
 
 ## 2. 一手事实与设计影响
 
@@ -28,7 +29,7 @@ SQLite Online Backup 的 destination 是 source database 在 backup 完成时的
 
 资料库是独立文件树，不能由 SQLite transaction 原子冻结。故对每个 checkpoint content source，最小可证明步骤是：取 DB index record/stamp → 打开已验证普通文件 → 流式复制并算 digest → close/sync destination → 再取得 source stamp/对象/containment。前后证据任一不匹配、文件缺失或权限失败，整个 checkpoint 不能声明完整；应丢弃 staging 或留下可恢复 operation，保留旧 published snapshot 与 pending watermark。Node `copyFile` 也只保证尽力清除失败时已创建的目标，不能作为“失败后无残留”的协议替代。[Node `copyFile`](https://nodejs.org/api/fs.html#fspromisescopyfilesrc-dest-mode)。
 
-因此所谓 Library 闭包应是：数据库副本所含 `LibraryRecord`/mapping/tag 与 manifest 声明的 `FileId → immutable snapshot member` 一一对应，外加根 marker 的原始 bytes/版本；包括 active 和 unassigned ordinary files，排除 links、special entries、operation-owned temp/recovery、未验证/missing 与 preview transient。历史绝对根路径和 node `dev/ino` 只能作历史诊断，恢复到新设备时仍必须重新授权/扫描，不能成为内容定位依据。
+因此所谓 Library 闭包应是：数据库副本所含 `LibraryRecord`/mapping/tag 与 manifest 声明的 `FileId → immutable snapshot member` 一一对应，外加根 marker 的原始 bytes/版本；包括 active 和 unassigned ordinary files，排除 links、special entries、operation-owned temp/recovery、未验证/missing 与 preview transient。历史绝对根路径和 node `dev/ino` 只能作为待失效的历史设备元数据，恢复到新设备时仍必须重新授权/扫描，不能成为内容定位依据。
 
 ### 2.2 哈希能证明完整性，不能凭空提供身份认证或保密
 
@@ -126,7 +127,7 @@ limits: { memberCount, totalBytes }
 4. 对已写 members 再从 staging 枚举：拒绝 unexpected/member mismatch/link/special/size/count/total-byte 越限，重算 SHA-256；从实测结果产生 canonical manifest 和 root digest，写入、sync、close；再验证 manifest 自己可重新 canonicalize 且完整 closure 与 DB/library metadata 相符。
 5. 可选择在 staging 父目录上执行平台可用的目录 metadata flush；Node 跨平台不能承诺该能力，flush 不支持/失败必须记录，不能伪称断电强保证。仅在整个 staging 已验证后，same-parent `rename` 为唯一 final name；`rename` 成功是本机 namespace 的 published commit point。
 6. rename 后重新打开 final directory，执行同一 full validator。验证成功才在 DATA transaction 中持久 `SnapshotId`/last-success/`backupSucceededThrough=actualRevision`。如果此 transaction 或响应在 rename 后丢失，重启时以 OperationId/SnapshotId 扫描/验证已发布目录，幂等补记 success；无法验证则不推进 watermark。
-7. 只有新 snapshot 已发布、DB success commit 已完成后才发起 retention cleanup。cleanup 失败不回滚已发布快照/水位，只是明确可诊断的 storage cleanup pending。
+7. 只有新 snapshot 已发布、DB success commit 已完成后才发起 retention cleanup。cleanup 失败不回滚已发布快照/水位，只形成明确、可操作的 storage cleanup pending。
 
 此顺序使「rename 后但 watermark 前崩溃」成为可收敛的安全重复备份，而不是丢失唯一可恢复副本或声称未写入。
 
@@ -156,7 +157,7 @@ limits: { memberCount, totalBytes }
 | staging member/manifest 部分写、同步失败、manifest encode/hash mismatch、extra/duplicate/path traversal/Unicode collision、size/count/total limit 超出 | full validator stop；不得发布/选择 restore；不执行内容 | `TEST-PROTECT-002/004`、`G4` |
 | final rename 前 kill、rename 失败、cross-volume/已存在 target、rename 后 kill/DB response 丢失 | 前者没有 published snapshot；后者 restart 以 OperationId/SnapshotId full-verify 后幂等记录或保持 pending，绝不双计/伪成功 | `TEST-PROTECT-002/003`、`TEST-FLOW-04-BACKUP-FAILURE` |
 | 云端/另一设备先见 final 的部分文件、同步延迟/冲突、恶意或损坏 manifest/bytes | 只能显示 unavailable/invalid；所有 digest/SQLite/closure 校验成功才进入 restore preview | `TEST-PROTECT-004/005`、`Q-PROTECT-01` |
-| retention 前/中/后 kill、删除被拒、存储满、staging orphan/unknown user directory | 不回滚已确认新快照；保留至少一个 verified snapshot；未知目录不自动删；状态可诊断/恢复 | `TEST-PROTECT-003/005` |
+| retention 前/中/后 kill、删除被拒、存储满、staging orphan/unknown user directory | 不回滚已确认新快照；保留至少一个 verified snapshot；未知目录不自动删；状态可解释/恢复 | `TEST-PROTECT-003/005` |
 | restore candidate current/old/future format | ADR-04 stage/migrate/validate；ADR-08 activation 前原 workspace unchanged，activation 后只 continue/rollback | `TEST-PROTECT-004/005`、`TEST-FLOW-05-RESTORE-RECOVERY` |
 
 G7 还应以版本化参考工作区测量：DB backup、每个/总 content hash、manifest validation、publish/cleanup latency、utility event-loop delay、峰值 RSS/磁盘占用与失败恢复时间。备份后台工作不得等待核心 commit 或阻塞 PLAN；无法在 macOS 或 Windows packaged runtime 复现的 fsync/rename/cloud destination 行为必须明确标为未验证。

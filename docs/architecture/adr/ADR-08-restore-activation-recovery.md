@@ -7,6 +7,7 @@
 - 上游规范：[PRD](../../product/PRD.md)、[MVP_SCOPE](../../product/MVP_SCOPE.md)、[User Flow](../../superpowers/specs/2026-08-17-user-flow-design.md)、[UI 规格](../../superpowers/specs/2026-08-18-courseflow-ui-wireframes-page-spec-design.md)、[Architecture](../ARCHITECTURE.md)、[Module Contracts](../MODULE_CONTRACTS.md)
 - 调研证据：[恢复激活、回滚与启动恢复一手资料研究](../../research/adr-08-restore-activation-recovery-research.md)
 - 讨论记录：[ADR-08 Superpowers 设计讨论](../../superpowers/specs/2026-08-21-adr-08-restore-activation-recovery-design.md)
+- 后续约束：[ADR-09 无生产诊断、日志与支持包](./ADR-09-no-production-diagnostics.md)
 
 ## 1. 背景
 
@@ -29,7 +30,7 @@ ADR-03 已决定 SQLite WAL + `synchronous=FULL`、单 writer、Online Backup �
 - 新工作区何时才算 succeeded，旧副本与安全集何时可清理；
 - v1 如何为未来资源留出有约束的版本升级，而不预建通用 2PC/plugin 框架。
 
-`ATTEMPT.md` 是归档旧实现证据，不是恢复目标或实现来源。本文批准技术设计，不授权开始实现，也不替 ADR-09/10 决定诊断保留、绝对平台位置、打包或更新。
+`ATTEMPT.md` 是归档旧实现证据，不是恢复目标或实现来源。本文批准技术设计，不授权开始实现，也不替 ADR-10 决定绝对平台位置、打包或更新。后续 [ADR-09](./ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本 ADR 的 activation journal、receipt 与 fingerprint 仍是确定继续/回滚所必需的正式正确性协议。
 
 ### 1.1 追溯边界
 
@@ -39,7 +40,7 @@ ADR-03 已决定 SQLite WAL + `synchronous=FULL`、单 writer、Online Backup �
 - Interface：`IF-WORKSPACE`、`IF-RESTORE-SESSION`、`IF-IMPACT-PREVIEW`、`IF-OPERATION-HANDLE`、`IF-STRUCTURED-PROBLEM`、`IF-DATA-STAGE-ACTIVATE`、`IF-DATA-OPERATION`、`IF-LIBRARY-MANIFEST` 与窄 `IF-FILESYSTEM`；
 - Flow：`FLOW-05`，启动依赖 `FLOW-00`，Library 重开对账依赖 `FLOW-03`，安全集/恢复后快照与 `FLOW-04` 生命周期相邻但不混用；
 - Quality：`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-LOCAL-01`、`Q-ACCESS-01`、`Q-PORTABLE-01`、`Q-RESPOND-01`、`Q-EVOLVE-01`、`Q-CONTINUITY-01`、`Q-DIAG-01`；
-- Test：`TEST-PROTECT-004–006`、`TEST-DATA-005/006`、`TEST-WORKSPACE-003–005`、`TEST-LIBRARY-001/002/006`、`TEST-PLATFORM-002/004`、`TEST-FLOW-00-LIFECYCLE`、`TEST-FLOW-03-LIBRARY-RECOVERY`、`TEST-FLOW-05-RESTORE-RECOVERY` 与 `G4/G6/G7`。
+- Test：`TEST-PROTECT-004–006`、`TEST-DATA-005/006`、`TEST-WORKSPACE-003–005`、`TEST-LIBRARY-001/002/006`、`TEST-PLATFORM-002/004`、`TEST-PRIVACY-001`、`TEST-FLOW-00-LIFECYCLE`、`TEST-FLOW-03-LIBRARY-RECOVERY`、`TEST-FLOW-05-RESTORE-RECOVERY` 与 `G4/G6/G7`。
 
 稳定 ID、可观察产品状态和逻辑接口语义仍由上游文档拥有；本文是恢复物理机制、格式与顺序的唯一技术真相。
 
@@ -51,7 +52,7 @@ CourseFlow v1 采用**深 Restore Module + RestoreSession 专属安全恢复集 
 2. welcome 和设置恢复使用同一个 `IF-RESTORE-SESSION`；调用者不传 `welcome | replace` 模式，Module 从当前活动真相推导旧副本与安全需求。
 3. 候选选择/迁移验证与 activation staging 是两个阶段。前者在 preview 前完成并不修改备份原件；后者在 confirm 与安全集之后，把完整候选复制到最终目标所在卷的 sibling。
 4. 当前 DATA 与已配置 Library 均健康时，先创建完整、不可变、RestoreSession 专属的 `RestoreSafetySetV1`。它不是 Snapshot/BackupSet，不计入最近两份保留。
-5. 当前 DATA 损坏/只读或已配置 Library 无法完整读取时，只有原始 DATA/Library/诊断证据可保持不变且稳定控制位置可写，才允许带明确警告的 `restricted-waived`；否则停止。
+5. 当前 DATA 损坏/只读或已配置 Library 无法完整读取时，只有原始 DATA/Library/恢复协调证据可保持不变且稳定控制位置可写，才允许带明确警告的 `restricted-waived`；否则停止。
 6. 最终确认绑定候选、Library target、impact digest，以及健康 current 的 revision/RootGeneration 或 restricted current 的 raw evidence fingerprint。确认后立即进入 maintenance；checkpoint 前可取消，外部变化要求重新 preview。
 7. `ActivityControlRoot` 位于不会随 DATA slot、LibraryRoot 或 backup destination 一起切换的稳定本地应用控制区域。确切 macOS/Windows 基址留给 ADR-10，但其跨更新稳定、先于 DATA 打开可读、不得位于云盘/Library/可交换 DataSlot 是 ADR-08 硬约束。
 8. DATA candidate/rollback 与活动 DataSlot 同父同卷；Library candidate 与最终 LibraryRoot 同父同卷。从备份卷到 sibling staging 只用 checkpoint 前流式 copy + full validation，activation 永不 cross-volume copy-delete。
@@ -76,7 +77,7 @@ PROTECT 是以下语义的唯一所有者：
 - `RestoreSafetySetV1` 身份、格式、验证、保留与清理资格；
 - `ActivityControlRoot` 中的 session/plan/journal 所有权与 hostile validation；
 - activation/rollback 全局顺序、checkpoint、启动分类和 success/rolled-back/cleanup-pending；
-- public problem 映射和不泄露路径的 diagnosticRef。
+- public ProblemCode、dataEffect、typed safe details 与 allowed actions 映射。
 
 PROTECT 不直接读写领域表、不解释 PathKey/FileId、SQLite WAL 或平台错误。它通过 owner 接口取得 typed evidence 并编排。
 
@@ -153,7 +154,7 @@ rollback
 
 1. `start` 携带 canonical `CommandId` 并幂等创建 RestoreSessionId/OperationId；其余 command 显式携带 RestoreSessionId、canonical `CommandId` 与 expected `SessionVersion`。OperationHandle 返回对应的 RestoreSessionId、OperationId 与可查询状态。
 2. 同 CommandId + 同 canonical payload 的重试返回同一 OperationHandle/结果；不同 payload 复用返回 conflict。
-3. `candidateRef`、`targetRef`、`diagnosticRef` 是不透明、短期、会话绑定引用；Shell DTO 不包含绝对路径。
+3. `candidateRef`、`targetRef` 是不透明、短期、会话绑定引用；Shell DTO 不包含绝对路径。
 4. `previewToken` 绑定 candidate identity/root digest、current state、target、protection mode、impact digest 与 SessionVersion。健康 current state 使用 WorkspaceId/Revision 与 LibraryRootId/RootGeneration；restricted-waived 使用显式 unavailable/damaged variant 和 owner 产生的 raw evidence fingerprint，不用空值或猜测 identity。
 5. `query` 无副作用。`inspectBeforeWorkspaceOpen` 可以验证并追加唯一可证明的 observed/committed bookkeeping，但不得改变 DATA 或 Library。
 6. 所有执行都返回 OperationHandle；不为“通常很快”增加同步物理 API。
@@ -163,7 +164,7 @@ rollback
 
 - `clear`：没有 nonterminal activation，可继续 FLOW-00；
 - `pre-checkpoint-session`：原活动真相未改变；有旧工作区时可打开原工作区，没有旧工作区时保持 welcome，并显示 retry/cancel；
-- `recovery-required`：普通打开禁止，包含 allowed `resume | rollback | diagnostic` 子集；
+- `recovery-required`：普通打开禁止，包含 allowed `resume | rollback` 子集；若为空则只显示当前可证明状态；
 - `cleanup-pending`：已 committed，可正常打开新工作区，保护能力 degraded。
 
 ## 5. RestoreSession 与 checkpoint 前协议
@@ -260,7 +261,7 @@ PROTECT 按卷计算并显示保守峰值：
 
 - `required(SafetySetId)`：当前 DATA 与已配置 Library 均健康，完整安全集已验证；
 - `not-required`：没有旧活动 DATA/Library 可保护；
-- `restricted-waived(evidenceRef, warningVersion)`：旧 DATA 损坏/只读或已配置 Library 无法完整读取，因而不能形成完整安全集，但原始 DATA、Library 和诊断证据保持原位不变，稳定控制区域仍可写，用户确认独立警告。
+- `restricted-waived(evidenceRef, warningVersion)`：旧 DATA 损坏/只读或已配置 Library 无法完整读取，因而不能形成完整安全集，但原始 DATA、Library 和恢复协调证据保持原位不变，稳定控制区域仍可写，用户确认独立警告。
 
 `restricted-waived` 不是“忽略错误”：
 
@@ -310,7 +311,7 @@ ADR-10 将为每个平台选定绝对 app-local base path；ADR-08 规定逻辑�
 - 它不得位于 LibraryRoot、backup destination、known cloud/remote location 或会被恢复替换的目录；
 - DataSlot 是一个完整目录，包含关闭的 `workspace.sqlite` 及 owner 认可的 sidecar 状态；不交换仍在使用的单个 DB 文件；
 - 所有 operation-owned sibling 名称携带 OperationId/nonce，且开始前必须不存在或与同 operation 的已验证记录精确匹配；
-- 用户路径不进入 Shell DTO、普通 projection 或 diagnostic export。
+- 用户路径不进入 Shell DTO、普通 projection 或任何支持/诊断导出；后者按 ADR-09 不存在。
 
 ### 7.2 candidate staging
 
@@ -366,7 +367,7 @@ planDigest
 
 `planDigest` 是 64 个 lowercase hex 字符：复制完整 plan object、删除 `planDigest` 字段，对其余对象执行 `courseflow-canonical-json-v1`，再计算 SHA-256。不得把该字段保留为空字符串，也不得对人类格式化后的文件 bytes 计算。
 
-`privateLocations` 是本机恢复所需的内部 capability/fingerprint 记录，不进入公共 DTO/诊断。路径字符串本身不是身份；owner fingerprint、Workspace/Root identities、closure digest 与现场验证共同决定动作合法性。mtime、标题或目录顺序不得代替 identity。
+`privateLocations` 是本机恢复所需的内部 capability/fingerprint 记录，不进入公共 DTO 或 StructuredProblem。路径字符串本身不是身份；owner fingerprint、Workspace/Root identities、closure digest 与现场验证共同决定动作合法性。mtime、标题或目录顺序不得代替 identity。
 
 v1 participant set 固定为 database 与 optional library。`library: absent` 只表示发行物没有 Library participant；Library participant 内的 candidate/old `absent` 表示本次恢复结果或旧状态没有根。不得在 v1 plan 添加 unknown participant、任意 action DAG、动态 hook 名称或脚本。
 
@@ -490,7 +491,7 @@ inspection 不 repair SQLite、不 move/copy/delete DATA/Library，也不为了�
 | candidate DATA 有 matching success receipt，plan/磁盘/最后 precommit record 全匹配，外部 terminal 丢失 | 完成 committed 后普通启动 | 追加/re验 `committed` | 无 |
 | candidate invalid，old 或 SafetySet valid | recovery，推荐 rollback | 不做物理 rollback | rollback |
 | old invalid，candidate valid | recovery，推荐 resume | 不做物理 resume | resume |
-| old/candidate/safety identities 冲突、journal 损坏/越限/未知版本、物理结果无法唯一分类 | diagnostic recovery | 无 | diagnostic；不猜测 |
+| old/candidate/safety identities 冲突、journal 损坏/越限/未知版本、物理结果无法唯一分类 | recovery，显示当前可证明状态 | 无 | 无物理动作；不猜测 |
 | committed，只有 transient cleanup 失败 | 正常打开新工作区，PROTECT degraded | 重试无歧义 cleanup 可以是后台 operation | retry cleanup |
 
 外部 `committed` 存在但 candidate DATA success receipt 缺失/不匹配是 identity conflict，不能按 terminal 文件单独宣称成功。
@@ -564,7 +565,7 @@ PROTECT 只可处理本 operation 精确登记且 identity/root digest 一致的
 - 其他 RestoreSession、BackupSet 或用户目录；
 - 未配置 backup 时尚未由用户明确选择 cleanup 的安全恢复点。
 
-## 14. Problem 与诊断边界
+## 14. Problem 与正确性记录边界
 
 复用现有稳定 public ProblemCode，不把每个物理动作变成 Shell API：
 
@@ -574,18 +575,20 @@ PROTECT 只可处理本 operation 精确登记且 identity/root digest 一致的
 | checkpoint 后 | `activation-pending`、`rollback-required`、`identity-conflict`、`incompatible-version`、`recovery-required` |
 | succeeded 后 | `cleanup-pending` |
 
-每个 StructuredProblem 必须准确给出 scope、dataEffect、affectedCapabilities、allowedActions、RestoreSessionId/OperationId 和 diagnosticRef。Shell 只按这些字段呈现。
+每个 StructuredProblem 必须准确给出 scope、dataEffect、affectedCapabilities、allowedActions、RestoreSessionId/OperationId 和由 ProblemCode owner 定义的 typed safe details。Shell 只按这些字段呈现，不存在 diagnosticRef 或独立“查看诊断”动作。
 
-ADR-08 的最小 diagnostic payload 可以包含：
+只有会改变当前状态说明或安全动作的 Problem details 可以包含：
 
 - plan/journal/receipt format version；
 - OperationId/SessionId 的受控表示；
 - public code 与内部非路径 subcode；
 - 最后已验证 sequence/kind、expected/observed state category；
-- participant kind、计数/size bucket、耗时、platform/runtime version；
+- participant kind、计数/size bucket；
 - integrity/permission/capacity/identity check 的布尔/枚举结果。
 
-不得包含真实路径、课程/文件名称、PathKey、文件内容、数据库行、标签、URL、token 或原始系统错误文本；不得自动上传。保留期限、用户导出与 redaction 格式由 ADR-09 决定。
+ActivationPlan、journal 与 receipts 仍按本 ADR 保存其完整 canonical 白名单字段，因为启动分类、幂等、继续与回滚依赖它们；它们不是排障事件历史。Problem 或这些正式记录都不得追加真实路径、课程/文件名称、PathKey、文件内容、数据库行、标签、URL、token、耗时历史、stack 或原始系统错误文本。
+
+按 [ADR-09](./ADR-09-no-production-diagnostics.md)，不建立额外本地日志、崩溃收集、遥测、支持包、保留策略或诊断导出，也不自动上传。原始错误在 owner 内存中完成映射后丢弃。
 
 ## 15. 失败注入与验收证据
 
@@ -686,7 +689,7 @@ Node copy 非原子，Windows 明确可 copy 成功而 delete 失败；会破坏
 
 ### 16.7 自动 repair/猜测
 
-mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”不能证明完整 pair。未知/冲突/无法分类只给 diagnostic，不重置、repair、删除或择新。拒绝。
+mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”不能证明完整 pair。未知/冲突/无法分类只显示当前可证明状态，不重置、repair、删除或择新。拒绝。
 
 ## 17. 后果
 
@@ -721,7 +724,7 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 4. stage/full validation/fingerprint；
 5. commit order 与为何不破坏 DATA commit-last；
 6. rollback/quarantine/startup classification；
-7. preview/confirmation/maintenance/diagnostic；
+7. preview/confirmation/maintenance/current problem/allowed actions；
 8. v1 read/recovery compatibility；
 9. Requirement/FLOW/Q/TEST 与两平台 evidence。
 
@@ -739,9 +742,9 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 - 产品改变 safety 保留、success、rollback 或无部分成功承诺；
 - packaged failpoint/power-loss evidence 证明当前 journal/flush/order 不足。
 
-### 18.3 仍待其他 ADR
+### 18.3 相关与待决 ADR
 
-- `ADR-TOPIC-09`：诊断事件格式、保留、用户导出、redaction 与隐私；
+- `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：不建设生产诊断、日志、崩溃收集、遥测或支持包；本 ADR 的正式恢复协调记录继续按白名单服务于正确性；
 - `ADR-TOPIC-10`：ActivityControlRoot/DataSlotsParent 的绝对平台路径、bundled Electron/Node/SQLite、代码签名、公证、安装/更新、平台 filesystem capability 与 packaged G6/G7 gate。
 
 ## 19. 覆盖审阅结论
@@ -767,4 +770,4 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 - 已用三种独立模块边界方案进行 Design It Twice 比较，并选择深 Restore Module。
 - 已逐层完成 Requirement → MOD → IF → FLOW → Q → TEST 覆盖审阅。
 - 当前没有运行应用、Electron packaged build、真实 APFS/NTFS、kill/power-loss 或性能实验；§15 列出的是实现后必须提供的证据，不是已通过结果。
-- 本 ADR 不授权实现、implementation plan、新依赖、ADR-09 或 ADR-10。
+- 本 ADR 不授权实现、implementation plan、新依赖或 ADR-10。

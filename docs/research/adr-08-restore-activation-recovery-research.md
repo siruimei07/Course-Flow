@@ -4,6 +4,7 @@
 > 日期：2026-08-21
 > 范围：Node/Electron 文件系统语义、SQLite WAL/关闭/备份、POSIX/macOS/Windows rename 与持久化边界
 > 证据政策：仅引用上游项目、标准组织或操作系统厂商的一手资料；检索摘要与 `ATTEMPT.md` 不作为技术依据
+> 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；ADR-08 journal 仍是正式恢复正确性协议。
 
 ## 1. 研究问题
 
@@ -16,7 +17,7 @@ CourseFlow 的恢复候选同时包含 SQLite 结构化数据与用户可见 Lib
 5. 崩溃后如何在不打开混合 DATA/Library 的情况下确定继续、回滚或停止；
 6. 哪些结论必须交给 packaged macOS/Windows failpoint，而不能从 API 文档外推。
 
-本研究只决定 ADR-08 所需机制边界，不选择 ADR-09 的诊断保留/导出政策，也不固定 ADR-10 的绝对平台目录、签名或更新方案。
+本研究只决定 ADR-08 所需机制边界；当时未选择的 ADR-09 诊断保留/导出政策已由后续决议以“不建设”解决。本研究仍不固定 ADR-10 的绝对平台目录、签名或更新方案。
 
 ## 2. SQLite 证据
 
@@ -108,7 +109,7 @@ ADR-08 因而禁止 activation 使用 cross-volume move/copy-delete。候选从�
 
 [Microsoft `ReplaceFileW`](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-replacefilew) 只替换单个文件，并有卷、权限、ACL 与 backup-file 行为约束。它不能替换非空 Library 目录，也不能与另一个 DATA 目录形成全局事务。
 
-[Microsoft `FlushFileBuffers`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers) 只针对一个 handle，并提示频繁调用的性能成本。ADR-08 必须用有界 journal、少量阶段记录和 G7 测量，而不是为每个 Library 文件构造通用事务日志。
+[Microsoft `FlushFileBuffers`](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers) 只针对一个 handle，并提示频繁调用的性能成本。ADR-08 必须用有界 journal、少量正式阶段记录和 G7 测量，而不是为每个 Library 文件构造通用事务事件流。
 
 ### 5.3 TxF 不可作为新产品基础
 

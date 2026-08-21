@@ -4,6 +4,7 @@
 > 日期：2026-08-21
 > 方法：Superpowers brainstorming + Codebase Design / Design It Twice + primary-source research
 > 权限：非规范性过程记录；技术结论以 [ADR-08](../../architecture/adr/ADR-08-restore-activation-recovery.md) 为唯一真相
+> 后续约束：[ADR-09](../../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；ADR-08 的 journal/receipt 仍是正式恢复正确性记录。
 
 ## 1. 讨论目标
 
@@ -136,7 +137,7 @@ welcome 与设置恢复使用同一 `start → preview → confirm → activate`
 
 用户批准受限恢复：
 
-- 如果不能建立完整安全集，但可以保持原始 DB、Library 和诊断证据不变，且稳定恢复控制位置可写，可以经独立警告/确认继续；
+- 如果不能建立完整安全集，但可以保持原始 DB、Library 和恢复协调证据不变，且稳定恢复控制位置可写，可以经独立警告/确认继续；
 - 候选仍必须完全独立暂存和验证；
 - 不能保护旧证据或控制位置不可写时停止，不以“救援模式”覆盖原始证据。
 
@@ -171,7 +172,7 @@ welcome 与设置恢复使用同一 `start → preview → confirm → activate`
 2. candidate validation 与 activation staging 分离的 checkpoint 前状态机；
 3. `ActivityControlRoot`、append-only write-ahead journal、同卷 sibling swap 和 DATA commit-last；
 4. 重开、success receipt、rollback 与 safety/cleanup 生命周期；
-5. 启动矩阵、ProblemCode、journal trust limits 与诊断最小化；
+5. 启动矩阵、ProblemCode、journal trust limits 与当前问题最小化；
 6. Requirement → MOD → IF → FLOW → Q → TEST 覆盖、未来 V2、拒绝项与重新评审条件。
 
 正式字段、记录顺序、limits 和物理协议只在 ADR-08 中定义，本记录不复制成第二份技术真相。
@@ -204,7 +205,7 @@ welcome 与设置恢复使用同一 `start → preview → confirm → activate`
 | Module | PROTECT 拥有会话/安全集/协调；WORKSPACE 拥有 mode/epoch/route；DATA、LIBRARY、PLATFORM 只提供各自深能力；无新 top-level MOD |
 | Interface | Shell 只经 IF-WORKSPACE；IF-RESTORE-SESSION 保持封闭 command union、opaque refs、OperationHandle 与无副作用 query |
 | Flow | FLOW-05 直接覆盖；FLOW-00 先检查恢复；FLOW-03 负责重开后的 Library reconcile；FLOW-04 与安全集生命周期相邻但不混用 |
-| Quality | 真相、保护、隔离、本地、可访问、跨平台、响应、演进、连续性与诊断均有明确不变量 |
+| Quality | 真相、保护、隔离、本地、可访问、跨平台、响应、演进、连续性与当前问题说明均有明确不变量 |
 | Test | 候选/目标/容量/损坏/maintenance/journal/swap/启动/receipt/rollback/cleanup/两平台 failpoint 都有 TEST obligation |
 
 审阅未发现 ADR-08 需要改变 PLAN、ATTEND、GRADE 的事实所有权，也不需要新增账户、云端、AI、实时合并、archive、加密或签名。
@@ -229,7 +230,7 @@ v1 的 `ActivationPlanV1` 是封闭的 `database + optional library`。未来第
 - 新的正式资源必须与 DATA/Library 共同激活；
 - 成功/回滚/安全集保留产品承诺改变。
 
-诊断导出/保留/隐私细节仍属于 ADR-09；绝对平台位置、bundled runtime、签名、更新与 packaged evidence 属于 ADR-10。
+当时留给 ADR-09 的诊断导出/保留/隐私细节，已由后续 [ADR-09](../../architecture/adr/ADR-09-no-production-diagnostics.md) 以“不建设该能力”解决；绝对平台位置、bundled runtime、签名、更新与 packaged evidence 仍属于 ADR-10。
 
 ## 10. 产物
 
@@ -239,4 +240,4 @@ v1 的 `ActivationPlanV1` 是封闭的 `database + optional library`。未来第
 - 用户行为：[User Flow](./2026-08-17-user-flow-design.md)、[UI 规格](./2026-08-18-courseflow-ui-wireframes-page-spec-design.md)
 - 所有权与契约：[Architecture](../../architecture/ARCHITECTURE.md)、[Module Contracts](../../architecture/MODULE_CONTRACTS.md)
 
-本轮只批准和记录 ADR-08；不授权实现、implementation plan 或替 ADR-09/10 作决定。
+本轮当时只批准和记录 ADR-08；不授权实现、implementation plan 或替后续 ADR 作决定。ADR-09 的后续独立决议不改变本记录的历史权限边界。

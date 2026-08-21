@@ -1,7 +1,7 @@
 # CourseFlow 模块与接口契约
 
 > 状态：候选规范（设计已确认，待文档终审）
-> 版本：0.14
+> 版本：0.15
 > 日期：2026-08-21
 > 配套总览：[ARCHITECTURE.md](./ARCHITECTURE.md)
 
@@ -180,7 +180,7 @@ disabled-by-user 不是故障；unavailable/recovering 必须附 `StructuredProb
 
 `healthy | degraded | unavailable | recovery-required`
 
-health 是可重建诊断，不替代模块正式事实。Workspace 将模块 health 聚合到投影。
+health 是可重建的当前状态投影，不替代模块正式事实。Workspace 将模块 health 聚合到投影，不持久化 health 历史。
 
 #### Workspace mode
 
@@ -380,13 +380,15 @@ StructuredProblem {
   scope: field | operation | module | workspace
   dataEffect: unchanged | committed(Revision) | disk-applied | activation-pending
   affectedCapabilities: [CapabilityName]
-  resolution: correct | retry | reauthorize | decide | resume | rollback | restore | cancel
-  context: { revision?, entityVersions?, operationId?, diagnosticRef? }
-  details: structured, non-UI fields
+  allowedActions: [ProblemAction]
+  context: { revision?, entityVersions?, operationId? }
+  details: ProblemDetailsByCode
 }
 ```
 
-Shell 将 code/details 映射为可访问文案和焦点，但不得自行推断 dataEffect。诊断引用不得包含自动上传承诺。
+`ProblemAction` 是公共协议版本拥有的封闭 action token；可以随协议版本显式扩展，但不是任意字符串。`allowedActions` 可以为空，尤其用于 recovery 证据不足且任何物理动作都不安全的状态。Shell 将 code/details 映射为可访问文案和焦点，但不得自行推断 dataEffect 或增补 action。`ProblemDetailsByCode` 必须由 code owner 定义为封闭 typed variant；每个字段都必须改变用户文案、状态判定或允许动作，不得使用任意 string/map、原始异常、stack、SQL、路径/内容转储或秘密。
+
+按 [ADR-09](./adr/ADR-09-no-production-diagnostics.md)，生产应用不建立诊断/日志/崩溃收集/遥测/支持包接口或存储。底层 OS/Node/SQLite/解析错误只在 owner 内存中短暂映射为稳定 Problem 后丢弃。Problem 只有在它属于 Operation、FileOperation、RestoreSession 等正式当前状态时才随该状态持久化，且不得形成历史事件流。CommandReceipt、Operation、manifest、activation journal 等由既有 ADR 明确要求的记录仍服务于幂等与恢复，不是诊断日志，也不得附加任意调试字段。
 
 ### 4.2 `IF-OPERATION-HANDLE`
 
@@ -483,7 +485,7 @@ Follow-up 必须具有稳定 ID、所有者、前置 revision、状态、重试/
 
 **Problems / Degradation**
 
-Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域命令。无法解释的新 ProblemCode 必须显示安全的通用错误、dataEffect 和 diagnosticRef，并保留恢复动作。
+Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域命令。无法解释的新 ProblemCode 必须显示安全的通用错误、已有 dataEffect、受影响能力和 owner 已给出的安全动作；不得索取原始错误或自行补出 retry/resume/rollback。
 
 **Test seams**
 
@@ -840,8 +842,8 @@ unknown-weight、incomplete-score、invalid-scale、coverage-insufficient、sour
 13. 快照选择每次重新验证；只有 `verified` 可以进入 RestoreSession。缺失成员是 `incomplete-or-sync-pending`，明确摘要/数据库/闭包矛盾是 `corrupt`，未知未来版本是 `incompatible`，不能按目录时间自动选择最新。
 14. 恢复依次执行选择、候选验证、影响预览、确认、RestoreSafetySet、目标绑定暂存、完整验证、激活检查点、重新打开/对账、成功回执与协调状态收敛。候选验证所用的迁移副本不等于确认后的目标绑定激活暂存。
 15. 确认令牌必须绑定候选身份/完整性、资料库目标和影响摘要；健康 current state 绑定 Workspace revision 与 Library RootGeneration，restricted-waived current state 绑定显式 unavailable/damaged variant 与 owner raw-evidence fingerprint。任一变化返回 impact-changed 并要求重新预览，不自动合并。
-16. 最终确认后立即进入 maintenance：停止普通写入、文件操作、备份和新预览，使既有资源 lease 失效；Watcher 只能产生待重验 hint。activation checkpoint 前允许取消，之后只允许证据支持的继续、回滚或诊断。
-17. 当前 DATA 与已配置 Library 健康时必须先创建并验证完整 RestoreSafetySet。DATA 损坏/只读或已配置 Library 无法完整读取时，只有原始 DATA/Library/诊断证据能保持不变且恢复协调位置可写，才可经独立警告与确认进入 restricted-waived；否则停止。容量不足必须在 checkpoint 前停止，不得删除安全集或既有好快照强行继续。
+16. 最终确认后立即进入 maintenance：停止普通写入、文件操作、备份和新预览，使既有资源 lease 失效；Watcher 只能产生待重验 hint。activation checkpoint 前允许取消，之后只允许证据支持的继续或回滚；两者都不安全时保持 recovery 且不提供物理动作。
+17. 当前 DATA 与已配置 Library 健康时必须先创建并验证完整 RestoreSafetySet。DATA 损坏/只读或已配置 Library 无法完整读取时，只有原始 DATA/Library/恢复协调证据能保持不变且恢复协调位置可写，才可经独立警告与确认进入 restricted-waived；否则停止。容量不足必须在 checkpoint 前停止，不得删除安全集或既有好快照强行继续。
 18. activation checkpoint 前失败保持原活动 DATA/Library 不变；checkpoint 后任何未收敛状态禁止打开普通 Workspace 或混合的新旧 DATA/Library。启动只可自动检查并补记磁盘证据唯一证明、且不改变 DATA/Library 的观察或终态记录；物理继续/回滚等待用户决定。
 19. 只有候选 DATA 重新打开并通过格式/完整性/Workspace 身份验证，LIBRARY 完成 marker/RootGeneration/完整闭包对账，设备相关路径/能力/证据失效，且 FLOW-00 路由完成后，才能记录 succeeded。面向用户只承诺可恢复的逻辑全有或全无，不承诺跨资源操作系统事务。
 20. checkpoint 后、succeeded 前可以回滚；回滚也必须重开、对账并恢复路由后才完成。succeeded 后返回旧数据必须发起新的完整 RestoreSession，不存在绕过验证/预览的一键回滚。
@@ -850,7 +852,7 @@ unknown-weight、incomplete-score、invalid-scale、coverage-insufficient、sour
 
 **Problems / Degradation**
 
-destination-unset、permission、snapshot-incomplete、snapshot-corrupt、snapshot-format-limit、incompatible-version、storage-full、cleanup-pending、identity-conflict、impact-changed、staging-failed、activation-pending、rollback-required、recovery-required。Backup unavailable 或 cleanup pending 只使保护能力 degraded；已发布快照与活动数据不回滚。Restore activation 不确定使 Workspace recovery。底层阶段只可作为受限 diagnosticRef 细节，不新增泄露真实路径或要求 Shell 解释物理交换的公共 code。
+destination-unset、permission、snapshot-incomplete、snapshot-corrupt、snapshot-format-limit、incompatible-version、storage-full、cleanup-pending、identity-conflict、impact-changed、staging-failed、activation-pending、rollback-required、recovery-required。Backup unavailable 或 cleanup pending 只使保护能力 degraded；已发布快照与活动数据不回滚。Restore activation 不确定使 Workspace recovery。只有会改变当前状态说明或安全动作的底层阶段才能进入该 code 的 typed safe details；不得泄露真实路径、原始错误或要求 Shell 解释物理交换。
 
 **Test seams**
 
@@ -1289,7 +1291,7 @@ RestoreSession 必须持久保存候选身份、版本、验证结果、预览�
 
 **Completion criterion**：只有一个已证明的活动正式数据集；RestoreSession success receipt、恢复协调终态、DATA 身份/修订、Library marker/RootGeneration/文件与标签闭包、失效的设备能力以及 Workspace 路由全部一致。此边界是跨资源可恢复的逻辑全有或全无，不是单一文件系统事务。
 
-**Failure semantics**：候选验证、预览、安全集或 staging 在 checkpoint 前失败/取消时保持原活动数据；checkpoint 后中断进入 recovery，只开放当前证据支持的 resume/rollback/diagnostic。rollback 也必须重开、对账与 FLOW-00 后才完成；证据冲突、协调状态损坏、未知版本或结果无法唯一分类时只提供诊断，不猜测、不降级为跨卷复制删除。succeeded 后返回旧数据必须创建新的完整 RestoreSession。
+**Failure semantics**：候选验证、预览、安全集或 staging 在 checkpoint 前失败/取消时保持原活动数据；checkpoint 后中断进入 recovery，只开放当前证据支持的 resume/rollback。rollback 也必须重开、对账与 FLOW-00 后才完成；证据冲突、协调状态损坏、未知版本或结果无法唯一分类时只展示当前可证明状态，不提供不安全动作、不猜测、不降级为跨卷复制删除。succeeded 后返回旧数据必须创建新的完整 RestoreSession。
 
 ### 8.7 `FLOW-06` — 模块自有的确定性结果投影
 
@@ -1309,7 +1311,7 @@ RestoreSession 必须持久保存候选身份、版本、验证结果、预览�
 
 ### 9.1 稳定 ProblemCode
 
-| Code | 常见 scope | dataEffect | 典型 resolution |
+| Code | 常见 scope | dataEffect | 典型 allowedActions |
 |---|---|---|---|
 | `validation` | field/operation | unchanged | correct |
 | `conflict` | operation | unchanged | requery/decide/retry |
@@ -1321,17 +1323,17 @@ RestoreSession 必须持久保存候选身份、版本、验证结果、预览�
 | `name-conflict` | operation | unchanged | keep-both/replace/cancel |
 | `integrity` | module/workspace | 明确实际阶段 | retry/restore/recovery |
 | `snapshot-incomplete` | operation/module | unchanged | wait-for-sync/revalidate/choose-other |
-| `snapshot-corrupt` | operation/module | unchanged | choose-other/diagnostic |
+| `snapshot-corrupt` | operation/module | unchanged | choose-other |
 | `snapshot-format-limit` | operation/module | unchanged | reduce-source/choose-supported-snapshot |
 | `incompatible-version` | operation/workspace | unchanged | choose other/migrate/restore |
 | `storage-full` | operation/module | unchanged | free-space/change-destination/retry |
-| `cleanup-pending` | module | active data unchanged；新 snapshot 已发布 | retry-cleanup/diagnostic |
+| `cleanup-pending` | module | active data unchanged；新 snapshot 已发布 | retry-cleanup |
 | `calculation-unavailable` | module | unchanged | correct/retry |
 | `operation-in-progress` | operation | 当前 handle dataEffect | observe/resume/cancel-if-safe |
 | `reconciliation-required` | module | disk-applied 或未知物理差异 | rescan/decide/resume |
-| `recovery-required` | module/workspace | activation-pending 或明确阶段 | 无未决 activation 时可 restore；nonterminal Restore activation 只允许证据支持的 resume/rollback/diagnostic |
+| `recovery-required` | module/workspace | activation-pending 或明确阶段 | 无未决 activation 时可 restore；nonterminal Restore activation 只允许证据支持的 resume/rollback；没有安全动作时为空 |
 
-模块可以新增稳定子 code，但必须映射到 scope、dataEffect、affectedCapabilities 和 resolution。原始异常文本仅用于 diagnosticRef，不作为调用方分支。
+模块可以新增稳定子 code，但必须映射到 scope、dataEffect、affectedCapabilities 和 allowedActions。原始异常文本只可在 owner 内存中用于一次映射，随后丢弃；不持久化、不跨普通 DTO，也不作为调用方分支。
 
 ### 9.2 Workspace mode 计算
 
@@ -1353,7 +1355,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 - 对 unavailable capability 的命令返回 feature-disabled/unavailable，dataEffect unchanged；
 - read-only Workspace 拒绝所有正式命令，但允许 query、草稿本地保留策略、恢复/导出能力；
-- recovery Workspace 只允许 OperationHandle 声明的恢复动作；无未决 activation 时可提供 restore，nonterminal Restore activation 只可提供证据支持的 resume/rollback/diagnostic，不得嵌套开始另一 RestoreSession；
+- recovery Workspace 只允许 OperationHandle 声明的恢复动作；无未决 activation 时可提供 restore，nonterminal Restore activation 只可提供证据支持的 resume/rollback，不得嵌套开始另一 RestoreSession；没有安全动作时保持 recovery 并只展示当前状态；
 - pending follow-up 不阻止无关核心命令，但影响相关 capability 的完成状态。
 
 ## 10. 测试义务
@@ -1429,7 +1431,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `TEST-PROTECT-002` | backup watermark 持久与请求合并；actual revision；canonical manifest golden vectors；全部格式上限 exact/one-over；逐成员摘要；每个临时写/验证/发布/final 验证/成功登记 failpoint 顺序与重启收敛 |
 | `TEST-PROTECT-003` | 目的地不可写/空间满/备份或清理失败保留本地成功、最近两份已验证快照、最后成功与 pending；quarantine 重启恢复，未知/其他集合/身份冲突条目不自动删除 |
 | `TEST-PROTECT-004` | 同步中或不完整、损坏、当前/旧/未来不兼容和未知候选状态严格区分；只有重新验证的 snapshot 在激活前继续；候选迁移验证不修改备份原件且不冒充 activation staging；候选/修订/root generation/目标/影响变化使确认失效 |
-| `TEST-PROTECT-005` | Restore 从 select 到 success/rollback/cleanup 的每阶段 failpoint、响应丢失、CommandId 重放、重启启动判定、checkpoint 前取消/不改变、checkpoint 后显式继续/回滚/诊断、receipt 与协调终态任一先落盘、证据冲突/日志损坏/未知版本、无部分成功 |
+| `TEST-PROTECT-005` | Restore 从 select 到 success/rollback/cleanup 的每阶段 failpoint、响应丢失、CommandId 重放、重启启动判定、checkpoint 前取消/不改变、checkpoint 后显式继续/回滚或无安全动作、receipt 与协调终态任一先落盘、证据冲突/协调记录损坏/未知版本、无部分成功 |
 | `TEST-PROTECT-006` | B 已交付时 root marker、全部 active/unassigned verified 文件与课程/分类/自定义标签映射形成精确闭包；missing/unverified/source-changed/未收敛 operation 均整份停止；健康/缺失/不可安全原位替换根、候选 absent、恢复后全量对账与新 RootGeneration 均保持 snapshot/restore 一致 |
 | `TEST-DATA-001` | commit 每阶段 failpoint：全成或全不成，revision/receipt/follow-up 一致 |
 | `TEST-DATA-002` | 同 CommandId 重放返回同结果；不同 payload 复用被拒绝 |
@@ -1446,6 +1448,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `TEST-PLATFORM-002` | 两平台文件权限、路径/Unicode、local/known-cloud-or-remote/unknown 分类、选择器取消、Watcher hint/error、系统 Trash completed/failed/unknown 语义一致；同父/同卷 rename、跨卷拒绝、目录被外部程序占用/修改、同步/关闭与冲突错误稳定映射，不降级 copy-delete |
 | `TEST-PLATFORM-003` | 打包后的两平台支持类型 preview 数据面取消/释放且无网络读取；非高风险普通文件 system-open 只返回 requested/failed，reveal 为 best-effort；高风险 system-open 请求不会到达平台；无默认关联、权限、消失、平台失败、Unicode/空格路径与错误映射稳定 |
 | `TEST-PLATFORM-004` | 禁网运行全部 MVP-A 核心旅程及完整恢复/启动 recovery，应用不要求账户/远程/AI |
+| `TEST-PRIVACY-001` | 开发构建及 macOS/Windows packaged build 不创建 CourseFlow 自有诊断/log/crash/telemetry artifact，不提供诊断/支持包入口，错误不触发网络请求；每个可达失败仍返回安全 StructuredProblem、准确 dataEffect 与 owner 允许的动作；正式 receipt/operation/manifest/activation journal 只含其协议白名单字段 |
 | `TEST-FLOW-00-LIFECYCLE` | 新建、未完成设置、重启、自动归档后不退回首次设置、历史与空白新学期路由；所有恢复协调状态在 DATA/watcher 前判定，唯一证据可补记、歧义保持 recovery |
 | `TEST-FLOW-01-COMMIT` | preview/confirm/commit/undo/conflict/follow-up 的完整数据效果 |
 | `TEST-FLOW-02-UNIFIED-PLAN` | 多视图同源、Reading Week、TBA 和 ATTEND 降级 |
@@ -1465,7 +1468,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `Q-STATE-01` | SHELL-001、PLAN-006、ATTEND-002/003、GRADE-001/002 |
 | `Q-PROTECT-01` | LIBRARY-001、PROTECT-001–006、FLOW-05 |
 | `Q-ISOLATE-01` | WORKSPACE-003、ATTEND-004、LIBRARY-006/007、PROTECT-003 |
-| `Q-LOCAL-01` | PLATFORM-003/004、FLOW-00/03/04/05 的无网络变体 |
+| `Q-LOCAL-01` | PLATFORM-003/004、PRIVACY-001、FLOW-00/03/04/05 的无网络变体 |
 | `Q-PROVENANCE-01` | GRADE-003–007、FLOW-06 |
 | `Q-ACCESS-01` | SHELL-001–004、LIBRARY-007 的 PDF/文本/状态公告变体、两个平台核心 E2E |
 | `Q-PORTABLE-01` | PLATFORM-001–003、所有已交付模块的 macOS/Windows E2E |
@@ -1473,7 +1476,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `Q-EVOLVE-01` | DATA-006、PROTECT-004/005、GRADE-004、LIBRARY-007/PLATFORM-003 的策略/协议更新 fixture |
 | `Q-USABILITY-01` | USABILITY-001、WORKSPACE-004 |
 | `Q-CONTINUITY-01` | WORKSPACE-005、LIBRARY-002、PROTECT-002/005、DATA-004/006 |
-| `Q-DIAG-01` | SHELL-001/003、WORKSPACE-003/006、LIBRARY-007、PLATFORM-003、全部 failpoint 的 Problem/dataEffect 断言 |
+| `Q-DIAG-01` | SHELL-001/003、WORKSPACE-003/006、LIBRARY-007、PLATFORM-003、PRIVACY-001、全部 failpoint 的 Problem/dataEffect 断言 |
 
 ## 11. 完整追溯矩阵
 
@@ -1530,7 +1533,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `STATE-004` | IF-IMPACT-PREVIEW、规则分段 | Q-PROTECT、Q-DIAG、G3 | PLAN-004、WORKSPACE-002 |
 | `STATE-005` | ResultSource、GradeProjection | Q-PROVENANCE、G3 | GRADE-005/006 |
 | `STATE-006` | Attendance 状态枚举与统计 | Q-STATE、Q-ISOLATE、G3/G5 | ATTEND-001–004 |
-| `NFR-001` | MOD-DATA/PROTECT/PLATFORM、无远程业务依赖 | Q-LOCAL、G6 | PLATFORM-003/004 |
+| `NFR-001` | MOD-DATA/PROTECT/PLATFORM、无远程业务依赖、ADR-09 无生产诊断/遥测 | Q-LOCAL、G6 | PLATFORM-003/004、PRIVACY-001 |
 | `NFR-002` | IF-DATA-COMMIT、IF-FILE-OPERATION、IF-LIBRARY-RESOURCE、IF-RESTORE-SESSION | Q-TRUTH、G4 | DATA-001、LIBRARY-002/007、PLATFORM-003、PROTECT-005 |
 | `NFR-003` | 三位置边界、BackupSet、BackupCheckpoint/Manifest/retention、RestoreSafetySet 生命周期 | Q-PROTECT、G4 | LIBRARY-001、PROTECT-001–006、FLOW-05 |
 | `NFR-004` | TermZone、Clock/ZoneRules、PLAN evaluator | Q-TIME、G3/G6 | PLAN-007、PLATFORM-001 |

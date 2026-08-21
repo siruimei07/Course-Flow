@@ -6,6 +6,7 @@
 > 前置决策：[ADR-01](../architecture/adr/ADR-01-desktop-runtime-ui-boundary.md)、[ADR-02](../architecture/adr/ADR-02-process-thread-deployment.md)
 > 后续决议：[ADR-03 已接受](../architecture/adr/ADR-03-sqlite-active-data-transactions.md)
 > 方法：已重新核对全部产品、用户流程、UI、Architecture 与 Module Contract 文档；外部事实只采用 SQLite、Node.js、Electron 与候选库的官方文档或官方仓库。文中的“推荐/推断”是对 CourseFlow 约束的判断，不是上游项目承诺。
+> 后续约束：[ADR-09](../architecture/adr/ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本文早期预留的诊断读取/导出不得实现。
 
 ## 先给决策者的结论
 
@@ -144,7 +145,7 @@ Node 24.17 文档所示的所需 API 已包括：
 
 **代价/风险**
 
-- reader 会阻塞 writer，writer 也会阻塞 reader；即使 DATA 普通访问串行，在线 backup 和未来诊断读取也更容易抬高写入尾延迟；
+- reader 会阻塞 writer，writer 也会阻塞 reader；即使 DATA 普通访问串行，在线 backup 和任何额外长读取也更容易抬高写入尾延迟；
 - CourseFlow 要求备份异步且本地保存及时，WAL 更自然地允许 read-only backup source 与 writer 并存；
 - 以 sidecar 更少换来的主要是实现观感，而非产品能力。
 
@@ -305,7 +306,7 @@ ADR-03 若采用方案 A，只决定 SQLite binding、活动库形态、连接�
 - `ADR-TOPIC-05/06`：文件操作状态机、watcher/权限与资源访问；
 - `ADR-TOPIC-07`：snapshot manifest、资料库打包、digest、临时写入与发布；
 - `ADR-TOPIC-08`：activation marker、目录/文件切换、继续与回滚；
-- `ADR-TOPIC-09`：本地诊断、日志与用户导出；
+- `ADR-TOPIC-09`（[ADR-09 已接受](../architecture/adr/ADR-09-no-production-diagnostics.md)）：不建设本地诊断、生产日志或用户支持包导出；
 - `ADR-TOPIC-10`：Electron runtime 更新、签名、公证和安装包验证。
 
 ## 建议进入讨论的决议句
