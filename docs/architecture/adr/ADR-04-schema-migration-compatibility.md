@@ -33,7 +33,7 @@ CourseFlow 采用**按领域归一化的关系 schema、单调连续的 schema l
 6. Renderer ↔ Main 与 Main ↔ Workspace 使用精确 protocol/build handshake；不允许混合版本组件或范围协商。
 7. 64 位整数与精确小数在公共 DTO 中使用 canonical 十进制字符串；持久小数使用规范化 coefficient + scale，不使用 SQLite `REAL` 或 JavaScript 浮点数作为事实。
 8. Command digest 使用项目自有的受限 `courseflow-canonical-json-v1` + Node core SHA-256，并永久记录 encoding 与 algorithm 版本。
-9. Snapshot format、跨数据库/Library 激活和 packaged runtime 分别由 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)、ADR-08、ADR-10 完成；本 ADR 只规定它们必须引用和验证的 structured-data compatibility predicate。
+9. Snapshot format、跨数据库/Library 激活和 packaged runtime 分别由 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)、[ADR-08](./ADR-08-restore-activation-recovery.md)、ADR-10 完成；本 ADR 只规定它们必须引用和验证的 structured-data compatibility predicate。
 
 ## 3. 数据库身份、版本与首发冻结
 
@@ -99,7 +99,7 @@ ASCII hint     = CFLW
 | `protection_watermarks` | 单例 `backupNeededThrough` 与 `backupSucceededThrough` | succeeded 不超过当前 Revision；成功水位不因失败倒退 |
 | `setup_state` | `everReachedMinimum`、显式 skip/later 与 setup decision version | 当前 setup 完整度从领域事实派生；不以页面序号为事实 |
 | `backup_configurations` / `backup_state` | 用户确认的保护配置、能力状态与所引用的 typed destination | 设备资源仍需 PLATFORM 再验证；不复制 snapshot manifest |
-| typed backup/restore detail | common OperationId、候选身份/版本、验证与 preview binding、safety snapshot、stage 和 next capability | 与 `operations` 一对一/受约束关联；不使用通用 manifest JSON |
+| typed backup/restore detail | common OperationId、候选身份/版本、验证与 preview binding、RestoreSafetySet reference、stage 和 next capability | 与 `operations` 一对一/受约束关联；不使用通用 manifest JSON |
 
 validation、conflict、constraint 或明确未提交的命令不写 receipt，因为没有可重放效果；调用方必须在当前事实上重新校验。已提交 receipt 不按时间清理。
 
@@ -255,7 +255,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 2. 设置 `application_id`，从 code-owned `0 → 1 → ... → current` 链建立实际交付模块。
 3. 写入唯一 `workspace_state`、初始 Revision 和必要 bootstrap facts。
 4. 设置并读回 `user_version`，执行完整 schema/identity/integrity/FK/manifest 校验。
-5. 只有验证通过后，才按 ADR-08 的激活协议成为活动库。
+5. 只有验证通过后，才按 [ADR-08](./ADR-08-restore-activation-recovery.md) 的激活协议成为活动库。
 
 不得把部分 level-0 或半初始化数据库作为活动 Workspace 打开。
 
@@ -270,7 +270,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 5. `workspace_state` 单例、WorkspaceId、Revision、watermark 与关键 bootstrap 不变量；
 6. `integrity_check` 与 `foreign_key_check`；STRICT/CHECK/union 不变量按 manifest/领域验证补足；
 7. 正常连接的 `foreign_keys=ON`、`trusted_schema=OFF` 等 ADR-03 设置已经 set/read-back；
-8. 是否可安全写以及 ADR-08 activation marker 是否未决。
+8. 是否可安全写以及 ADR-08 external activation coordination 是否未决。
 
 只验证“能执行 SELECT”不构成兼容。缺表、缺索引、未知列形态、篡改 level、wrong ID 或不一致 bootstrap 都停止领域访问。
 
@@ -295,7 +295,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 
 每一级独立原子，因此中断后以已提交的 `user_version` 继续下一步，不猜测、跳级或回放已提交级别。任何失败保留原活动库或明确的最后提交 level 以及已验证 safety copy，并进入 recovery；绝不删库重建。
 
-迁移 safety copy 的保留期限、应用更新回滚窗口和用户可见清理政策由 ADR-10 决定，migration 代码不得自行删除。涉及真实 Library 目录变换的升级不是普通 SQLite migration，必须通过 ADR-08 的 staged activation/rollback 协议。
+迁移 safety copy 的保留期限、应用更新回滚窗口和用户可见清理政策由 ADR-10 决定，migration 代码不得自行删除。涉及真实 Library 目录变换的升级不是普通 SQLite migration，必须通过 [ADR-08](./ADR-08-restore-activation-recovery.md) 的 staged activation/rollback 协议。
 
 ### 7.4 更新与降级兼容
 
@@ -402,15 +402,15 @@ digest preimage 必须包含：
 3. 如果是 supported old level，只迁移 staging DB；不得先迁移或覆盖活动库。
 4. 迁移完成后记录 post-migration staged Revision，并重新执行完整验证。
 5. 基于 staged current facts 生成影响预览；明确区分 source Revision 与 post-migration Revision。
-6. 用户确认后创建 restore safety snapshot，再进入 ADR-08 activation。
+6. 用户确认后按 ADR-08 创建 RestoreSafetySet，再进入 activation。
 
 future level、wrong application ID、WorkspaceId/manifest 不一致、损坏、FK/integrity 失败都在 preview/activation 前停止。恢复 candidate 的 WorkspaceId 成为激活后的身份；若与当前 Workspace 不同，UI 必须说明这是完整替换，不做 merge。
 
 snapshot 中的 Library root、backup destination 和其他设备路径只作为历史配置证据；恢复后必须在当前设备重新验证和授权，不能直接信任为可用路径。
 
-RestoreSession、backup configuration/state/operation 使用 typed columns/detail tables；不以通用 manifest JSON 代替活动恢复状态。activation truth 和跨 DB + Library marker 属于 ADR-08。只有数据库与 Library 完成激活、重新打开、验证和 reconcile 后才报告 restore succeeded，不存在部分成功。
+RestoreSession、backup configuration/state/operation 使用 typed columns/detail tables；不以通用 manifest JSON 代替活动恢复状态。跨 DB + Library 的 external ActivationPlan/journal 属于 [ADR-08](./ADR-08-restore-activation-recovery.md)。只有数据库与 Library 完成激活、重新打开、验证和 reconcile 后才报告 restore succeeded，不存在部分成功。
 
-迁移 safety DB copy、restore safety snapshot 与已发布 backup snapshot 是三个不同对象，生命周期与用户承诺不得混用。
+迁移 safety DB copy、ADR-08 RestoreSafetySet 与已发布 backup snapshot 是三个不同对象，生命周期与用户承诺不得混用。
 
 ## 11. 启动模式与稳定问题
 
@@ -426,7 +426,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 | existing nonempty level 0、缺表/列/FK/index、篡改 level | `integrity`/`recovery-required`；不自动补表或重建 |
 | integrity/FK/STRICT/CHECK/关键领域验证失败 | `recovery-required`；不开放普通读写 |
 | migration 某级失败或中断 | 保持最后已提交 level 与 safety copy；重开后从该 level 继续或显式恢复 |
-| ADR-08 activation marker 未决 | `recovery-required`；只允许 resume/rollback/restore/diagnostic |
+| ADR-08 external activation journal 未决 | `recovery-required`；只允许证据支持的 resume/rollback/diagnostic |
 | IPC protocol/build mismatch | seam unavailable；不启动 Workspace 业务能力 |
 
 稳定问题至少携带 `code`、`scope`、`dataEffect`、`affectedCapabilities`、`actual/required version`、`diagnosticRef` 与可执行 next actions。原始 SQLite/OS 异常和真实路径只进入受限、脱敏诊断，不作为 UI 分支或自动上传内容。
@@ -446,7 +446,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 | `MOD-PROTECT` | watermark、typed restore state、structured-data compatibility predicate |
 | `IF-WORKSPACE` / IPC | exact protocol/build handshake、versioned bounded DTO、canonical numeric strings |
 | `IF-DATA-COMMIT/RECEIPT` | lifetime receipt、typed effects、versioned SHA-256 digest |
-| `IF-DATA-EXPORT/STAGE-ACTIVATE` | old DB stage/migrate/validate seam；snapshot layout/activation 分属 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)/ADR-08 |
+| `IF-DATA-EXPORT/STAGE-ACTIVATE` | old DB stage/migrate/validate seam；snapshot layout/activation 分属 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)/[ADR-08](./ADR-08-restore-activation-recovery.md) |
 
 ### 12.2 FLOW
 
@@ -457,7 +457,7 @@ RestoreSession、backup configuration/state/operation 使用 typed columns/detai
 | `FLOW-02` | normalized facts与窗口化派生投影；不保存第二份真相 |
 | `FLOW-03` | verified Library index 与 typed FileOperation；路径/Watcher 留 ADR-05 |
 | `FLOW-04` | backup watermark、actual DB level/revision、manifest compatibility inputs |
-| `FLOW-05` | candidate stage、旧 level migration、完整验证；激活 marker 留 ADR-08 |
+| `FLOW-05` | candidate stage、旧 level migration、完整验证；外部激活日志与切换见 [ADR-08](./ADR-08-restore-activation-recovery.md) |
 | `FLOW-06` | ATTEND/GRADE 从同一 Revision 的 exact facts 派生 |
 
 ### 12.3 Quality 与 Gate
@@ -557,7 +557,7 @@ CourseFlow 没有跨语言网络互操作需求。完整 RFC 8785 profile 仍需
 - `ADR-TOPIC-05`（[ADR-05 已接受](./ADR-05-library-watching-index-file-operations.md)）：路径 canonical identity、大小写/Unicode、Watcher、扫描和文件替换细节；
 - `ADR-TOPIC-06`（[ADR-06 已接受](./ADR-06-resource-preview-system-open.md)）：预览与系统打开、资源授权和 platform handle；
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest 的精确编码、目录布局、压缩、digest、临时发布和保留；
-- `ADR-TOPIC-08`：activation marker、数据库/Library 原子可恢复切换、continue/rollback；
+- `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：external activation journal、数据库/Library 可恢复的逻辑全有或全无切换、continue/rollback；
 - `ADR-TOPIC-09`：本地日志、diagnosticRef、脱敏与用户导出；
 - `ADR-TOPIC-10`：Electron/Node/SQLite 精确版本、application_id 首发登记门、安装更新、safety-copy 保留/清理、签名与双平台发布。
 

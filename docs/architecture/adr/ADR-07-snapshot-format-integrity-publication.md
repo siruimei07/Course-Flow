@@ -48,7 +48,7 @@ CourseFlow v1 采用**无压缩、自包含、不可变目录快照 + canonical 
 7. operation 按 `queued → database-checkpoint → library-copy → staging-validation → publishing → published-pending-record → succeeded` 前进。final rename 后仍须全量重验并提交成功记录/水位，才可向用户报告成功。
 8. 成功只表示所选目录的本地 final snapshot 已发布并验证；不表示 iCloud、OneDrive 或其他同步器已经上传完成，也不承诺绝对断电耐久。
 9. 每个 BackupSet 保留 `backupSequence` 最大的两份已验证快照。清理在新快照和水位成功后进行；失败不回滚新快照，未知、其他集合或身份不匹配条目不自动删除。
-10. 所有恢复候选都按不可信输入验证；只有 `verified` 进入 ADR-08。既有快照不就地升级，软件更新必须继续识别支持的旧格式并严格停止未知未来版本。
+10. 所有恢复候选都按不可信输入验证；只有 `verified` 进入 [ADR-08](./ADR-08-restore-activation-recovery.md)。既有快照不就地升级，软件更新必须继续识别支持的旧格式并严格停止未知未来版本。
 
 ## 3. 所有权与不越界
 
@@ -177,7 +177,7 @@ v1 不包含或引用：
 
 纯 `planned` 或 `waiting-decision` 且尚无物理效果的已知版本记录可以随数据库进入快照。本次 BackupOperation 也必然出现在它正在生成的数据库副本中，因此 database/library/validation 阶段采用**已完成阶段标记**：Online Backup 执行期间持久状态仍为没有 source/final 效果的 `queued`；它最多拥有可安全丢弃的 operation staging。只有副本关闭并验证成立后，活动数据库中的 operation 才推进到 `database-checkpoint`。这样 snapshot 内不会携带一个指向原设备 final 或可盲目重放的物理阶段。
 
-恢复到新位置后，所有 BackupConfiguration 目的地能力、backup/cleanup operation、绝对路径、对象证据、权限和旧 RootGeneration 都失效；ADR-08 只能让所有者重新配置、验证、重新决定或取消，不能盲目重放。已知 pending DurableFollowUp 保留其幂等身份和版本，外部副作用在恢复后仍须重新验证前提；未知 operation/follow-up version 仍为 incompatible。
+恢复到新位置后，所有 BackupConfiguration 目的地能力、backup/cleanup operation、绝对路径、对象证据、权限和旧 RootGeneration 都失效；[ADR-08](./ADR-08-restore-activation-recovery.md) 只能让所有者重新配置、验证、重新决定或取消，不能盲目重放。已知 pending DurableFollowUp 保留其幂等身份和版本，外部副作用在恢复后仍须重新验证前提；未知 operation/follow-up version 仍为 incompatible。
 
 ## 6. `SnapshotManifestV1`
 
@@ -331,7 +331,7 @@ CourseFlow 的“备份成功”只保证在本机所选 destination 上：
 4. 对每个 regular member 按实际长度重算 SHA-256，不跟随外部路径；
 5. 只读打开 SQLite，检查 application/schema/WorkspaceId/actual Revision、integrity/FK、module/operation/follow-up version，并核对副本内 queued source BackupOperation 的 BackupSetId/backupSequence/candidate SnapshotId 与 manifest 一致；
 6. 比较数据库 FileId 集合、manifest members、LibraryRootId/marker format/marker bytes/RootGeneration/PathKey encoding 与 totals；
-7. Restore 只把 raw bytes 复制进 ADR-08 的隔离 staging；验证期间不 preview、system-open、execute、跟随 URL 或调用 snapshot 内数据指示的外部路径。
+7. Restore 只把 raw bytes 复制进 [ADR-08](./ADR-08-restore-activation-recovery.md) 的隔离 staging；验证期间不 preview、system-open、execute、跟随 URL 或调用 snapshot 内数据指示的外部路径。
 
 writer 只创建独立 regular files，不主动创建 symlink 或 hard link。Node core 无法把所有平台私有 reparse/object 语义提升成通用安全身份；可观测类型无法安全分类时必须停止，不能猜成普通文件。
 
@@ -387,7 +387,7 @@ cleanup 失败只报告 `cleanup-pending`，不回滚新 snapshot、success wate
 - Library marker、PathKey；
 - operation 与 DurableFollowUp payload。
 
-一个轴已知不能授权忽略另一个未知轴。未知未来版本返回 `incompatible`，不重置、不猜字段、不回退到“尽力恢复”。旧版本若有显式、测试过的 staged migration，按 ADR-04 先在隔离副本迁移；激活仍由 ADR-08 决定。
+一个轴已知不能授权忽略另一个未知轴。未知未来版本返回 `incompatible`，不重置、不猜字段、不回退到“尽力恢复”。旧版本若有显式、测试过的 staged migration，按 ADR-04 先在隔离副本迁移；激活仍由 [ADR-08](./ADR-08-restore-activation-recovery.md) 决定。
 
 ### 11.2 immutable old snapshot
 
@@ -484,7 +484,7 @@ ADR-07 只有在以下证据通过后才视为已落实：
 
 ## 16. 后续 ADR 边界
 
-- **ADR-08 恢复激活**：决定 RestoreSession staging、跨 database/Library activation checkpoint、RootGeneration/epoch、continue/rollback 与启动恢复。ADR-07 只交付 verified raw snapshot，不把目录 rename 冒充跨位置激活。
+- **[ADR-08 恢复激活](./ADR-08-restore-activation-recovery.md)**：决定 RestoreSession staging、跨 database/Library activation checkpoint、RootGeneration/epoch、continue/rollback 与启动恢复。ADR-07 只交付 verified raw snapshot，不把目录 rename 冒充跨位置激活。
 - **ADR-09 诊断**：决定本地日志格式、保留、脱敏和用户导出；不得把 snapshot 内容、文件名/路径或用户数据自动上传。
 - **ADR-10 打包更新**：锁定 Electron/Node/SQLite、签名/公证、更新器、runtime manifest、发布回滚和更新前 safety-copy 生命周期，并执行 §11.3/§15 的 packaged gate。
 

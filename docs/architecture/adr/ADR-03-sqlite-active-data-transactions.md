@@ -166,8 +166,8 @@ Online Backup 期间活动 writer 可以继续提交。不同 source connection 
 - 候选数据库不得 `ATTACH` 到活动库，不执行候选自带的任意 extension 或不受信 SQL。
 - preview 和用户确认仍由 `MOD-PROTECT`/`MOD-WORKSPACE` 所有。
 - activation 前 Workspace 停止新命令、drain，并关闭 writer、backup 和 validation 连接。
-- SQLite transaction 只能保证数据库内部原子性，不能原子替换“数据库 + Library 文件 + activation marker”。ADR-08 必须定义跨文件 activation、继续与回滚；ADR-03 不把部分切换报告为成功。
-- activation 后必须重新打开、验证并执行 `FLOW-00`。不确定时只允许 resume、rollback、restore 或 diagnostic。
+- SQLite transaction 只能保证数据库内部原子性，不能原子替换“数据库 + Library 文件 + 外部激活日志”。[ADR-08](./ADR-08-restore-activation-recovery.md) 定义跨文件 activation、继续与回滚；ADR-03 不把部分切换报告为成功。
+- activation 后必须重新打开、验证并执行 `FLOW-00`。不确定时只允许 ADR-08 证据支持的 resume、rollback 或 diagnostic。
 
 ### 2.8 错误、模式与诊断
 
@@ -195,7 +195,7 @@ DATA adapter 将 SQLite primary/extended result、操作阶段和实际 transact
 | `IF-DATA-READ` | 当前有界 read transaction |
 | `IF-DATA-COMMIT` / `IF-DATA-RECEIPT` | `BEGIN IMMEDIATE` 原子提交与 CommandId 重放 |
 | `IF-DATA-EXPORT` | Online Backup 产生实际 revision 的 DB checkpoint |
-| `IF-DATA-STAGE-ACTIVATE` | staging/validation/close-before-activate seam；跨文件机制留 ADR-08 |
+| `IF-DATA-STAGE-ACTIVATE` | staging/validation/close-before-activate seam；跨文件机制见 [ADR-08](./ADR-08-restore-activation-recovery.md) |
 | `IF-DATA-OPERATION` / `IF-DURABLE-FOLLOWUP` | Operation、follow-up 与相关 revision 同事务持久 |
 
 ### 3.2 FLOW
@@ -207,7 +207,7 @@ DATA adapter 将 SQLite primary/extended result、操作阶段和实际 transact
 | `FLOW-02` | 同一当前 ReadSnapshot/Revision 的正式事实 |
 | `FLOW-03` | FileOperation planned/index-committed 状态可持久；不虚构跨文件事务 |
 | `FLOW-04` | watermark、Online Backup、actual revision 与数据库 checkpoint seam |
-| `FLOW-05` | stage/validation/连接关闭；activation 机制留 ADR-08 |
+| `FLOW-05` | stage/validation/连接关闭；activation 机制见 [ADR-08](./ADR-08-restore-activation-recovery.md) |
 | `FLOW-06` | 为 PLAN/ATTEND/GRADE 提供同一 revision 的事实输入 |
 
 ### 3.3 Quality 与 Gate
@@ -298,7 +298,7 @@ Drizzle、Kysely 或自建 repository 不能替代 CourseFlow 的 revision、rec
 - `ADR-TOPIC-05`（[ADR-05 已接受](./ADR-05-library-watching-index-file-operations.md)）：文件操作、Watcher 与路径身份；
 - `ADR-TOPIC-06`（[ADR-06 已接受](./ADR-06-resource-preview-system-open.md)）：资源访问、预览与平台打开行为；
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest、Library 内容、digest、无压缩不可变目录、临时发布与保留；
-- `ADR-TOPIC-08`：activation marker、数据库/Library 切换、继续、回滚和启动恢复；
+- `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：外部 activation journal、数据库/Library 切换、继续、回滚和启动恢复；
 - `ADR-TOPIC-09`：SQLite/operation/epoch 诊断、日志脱敏与用户导出；
 - `ADR-TOPIC-10`：Electron 精确版本、打包、签名、公证、安装与更新。
 

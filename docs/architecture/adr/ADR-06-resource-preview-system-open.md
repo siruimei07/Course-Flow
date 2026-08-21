@@ -395,7 +395,7 @@ ADR-06 只有在以下自动化与真实环境证据通过后才视为已落实�
 ## 14. 后续 ADR 边界
 
 - **[ADR-07 快照](./ADR-07-snapshot-format-integrity-publication.md)**：保存原始资料库文件和可验证 manifest，不保存 preview cache、lease 或解析投影；本 ADR 不决定快照编码、压缩或发布。
-- **ADR-08 恢复**：activation、RootGeneration 或 Workspace epoch 改变会撤销全部 session；本 ADR 不决定跨 DB/Library 激活和 rollback。
+- **[ADR-08 恢复](./ADR-08-restore-activation-recovery.md)**：activation、RootGeneration 或 Workspace epoch 改变会撤销全部 session；本 ADR 不决定跨 DB/Library 激活和 rollback。
 - **ADR-09 诊断**：决定本地日志格式、保留和用户导出；不得放宽 §9.2 的内容、路径、秘密和自动上传禁令。
 - **ADR-10 打包更新**：锁定 runtime/依赖、签名、更新器、rollback 与双平台发布集合，并执行 §10/§13 的 release gate。
 

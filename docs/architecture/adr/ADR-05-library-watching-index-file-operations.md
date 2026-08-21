@@ -400,7 +400,7 @@ Electron/Node/OS 更新后：
 4. 相同 marker + exact existing PathKey 的 FileId 保留，stamps 重新生成；
 5. 旧应用不能打开已经按 ADR-04 升级的 DB，不提供双写或反向迁移。
 
-只改变 DB 中派生/可重建的 PathKey 可以在安全副本后重新扫描迁移；任何改变 marker 或真实 Library 布局的应用更新都属于 ADR-08 staged activation/rollback，不能藏进普通 SQLite migration。迁移前安全副本、应用 rollback 窗口与 packaged runtime 由 ADR-10 决定。
+只改变 DB 中派生/可重建的 PathKey 可以在安全副本后重新扫描迁移；任何改变 marker 或真实 Library 布局的应用更新都属于 [ADR-08](./ADR-08-restore-activation-recovery.md) staged activation/rollback，不能藏进普通 SQLite migration。迁移前安全副本、应用 rollback 窗口与 packaged runtime 由 ADR-10 决定。
 
 ## 12. 后续 ADR 边界
 
@@ -414,7 +414,7 @@ ADR-05 提供 Library checkpoint 的必要条件：marker/root generation 稳定
 
 ### ADR-08：恢复激活
 
-ADR-08 决定 snapshot staging、DB + Library activation marker、continue/rollback 和启动恢复。恢复中的旧绝对根配置不可信；必须验证当前设备位置、marker、WorkspaceId 和 Library 内容。本 ADR 的普通 ChangeRoot 不能冒充整库 restore activation。
+[ADR-08](./ADR-08-restore-activation-recovery.md) 决定 snapshot staging、DB + Library external activation journal、continue/rollback 和启动恢复。恢复中的旧绝对根配置不可信；必须验证当前设备位置、marker、WorkspaceId 和 Library 内容。本 ADR 的普通 ChangeRoot 不能冒充整库 restore activation。
 
 ### ADR-10：打包与更新
 
