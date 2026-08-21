@@ -39,7 +39,7 @@ CourseFlow 采用**短期资源租约 + Preload 私有的有界 MessagePort rang
 5. `PreviewLimitsV1` 固定 header、range、并发、时限、文件、页面、像素、文本和 DOM 上限。任何一项超出都停止内置预览，不显示部分内容；文件保持不变并提供当前允许的平台动作。
 6. PDF 是只读基础阅读器：页滚动/跳转、缩放/适合页面、键盘、状态公告、可用时的文本层和结构树。搜索、活动链接、表单、脚本、XFA、批注、附件、打印和下载不在 MVP；加密 PDF 不在 CourseFlow 中收集密码。
 7. 非高风险普通文件无论是否支持预览，都可经独立完整重验请求系统默认应用。平台结果只有 `requested | failed`；reveal 是 best-effort。已知可启动的高风险文件可以保存和 reveal，但 CourseFlow 永不 system-open 且没有应用内绕过。
-8. preview lease、port、Blob、canvas 和 parser 状态都是易失状态；重启、更新、epoch 或协议改变后全部作废。分类、限制、启动风险和资源协议均版本化，并由 ADR-10 纳入打包更新门禁。
+8. preview lease、port、Blob、canvas 和 parser 状态都是易失状态；重启、更新、epoch 或协议改变后全部作废。分类、限制、启动风险和资源协议均版本化，并由 [ADR-10](./ADR-10-packaging-signing-update.md) 纳入打包更新门禁。
 
 ## 3. 所有权与数据流
 
@@ -319,7 +319,7 @@ preview lease、MessagePort、Blob、canvas、ImageBitmap、PDF worker 和临时
 - 提高资源限制、增加长期缓存或创建稳定外部资源 URL；
 - 放宽高风险文件 system-open 政策。
 
-这些变化需要产品确认、ADR 修订、策略版本和新 fixture。ADR-10 拥有签名、打包、更新器和 rollback，但必须把本文的双平台 packaged 证据设为 release/update gate；开发环境通过不能替代。
+这些变化需要产品确认、ADR 修订、策略版本和新 fixture。[ADR-10](./ADR-10-packaging-signing-update.md) 决定签名、打包、外部手动更新和 rollback，并明确不建设运行时更新器；它必须把本文的双平台 packaged 证据设为 release gate，开发环境通过不能替代。
 
 ## 11. 依赖政策与未选择方案
 
@@ -397,7 +397,7 @@ ADR-06 只有在以下自动化与真实环境证据通过后才视为已落实�
 - **[ADR-07 快照](./ADR-07-snapshot-format-integrity-publication.md)**：保存原始资料库文件和可验证 manifest，不保存 preview cache、lease 或解析投影；本 ADR 不决定快照编码、压缩或发布。
 - **[ADR-08 恢复](./ADR-08-restore-activation-recovery.md)**：activation、RootGeneration 或 Workspace epoch 改变会撤销全部 session；本 ADR 不决定跨 DB/Library 激活和 rollback。
 - **[ADR-09 无生产诊断](./ADR-09-no-production-diagnostics.md)**：不建设本地日志、崩溃收集、遥测或用户诊断导出；§9.2 只定义当前 Problem 的 typed safe details。
-- **ADR-10 打包更新**：锁定 runtime/依赖、签名、更新器、rollback 与双平台发布集合，并执行 §10/§13 的 release gate。
+- **[ADR-10 打包更新](./ADR-10-packaging-signing-update.md)**：锁定 runtime/依赖、签名、外部手动更新、rollback 与双平台发布集合，不建设运行时更新器，并执行 §10/§13 的 release gate。
 
 ## 15. 重新评审条件
 

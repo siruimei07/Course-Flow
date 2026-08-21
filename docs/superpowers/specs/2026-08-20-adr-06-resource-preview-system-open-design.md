@@ -66,7 +66,7 @@ Ponytail 依赖检查据此只批准精确锁定的 `pdfjs-dist` library + 同�
 13. PDF.js 只使用 Display API + 本地同版 worker；不使用 generic viewer、Chromium plugin、iframe/embed/webview/WebContentsView，也不允许网络 asset fallback。
 14. `PreviewReady`、`PreviewUnavailable`、`PlatformActionRequested`、`ResourceAccessProblem` 保持稳定区分；所有资源访问 `dataEffect=unchanged`，解析失败不推断“文件损坏”。
 15. 后续 ADR-09 已进一步收紧：不保存诊断。当前 Problem 只包含驱动文案/动作所需的 code、平台/kind/size bucket、版本与必要计数；不含内容、名称、路径、FileId、标签、metadata、URL、密码、token、耗时历史或原始错误。
-16. preview session 全部易失，软件更新后重新验证；运行时、PDF.js、worker/assets 和政策版本进入 ADR-10 发布清单与双平台更新门。
+16. preview session 全部易失，软件更新后重新验证；运行时、PDF.js、worker/assets 和政策版本进入后续 [ADR-10](../../architecture/adr/ADR-10-packaging-signing-update.md) 发布清单与双平台更新门。
 
 随后用户逐段确认了：责任与数据流、类型/描述符、lease 生命周期、精确限制、渲染/安全/无障碍、系统动作与高风险政策、outcome/失败/当时的问题最小化提案，以及测试/更新兼容/复议条件；问题字段现以 ADR-09 为准。
 

@@ -168,7 +168,7 @@ repeat componentCount times:
 
 根本身及受管理树内由 Node `lstat` 报告为 symbolic link 的条目产生 `entry-link-unsupported`，扫描不跟随、不读取目标、不自动删除；目标平台 packaged conformance 必须覆盖标准 symlink 与 Windows junction。解析后越界同样拒绝，非 regular-file/directory 条目产生 `entry-type-unsupported`。其他普通文件继续可用；局部问题不把整个根伪装为空。
 
-Node 文档化的 `Stats` 类型面只有 `isSymbolicLink()` 等类型判定，没有通用 Windows reparse-tag 字段；Microsoft 则定义了多种 reparse tag，且只有一部分属于 name surrogate。由此本 ADR 明确不保证纯 Node core 能发现每一种非链接 reparse point：若其表现为链接、realpath 越界、特殊类型或访问/枚举错误，就拒绝或把范围标 `unverified`；若平台把它暴露为根内普通文件/目录，则按普通条目处理。要求“识别并拒绝全部 tag”必须重开本 ADR、引入窄 native adapter 并经过 ADR-10 双平台打包门。[Node `Stats`](https://nodejs.org/api/fs.html#class-fsstats)；[Microsoft reparse tags](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-point-tags)；[name-surrogate 判定](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-isreparsetagnamesurrogate)
+Node 文档化的 `Stats` 类型面只有 `isSymbolicLink()` 等类型判定，没有通用 Windows reparse-tag 字段；Microsoft 则定义了多种 reparse tag，且只有一部分属于 name surrogate。由此本 ADR 明确不保证纯 Node core 能发现每一种非链接 reparse point：若其表现为链接、realpath 越界、特殊类型或访问/枚举错误，就拒绝或把范围标 `unverified`；若平台把它暴露为根内普通文件/目录，则按普通条目处理。要求“识别并拒绝全部 tag”必须重开本 ADR、引入窄 native adapter 并经过 [ADR-10](./ADR-10-packaging-signing-update.md) 双平台打包门。[Node `Stats`](https://nodejs.org/api/fs.html#class-fsstats)；[Microsoft reparse tags](https://learn.microsoft.com/en-us/windows/win32/fileio/reparse-point-tags)；[name-surrogate 判定](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-isreparsetagnamesurrogate)
 
 若两个同时存在的 regular-file 路径共享对象证据，它们视为两个目录项和两个 FileId。删除其中一个只处理该路径；外部移动关联要求旧路径消失且候选唯一，因此 hard link 不会被误判成移动。
 
@@ -400,7 +400,7 @@ Electron/Node/OS 更新后：
 4. 相同 marker + exact existing PathKey 的 FileId 保留，stamps 重新生成；
 5. 旧应用不能打开已经按 ADR-04 升级的 DB，不提供双写或反向迁移。
 
-只改变 DB 中派生/可重建的 PathKey 可以在安全副本后重新扫描迁移；任何改变 marker 或真实 Library 布局的应用更新都属于 [ADR-08](./ADR-08-restore-activation-recovery.md) staged activation/rollback，不能藏进普通 SQLite migration。迁移前安全副本、应用 rollback 窗口与 packaged runtime 由 ADR-10 决定。
+只改变 DB 中派生/可重建的 PathKey 可以在安全副本后重新扫描迁移；任何改变 marker 或真实 Library 布局的应用更新都属于 [ADR-08](./ADR-08-restore-activation-recovery.md) staged activation/rollback，不能藏进普通 SQLite migration。迁移前安全副本、精确应用版本回退与 packaged runtime 已由 [ADR-10](./ADR-10-packaging-signing-update.md) 决定。
 
 ## 12. 后续 ADR 边界
 
@@ -416,9 +416,9 @@ ADR-05 提供 Library checkpoint 的必要条件：marker/root generation 稳定
 
 [ADR-08](./ADR-08-restore-activation-recovery.md) 决定 snapshot staging、DB + Library external activation journal、continue/rollback 和启动恢复。恢复中的旧绝对根配置不可信；必须验证当前设备位置、marker、WorkspaceId 和 Library 内容。本 ADR 的普通 ChangeRoot 不能冒充整库 restore activation。
 
-### ADR-10：打包与更新
+### [ADR-10：打包与更新](./ADR-10-packaging-signing-update.md)
 
-ADR-10 锁定 Electron/Node 版本、签名、更新集合和双平台发布门。它必须在真实安装包中证明本 ADR 所需窄 API；版本不满足时不能以开发环境通过代替。
+ADR-10 锁定 Electron/Node release 基线、签名、外部手动更新集合和双平台发布门。它必须在真实安装包中证明本 ADR 所需窄 API；版本不满足时不能以开发环境通过代替。
 
 ## 13. 结果与代价
 

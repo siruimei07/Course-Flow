@@ -300,7 +300,7 @@ Drizzle、Kysely 或自建 repository 不能替代 CourseFlow 的 revision、rec
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest、Library 内容、digest、无压缩不可变目录、临时发布与保留；
 - `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：外部 activation journal、数据库/Library 切换、继续、回滚和启动恢复；
 - `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：无生产诊断/日志/导出；只保留 typed StructuredProblem 与本 ADR 的正式正确性记录；
-- `ADR-TOPIC-10`：Electron 精确版本、打包、签名、公证、安装与更新。
+- [`ADR-TOPIC-10`](./ADR-10-packaging-signing-update.md)：Electron release 基线、打包、签名、公证、安装与更新，已由 ADR-10 接受并闭合。
 
 这些相邻与后续 ADR 不得绕过单一 DATA owner、放宽 COMMIT 成功边界、把云盘变成活动库、把 binding 类型泄露出 DATA，或把跨文件 activation 伪装成 SQLite 原子事务。
 

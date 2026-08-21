@@ -27,12 +27,12 @@
 ### 1.1 追溯边界
 
 - Requirement：`STATE-001/002`、`NFR-001/002/005/006/010`、`MVP-DOD-005–008`；
-- User/UI：`UF-A-01/07`、`UI-ENTRY-01`、`UI-DATA-01/02` 及所有显示失败、降级、未知状态的表面；
+- User/UI：`UF-A-01/07/09`、`UI-ENTRY-01`、`UI-DATA-01/02/03` 及所有显示失败、降级、未知状态的表面；
 - Module：全部现有模块；不新增 `MOD-DIAG` 或同义模块；
-- Interface：`IF-WORKSPACE`、`IF-STRUCTURED-PROBLEM`、`IF-OPERATION-HANDLE` 以及 ADR-03–08 已批准的正式正确性记录；不新增日志/诊断/支持包接口；
-- Flow：`FLOW-00–06` 的失败语义，重点是 `FLOW-03/04/05`；
-- Quality：`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-LOCAL-01`、`Q-ACCESS-01`、`Q-PORTABLE-01`、`Q-CONTINUITY-01`、`Q-DIAG-01`；
-- Test：`TEST-SHELL-001/003/004`、`TEST-WORKSPACE-003–006`、`TEST-LIBRARY-002/006/007`、`TEST-PROTECT-002–006`、`TEST-DATA-001–006`、`TEST-PLATFORM-003/004`、`TEST-PRIVACY-001` 与所有相关 failpoint。
+- Interface：`IF-WORKSPACE`、`IF-STRUCTURED-PROBLEM`、`IF-OPERATION-HANDLE`、ADR-03–08 已批准的正式正确性记录，以及 ADR-10 的发行/迁移回退白名单记录；不新增日志/诊断/支持包接口；
+- Flow：`FLOW-00–07` 的失败语义，重点是 `FLOW-03/04/05/07`；
+- Quality：`Q-TRUTH-01`、`Q-PROTECT-01`、`Q-ISOLATE-01`、`Q-LOCAL-01`、`Q-ACCESS-01`、`Q-PORTABLE-01`、`Q-CONTINUITY-01`、`Q-DIAG-01`、`Q-RELEASE-01`；
+- Test：`TEST-SHELL-001/003–005`、`TEST-WORKSPACE-003–007`、`TEST-LIBRARY-002/006/007`、`TEST-PROTECT-002–007`、`TEST-DATA-001–007`、`TEST-PLATFORM-003–005`、`TEST-PRIVACY-001`、`TEST-RELEASE-004`、`TEST-FLOW-07-UPDATE-ROLLBACK` 与所有相关 failpoint。
 
 `Q-DIAG-01` 是已发布的稳定架构 ID，本 ADR 保留该 ID，但把它的规范含义限定为“当前状态可解释且可操作”，不表示存在 diagnostic subsystem。
 
@@ -42,7 +42,7 @@ CourseFlow v1 采用**无生产诊断子系统 + 结构化当前问题 + 正确�
 
 1. 不新增生产诊断、日志、崩溃报告、遥测、分析或支持包模块、服务、接口、页面、设置、存储、后台任务或依赖。
 2. CourseFlow 自有生产代码不创建或轮转 app-owned log 文件，不建立事件历史、trace、span、breadcrumb、metric 或 crash dump/report 存储。
-3. 应用不收集、读取、管理、导出或上传崩溃报告/转储，也不主动启用相关运行时收集能力。操作系统或运行时在 CourseFlow 控制外产生的记录不成为 CourseFlow 产品数据；ADR-10 必须验证打包配置没有主动开启收集路径。
+3. 应用不收集、读取、管理、导出或上传崩溃报告/转储，也不主动启用相关运行时收集能力。操作系统或运行时在 CourseFlow 控制外产生的记录不成为 CourseFlow 产品数据；[ADR-10](./ADR-10-packaging-signing-update.md) 必须验证打包配置没有主动开启收集路径。
 4. 应用不进行遥测、分析、错误上报或静默网络传输，也不提供 opt-in 开关或预留 hook。
 5. 不提供“查看诊断”、日志查看器、诊断导出、支持包生成、复制 debug info 或类似产品动作。
 6. `StructuredProblem` 继续作为当前请求、能力或恢复状态的唯一公共错误语义；它必须给出稳定 code、scope、dataEffect、affectedCapabilities、允许动作和最小 typed details。
@@ -74,7 +74,7 @@ CourseFlow v1 采用**无生产诊断子系统 + 结构化当前问题 + 正确�
 
 ### 3.2 网络边界
 
-错误、失败、崩溃、性能和使用行为都不得触发网络请求。生产依赖也不得以默认行为发送这些信息。ADR-10 的 dependency/configuration/package audit 必须证明交付物中没有 CourseFlow 主动启用的 telemetry、crash upload 或 error-report endpoint。
+错误、失败、崩溃、性能和使用行为都不得触发网络请求。生产依赖也不得以默认行为发送这些信息。[ADR-10](./ADR-10-packaging-signing-update.md) 的 dependency/configuration/package audit 必须证明交付物中没有 CourseFlow 主动启用的 telemetry、crash upload 或 error-report endpoint。
 
 这不改变用户明确选择的本地文件操作、系统打开或未来另行批准的网络功能；当前 MVP 核心仍按 `NFR-001` 禁网运行。
 
@@ -221,5 +221,5 @@ platform/runtime error
 ## 11. 实现边界
 
 - 本 ADR 批准技术与产品负向边界，不授权开始应用实现、implementation plan 或新增依赖。
-- ADR-10 必须把禁用主动 crash/telemetry/reporting、无诊断 artifact 和 packaged `TEST-PRIVACY-001` 纳入打包发布证据。
-- 当前唯一仍待决定的初始跨切面主题是 `ADR-TOPIC-10`：运行时版本基线、平台路径、打包、签名、公证、安装、更新与发布。
+- [ADR-10](./ADR-10-packaging-signing-update.md) 已把禁用主动 crash/telemetry/reporting、无诊断 artifact 和 packaged `TEST-PRIVACY-001` 纳入打包发布证据。
+- `ADR-TOPIC-10` 已由 ADR-10 接受；初始跨切面 ADR 基线闭合。本 ADR 不授权实现或在实现中偏离后续已接受决策。

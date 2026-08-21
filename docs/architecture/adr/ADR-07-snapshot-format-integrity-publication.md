@@ -353,7 +353,7 @@ writer 只创建独立 regular files，不主动创建 symlink 或 hard link。N
 
 Retention 只在新 SnapshotId、root digest 与 `backupSucceededThrough` transaction 已提交后启动：
 
-本 ADR 的 routine backup snapshot 无论由 watermark 自动触发还是用户选择“立即备份”，都进入同一两份保留政策；ADR-10 的更新前 safety copy 不属于 BackupSet retention。
+本 ADR 的 routine backup snapshot 无论由 watermark 自动触发还是用户选择“立即备份”，都进入同一两份保留政策；[ADR-10](./ADR-10-packaging-signing-update.md) 的迁移前 safety copy 不属于 BackupSet retention。
 
 1. 只枚举当前 WorkspaceId + BackupSetId 下、由本机成功记录精确登记的 snapshot；
 2. 对每项重新 full-validate；只有 verified 项计入数量；
@@ -403,7 +403,7 @@ cleanup 失败只报告 `cleanup-pending`，不回滚新 snapshot、success wate
 
 ### 11.3 发布门
 
-ADR-10 必须把 snapshot reader/writer、Node/SQLite/fs/crypto 运行时与双平台 packaged fixture 纳入同一更新集合。任何 Electron/Node/SQLite/OS 变化都重跑 Online Backup、sync/close、same-parent rename、partial cloud、old/current/future format、operation recovery、retention 和 G7；mixed build/protocol 不运行普通备份。
+[ADR-10](./ADR-10-packaging-signing-update.md) 必须把 snapshot reader/writer、Node/SQLite/fs/crypto 运行时与双平台 packaged fixture 纳入同一更新集合。任何 Electron/Node/SQLite/OS 变化都重跑 Online Backup、sync/close、same-parent rename、partial cloud、old/current/future format、operation recovery、retention 和 G7；mixed build/protocol 不运行普通备份。
 
 ## 12. 失败语义与当前问题
 
@@ -486,7 +486,7 @@ ADR-07 只有在以下证据通过后才视为已落实：
 
 - **[ADR-08 恢复激活](./ADR-08-restore-activation-recovery.md)**：决定 RestoreSession staging、跨 database/Library activation checkpoint、RootGeneration/epoch、continue/rollback 与启动恢复。ADR-07 只交付 verified raw snapshot，不把目录 rename 冒充跨位置激活。
 - **[ADR-09 无生产诊断](./ADR-09-no-production-diagnostics.md)**：不建设本地日志、诊断导出、崩溃收集或遥测；Operation/Problem 只保留当前 typed safe fields，snapshot 正确性记录不扩张为排障历史。
-- **ADR-10 打包更新**：锁定 Electron/Node/SQLite、签名/公证、更新器、runtime manifest、发布回滚和更新前 safety-copy 生命周期，并执行 §11.3/§15 的 packaged gate。
+- **[ADR-10 打包更新](./ADR-10-packaging-signing-update.md)**：锁定 Electron/Node/SQLite release 基线、签名/公证、外部手动更新、runtime manifest、精确版本回退和迁移前 safety-copy 生命周期，不建设运行时更新器，并执行 §11.3/§15 的 packaged gate。
 
 未来的签名、加密、archive/compression、incremental/dedupe 或 shared object store 都需要新的产品需求、格式版本、迁移/密钥/恢复政策和 ADR；不得作为 v1 的兼容实现细节加入。
 

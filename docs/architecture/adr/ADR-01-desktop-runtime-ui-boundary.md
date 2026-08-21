@@ -136,6 +136,6 @@ C# 可形成强类型单语言方案，SQLite 与桌面数据能力成熟；但 
 - `ADR-TOPIC-04`：schema、迁移与兼容；
 - `ADR-TOPIC-05/06`：监听、索引、文件替换、预览与系统打开；
 - `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：生产环境不建设诊断、日志、崩溃收集、遥测或支持包；
-- `ADR-TOPIC-10`：打包、签名与更新。
+- [`ADR-TOPIC-10`](./ADR-10-packaging-signing-update.md)：打包、签名与更新，已由 ADR-10 接受并闭合。
 
 这些后续 ADR 不得重新向 Renderer 暴露底层能力，也不得引入第二套产品 UI 或第二种项目自有通用编程语言，除非以新决策明确取代本 ADR。

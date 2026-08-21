@@ -30,7 +30,7 @@ ADR-03 已决定 SQLite WAL + `synchronous=FULL`、单 writer、Online Backup �
 - 新工作区何时才算 succeeded，旧副本与安全集何时可清理；
 - v1 如何为未来资源留出有约束的版本升级，而不预建通用 2PC/plugin 框架。
 
-`ATTEMPT.md` 是归档旧实现证据，不是恢复目标或实现来源。本文批准技术设计，不授权开始实现，也不替 ADR-10 决定绝对平台位置、打包或更新。后续 [ADR-09](./ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本 ADR 的 activation journal、receipt 与 fingerprint 仍是确定继续/回滚所必需的正式正确性协议。
+`ATTEMPT.md` 是归档旧实现证据，不是恢复目标或实现来源。本文批准技术设计，不授权开始实现；本文接受时留给后续 ADR 的绝对平台位置、打包与更新，现已由 [ADR-10](./ADR-10-packaging-signing-update.md) 决定。后续 [ADR-09](./ADR-09-no-production-diagnostics.md) 已决定不建设生产诊断/日志/支持包；本 ADR 的 activation journal、receipt 与 fingerprint 仍是确定继续/回滚所必需的正式正确性协议。
 
 ### 1.1 追溯边界
 
@@ -54,7 +54,7 @@ CourseFlow v1 采用**深 Restore Module + RestoreSession 专属安全恢复集 
 4. 当前 DATA 与已配置 Library 均健康时，先创建完整、不可变、RestoreSession 专属的 `RestoreSafetySetV1`。它不是 Snapshot/BackupSet，不计入最近两份保留。
 5. 当前 DATA 损坏/只读或已配置 Library 无法完整读取时，只有原始 DATA/Library/恢复协调证据可保持不变且稳定控制位置可写，才允许带明确警告的 `restricted-waived`；否则停止。
 6. 最终确认绑定候选、Library target、impact digest，以及健康 current 的 revision/RootGeneration 或 restricted current 的 raw evidence fingerprint。确认后立即进入 maintenance；checkpoint 前可取消，外部变化要求重新 preview。
-7. `ActivityControlRoot` 位于不会随 DATA slot、LibraryRoot 或 backup destination 一起切换的稳定本地应用控制区域。确切 macOS/Windows 基址留给 ADR-10，但其跨更新稳定、先于 DATA 打开可读、不得位于云盘/Library/可交换 DataSlot 是 ADR-08 硬约束。
+7. `ActivityControlRoot` 位于不会随 DATA slot、LibraryRoot 或 backup destination 一起切换的稳定本地应用控制区域；确切 macOS/Windows 基址由 [ADR-10](./ADR-10-packaging-signing-update.md) 选择。其跨更新稳定、先于 DATA 打开可读、不得位于云盘/Library/可交换 DataSlot 是 ADR-08 硬约束。
 8. DATA candidate/rollback 与活动 DataSlot 同父同卷；Library candidate 与最终 LibraryRoot 同父同卷。从备份卷到 sibling staging 只用 checkpoint 前流式 copy + full validation，activation 永不 cross-volume copy-delete。
 9. `ActivationPlanV1` 是封闭的 `database + optional library`；每个资源用 typed present/absent/target/disposition variant，不接受 plugin、hook 或任意 participant list。
 10. 外部 activation journal 是 canonical、append-only、hash-chained、write-ahead。每个物理动作先持久 intent，动作后重新观察磁盘再写 observed。
@@ -285,7 +285,7 @@ PROTECT 按卷计算并显示保守峰值：
 
 ### 7.1 稳定控制区域
 
-ADR-10 将为每个平台选定绝对 app-local base path；ADR-08 规定逻辑布局和不变量：
+[ADR-10](./ADR-10-packaging-signing-update.md) 已为每个平台选定绝对 app-local base path；ADR-08 规定逻辑布局和不变量：
 
 ```text
 <stable app-local activity area>/
@@ -461,7 +461,7 @@ checkpoint 前 `session/` 使用独立的 `courseflow-restore-session-control-v1
 - 每个 sibling rename 只给一个 namespace action 的可见性，不形成跨资源事务；
 - file sync、close、rename 和 reopen 不等于所有硬件/文件系统上的绝对断电持久；
 - CourseFlow 不使用 TxF、cross-volume move、copy-delete fallback、database-attached 伪 2PC 或云盘事务；
-- v1 的可验证承诺是 process kill/crash/restart 下的确定性 recovery；G6/G7/ADR-10 必须报告真实 packaged platform/power-loss evidence。
+- v1 的可验证承诺是 process kill/crash/restart 下的确定性 recovery；G6/G7/[ADR-10](./ADR-10-packaging-signing-update.md) 必须报告真实 packaged platform/power-loss evidence。
 
 ## 10. 启动检查与恢复矩阵
 
@@ -707,7 +707,7 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 - 普通恢复可能需要约三份完整数据的峰值空间；
 - confirm 后存在可见 maintenance 窗口，Library 全量复制/对账可能较长；
 - append-only journal、fingerprint、failpoint 和两平台验证增加实现/测试工作；
-- `ActivityControlRoot` 与 DataSlot 稳定布局成为 ADR-10 的发布约束；
+- `ActivityControlRoot` 与 DataSlot 稳定布局成为 [ADR-10](./ADR-10-packaging-signing-update.md) 的发布约束；
 - Windows/macOS 的目录占用与持久化差异不能靠单元测试完全证明。
 
 这些成本来自真实数据安全边界，不能通过隐藏部分成功、跨卷 copy-delete或把 rename 称为全局事务来消除。
@@ -745,7 +745,7 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 ### 18.3 相关与待决 ADR
 
 - `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：不建设生产诊断、日志、崩溃收集、遥测或支持包；本 ADR 的正式恢复协调记录继续按白名单服务于正确性；
-- `ADR-TOPIC-10`：ActivityControlRoot/DataSlotsParent 的绝对平台路径、bundled Electron/Node/SQLite、代码签名、公证、安装/更新、平台 filesystem capability 与 packaged G6/G7 gate。
+- [`ADR-TOPIC-10`](./ADR-10-packaging-signing-update.md)：ActivityControlRoot/DataSlotsParent 的绝对平台路径、bundled Electron/Node/SQLite、代码签名、公证、安装/更新、平台 filesystem capability 与 packaged G6/G7 gate；已接受。
 
 ## 19. 覆盖审阅结论
 
@@ -770,4 +770,4 @@ mtime、目录名、单个 marker、单边 receipt 或“看起来能打开”�
 - 已用三种独立模块边界方案进行 Design It Twice 比较，并选择深 Restore Module。
 - 已逐层完成 Requirement → MOD → IF → FLOW → Q → TEST 覆盖审阅。
 - 当前没有运行应用、Electron packaged build、真实 APFS/NTFS、kill/power-loss 或性能实验；§15 列出的是实现后必须提供的证据，不是已通过结果。
-- 本 ADR 不授权实现、implementation plan、新依赖或 ADR-10。
+- 本 ADR 自身不授权实现、implementation plan、新依赖或替代 [ADR-10](./ADR-10-packaging-signing-update.md) 的发布决策。

@@ -230,7 +230,7 @@ v1 的 `ActivationPlanV1` 是封闭的 `database + optional library`。未来第
 - 新的正式资源必须与 DATA/Library 共同激活；
 - 成功/回滚/安全集保留产品承诺改变。
 
-当时留给 ADR-09 的诊断导出/保留/隐私细节，已由后续 [ADR-09](../../architecture/adr/ADR-09-no-production-diagnostics.md) 以“不建设该能力”解决；绝对平台位置、bundled runtime、签名、更新与 packaged evidence 仍属于 ADR-10。
+当时留给 ADR-09 的诊断导出/保留/隐私细节，已由后续 [ADR-09](../../architecture/adr/ADR-09-no-production-diagnostics.md) 以“不建设该能力”解决；绝对平台位置、bundled runtime、签名、外部手动更新与 packaged evidence 已由后续 [ADR-10](../../architecture/adr/ADR-10-packaging-signing-update.md) 决定。
 
 ## 10. 产物
 

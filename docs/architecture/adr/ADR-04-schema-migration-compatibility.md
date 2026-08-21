@@ -33,7 +33,7 @@ CourseFlow 采用**按领域归一化的关系 schema、单调连续的 schema l
 6. Renderer ↔ Main 与 Main ↔ Workspace 使用精确 protocol/build handshake；不允许混合版本组件或范围协商。
 7. 64 位整数与精确小数在公共 DTO 中使用 canonical 十进制字符串；持久小数使用规范化 coefficient + scale，不使用 SQLite `REAL` 或 JavaScript 浮点数作为事实。
 8. Command digest 使用项目自有的受限 `courseflow-canonical-json-v1` + Node core SHA-256，并永久记录 encoding 与 algorithm 版本。
-9. Snapshot format、跨数据库/Library 激活和 packaged runtime 分别由 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)、[ADR-08](./ADR-08-restore-activation-recovery.md)、ADR-10 完成；本 ADR 只规定它们必须引用和验证的 structured-data compatibility predicate。
+9. Snapshot format、跨数据库/Library 激活和 packaged runtime 分别由 [ADR-07](./ADR-07-snapshot-format-integrity-publication.md)、[ADR-08](./ADR-08-restore-activation-recovery.md)、[ADR-10](./ADR-10-packaging-signing-update.md) 完成；本 ADR 只规定它们必须引用和验证的 structured-data compatibility predicate。
 
 ## 3. 数据库身份、版本与首发冻结
 
@@ -197,7 +197,7 @@ GRADE schema 只在 `MVP-C1` 实际交付的 schema level 出现：
 
 ### 5.1 SQLite 类型
 
-所有 CourseFlow 自有表都以 `STRICT` 创建。ADR-10 必须锁定并在 packaged macOS/Windows 中验证 SQLite 不低于 3.37.0；运行时不满足时停止启动，不以非 STRICT schema fallback。
+所有 CourseFlow 自有表都以 `STRICT` 创建。[ADR-10](./ADR-10-packaging-signing-update.md) 要求锁定实际 bundled SQLite，并在 packaged macOS/Windows 中验证其不低于 3.37.0；运行时不满足时停止启动，不以非 STRICT schema fallback。
 
 | 语义 | 物理表示 |
 |---|---|
@@ -295,7 +295,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 
 每一级独立原子，因此中断后以已提交的 `user_version` 继续下一步，不猜测、跳级或回放已提交级别。任何失败保留原活动库或明确的最后提交 level 以及已验证 safety copy，并进入 recovery；绝不删库重建。
 
-迁移 safety copy 的保留期限、应用更新回滚窗口和用户可见清理政策由 ADR-10 决定，migration 代码不得自行删除。涉及真实 Library 目录变换的升级不是普通 SQLite migration，必须通过 [ADR-08](./ADR-08-restore-activation-recovery.md) 的 staged activation/rollback 协议。
+迁移 safety copy 的保留、精确应用版本回退和用户显式清理政策已由 [ADR-10](./ADR-10-packaging-signing-update.md) 决定，migration 代码不得自行删除。涉及真实 Library 目录变换的升级不是普通 SQLite migration，必须通过 [ADR-08](./ADR-08-restore-activation-recovery.md) 的 staged activation/rollback 协议。
 
 ### 7.4 更新与降级兼容
 
@@ -304,7 +304,7 @@ Migration 不是可由调用方重放的业务 command，因此不伪造 Command
 - 旧应用看到更高 `user_version` 时返回 `incompatible-version`，不尝试读取旧字段子集、不写入、不自动 downgrade。
 - 用户若要回到旧应用，必须显式选择迁移前 safety copy，并接受迁移后新增事实不会出现在旧副本中。
 - 不提供 bidirectional migration、dual-write、shadow schema、旧 schema read adapter 或自动合并。
-- Electron/Node/SQLite/IPC/schema 作为一个经过 ADR-10 验证的应用组件集合发布；不支持 Main、Renderer、Workspace utility 混用不同 build。
+- Electron/Node/SQLite/IPC/schema 作为一个经过 [ADR-10](./ADR-10-packaging-signing-update.md) 验证的应用组件集合发布；不支持 Main、Renderer、Workspace utility 混用不同 build。
 
 这保证“软件更新可兼容已有用户数据”，但不承诺“升级后的数据可被旧软件继续编辑”。
 
@@ -559,7 +559,7 @@ CourseFlow 没有跨语言网络互操作需求。完整 RFC 8785 profile 仍需
 - `ADR-TOPIC-07`（[ADR-07 已接受](./ADR-07-snapshot-format-integrity-publication.md)）：snapshot manifest 的精确编码、目录布局、压缩、digest、临时发布和保留；
 - `ADR-TOPIC-08`（[ADR-08 已接受](./ADR-08-restore-activation-recovery.md)）：external activation journal、数据库/Library 可恢复的逻辑全有或全无切换、continue/rollback；
 - `ADR-TOPIC-09`（[ADR-09 已接受](./ADR-09-no-production-diagnostics.md)）：无生产日志、diagnosticRef 或诊断导出；StructuredProblem 只携带 typed safe details；
-- `ADR-TOPIC-10`：Electron/Node/SQLite 精确版本、application_id 首发登记门、安装更新、safety-copy 保留/清理、签名与双平台发布。
+- [`ADR-TOPIC-10`](./ADR-10-packaging-signing-update.md)：Electron/Node/SQLite release 基线、application identity、安装更新、safety-copy 保留/清理、签名与双平台发布；已接受。
 
 这些下游 ADR 可以细化自己的物理协议，但不得改变本 ADR 的 schema level 单一真相、forward-only 数据政策、unknown-future stop、exact DTO/digest 或“无部分成功”边界。
 

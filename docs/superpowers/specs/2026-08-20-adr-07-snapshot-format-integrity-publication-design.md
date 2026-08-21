@@ -52,7 +52,7 @@ Ponytail 依赖检查据此不批准新依赖：v1 使用现有 Node core `fs`�
 
 1. 任一 Library 必需文件 missing、unverified 或复制期间变化时停止整份 snapshot；MVP 不提供部分快照。
 2. v1 只使用 checksum；不增加签名、加密、密钥、账户或恢复政策，也不把 SHA-256 称为认证。
-3. 每个 Workspace 的每个 BackupSet 保留最近两份 verified automatic snapshots；ADR-10 的更新前 safety copy 使用独立生命周期。
+3. 每个 Workspace 的每个 BackupSet 保留最近两份 verified automatic snapshots；后续 [ADR-10](../../architecture/adr/ADR-10-packaging-signing-update.md) 只在真实前向 migration 前创建的 safety copy 使用独立生命周期。
 4. 物理格式为 uncompressed immutable directory，不使用 archive、压缩或共享 object store。
 5. PROTECT 拥有 manifest、发布与 retention；DATA 提供 Online Backup；LIBRARY 提供完整 verified closure；PLATFORM 只提供窄文件系统能力。
 6. 受管理目录按 repository → WorkspaceId → BackupSetId → staging/final 分层；SnapshotId 使用 UUIDv4，候选在正式发布前不获得正式身份。
