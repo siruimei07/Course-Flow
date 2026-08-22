@@ -18,8 +18,8 @@ CourseFlow 是面向大学生的跨平台、本地优先桌面应用。当前仓
 - 用户流程和 UI 行为：`docs/superpowers/specs/`
 - 模块所有权、依赖、FLOW、Q 与 Gate：`docs/architecture/ARCHITECTURE.md`
 - 接口、状态机、Problem、TEST 与追溯：`docs/architecture/MODULE_CONTRACTS.md`
-- 技术实现选择：已批准的 ADR（建立后）
-- 顺序和工作切片：roadmap/backlog（建立后）
+- 技术实现选择：`docs/architecture/adr/` 中已批准的 ADR
+- 顺序和工作切片：`docs/roadmap/ROADMAP.md` 与 `docs/roadmap/BACKLOG.md`
 
 同一含义只保留一个规范来源。发生冲突时，定位拥有该语义的上游文档并显式修正、确认；不得以文件日期较新为由静默覆盖。
 

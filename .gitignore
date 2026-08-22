@@ -1,5 +1,6 @@
 # Local tool state
 /.superpowers/
+/.worktrees/
 
 # Local secrets
 .env
