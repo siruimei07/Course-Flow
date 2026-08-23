@@ -126,4 +126,4 @@ Backlog 生命周期为 `Ready → In Progress → Verification → Done`，遇�
 
 R0 与 R1 已经 `Done`。`WP-R1-05` 已在同一源码提交 `cd3a2fd66bca0fbd7e51c9eadef4dac1393484a2` 上取得 Windows x64 与 macOS arm64 的开发 package 证据并关闭 R1 Gate；签名、安装和公开发布仍由 R12 的独立门禁负责。
 
-`WP-R2-01`–`WP-R2-04` 已经 `Done`，R2 里程碑关闭。当前唯一 `Ready` 的主链工作包是 [`WP-R3-01`](./BACKLOG.md#r3--可用课表)：实现学期生命周期和有效日期范围对课程/meeting 投影的约束。工作包生命周期仍只以 [Backlog 注册表与证据台账](./BACKLOG.md#6-证据台账) 为准；本段仅同步当前指针。
+`WP-R2-01`–`WP-R2-04` 与 `WP-R3-01` 已经 `Done`，R2 里程碑关闭，R3 已交付学期生命周期和 Course/Meeting 有效日期范围。当前唯一 `Ready` 的主链工作包是 [`WP-R3-02`](./BACKLOG.md#r3--可用课表)：让重复 Meeting 产生跨重启身份稳定的 occurrence/segment。工作包生命周期仍只以 [Backlog 注册表与证据台账](./BACKLOG.md#6-证据台账) 为准；本段仅同步当前指针。
