@@ -1,3 +1,7 @@
+/**
+ * @file Renders the bounded first-run Term, Course, and Meeting setup flow.
+ */
+
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
@@ -7,27 +11,12 @@ import {
     type MeetingTypeCode,
     type MeetingWeekday,
 } from '../shared/workspace-course-contract';
-import type { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
 import {
     normalizeCreateTermCommand,
     type CreateTermCommand,
     type SetupProjection,
 } from '../shared/workspace-term-contract';
-
-type SetupState =
-    | Readonly<{ kind: 'loading' }>
-    | Readonly<{
-        kind: 'term';
-        dataMode: 'ready' | 'read-only';
-        projection: SetupProjection;
-    }>
-    | Readonly<{
-        kind: 'course';
-        dataMode: 'ready' | 'read-only';
-        projection: SetupProjection;
-    }>
-    | Readonly<{ kind: 'complete'; projection: SetupProjection }>
-    | Readonly<{ kind: 'problem'; message: string }>;
+import { setupStateFrom, type SetupState } from './setup-state';
 
 type TermDraft = Readonly<{
     name: string;
@@ -79,22 +68,6 @@ const weekdayNames: Record<MeetingWeekday, string> = {
     SAT: '星期六',
     SUN: '星期日',
 };
-
-function setupStateFrom(outcome: WorkspaceSetupOutcome): SetupState {
-    if (!outcome.ok) {
-        return { kind: 'problem', message: outcome.problem.message };
-    }
-    if (outcome.value.kind !== 'workspace.setup-projection') {
-        return { kind: 'problem', message: 'Workspace 返回了意外的设置状态。' };
-    }
-    const projection = outcome.value.projection;
-    if (!projection.currentTerm) {
-        return { kind: 'term', dataMode: outcome.value.dataMode, projection };
-    }
-    return projection.courses.length === 0
-        ? { kind: 'course', dataMode: outcome.value.dataMode, projection }
-        : { kind: 'complete', projection };
-}
 
 async function loadSetupState(): Promise<SetupState> {
     const bootstrap = await window.courseFlow.query();
