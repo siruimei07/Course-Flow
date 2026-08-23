@@ -45,8 +45,8 @@
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
 | `WP-R2-01` | DATA commit、schema/迁移、事务和幂等摘要基础可持久化并在重启后重开 | `WP-R1-04` | `WP-R1-05` | `A-DATA-001` | `TEST-DATA-001`, `TEST-DATA-002`, `TEST-DATA-003`, `TEST-DATA-005` | `Done` |
-| `WP-R2-02` | 首次 setup 可创建并选择当前学期，重启后保持稳定身份 | `WP-R2-01` | — | `A-TERM-001`, `A-TERM-002` | — | `In Progress` |
-| `WP-R2-03` | 用户可创建课程和首个 meeting，并保留课程核心字段与 TBA 区分 | `WP-R2-02` | — | `A-COURSE-001`–`A-COURSE-004` | — | — |
+| `WP-R2-02` | 首次 setup 可创建并选择当前学期，重启后保持稳定身份 | `WP-R2-01` | — | `A-TERM-001`, `A-TERM-002` | — | `Done` |
+| `WP-R2-03` | 用户可创建课程和首个 meeting，并保留课程核心字段与 TBA 区分 | `WP-R2-02` | — | `A-COURSE-001`–`A-COURSE-004` | — | `Ready` |
 | `WP-R2-04` | setup → 当前学期 → 课程 → meeting → 重启的 UI 纵向切片通过 | `WP-R2-03` | `WP-R1-05` | — | — | — |
 
 ### R3 — 可用课表
@@ -219,6 +219,8 @@
 | 2026-08-23 | `WP-R1-05` | `Blocked → Done` | clean source `cd3a2fd66bca0fbd7e51c9eadef4dac1393484a2`；macOS arm64 final wrapper `out/CourseFlow Dev-darwin-arm64/CourseFlow Dev.app` | macOS `26.5.2` / build `25F84` / `arm64` / `Mac15,12`；Node `v24.19.0`、pnpm `11.19.0`、Electron `v43.4.1`、SQLite `3.53.1`；在隔离 worktree 的该 clean source 上运行 `pnpm install --frozen-lockfile`、`pnpm test`（36 pass、0 fail、1 个 Windows 专属 skip）、`pnpm typecheck`、`pnpm package`、`pnpm smoke:packaged` 均通过，runner 报 `PASS packaged smoke darwin/arm64 development:cd3a2fd66bca0fbd7e51c9eadef4dac1393484a2 SQLite 3.53.1 verified-local`；正常模式以 `open -n` 启动同一 app，CoreGraphics 观察到 owner `CourseFlow Dev` 的 layer 0 on-screen 窗口 `CourseFlow`，随后通过应用 quit 正常退出，最终 exact wrapper/helper process count 为 0 | macOS 与既有 Windows x64 证据绑定同一 clean source commit，进程/隐私/启动/退出/package smoke 的双平台 R1 Gate 因此关闭。当前 app unsigned、unnotarized、uninstalled，不是 public candidate；macOS 签名/公证/DMG、Windows WiX/签名/SAC-On/干净机器、安装、迁移/回退与发布继续由 `WP-R12-03`–`WP-R12-06` 验证。屏幕捕获权限与 Accessibility 未授予自动化进程，因此没有把截图像素或辅助功能树内容列为证据；真实 on-screen window、完整 smoke handshake 与无残留进程均已独立观察。 |
 
 | 2026-08-23 | `WP-R2-02` | `Ready → In Progress` | 本工作包 | 新增 Term DTO、DATA、迁移和 Workspace restart 测试后运行 `pnpm run clean:test`、`pnpm run test:compile`（RED，exit 2） | 测试编译精确失败于尚不存在的 `workspace-term-contract`、`WorkspaceApplication`、`openWorkspaceDataWithMigrations` 与 `readSetupProjection`；开始首次 setup 当前学期纵向切片，未实现课程、meeting 或完整导航。 |
+| 2026-08-23 | `WP-R2-02` | `In Progress → Done` | clean implementation source `c14310457052ef1f27ab7a9bb0f32f6478b187e1`；Windows x64 package `out/CourseFlow Dev-win32-x64` | Windows 11 `10.0.26200` / build `26200` / x64；Node `v24.19.0`、pnpm `11.19.0`、Electron `v43.4.1`、SQLite `3.53.1`；targeted 52/52 PASS；`pnpm test` 101/101 PASS；`pnpm typecheck`、`git diff --check`、clean source `pnpm package` 均 PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:c14310457052ef1f27ab7a9bb0f32f6478b187e1 SQLite 3.53.1 verified-local` | level 2 仅交付 Term/Current Term：规范化名称/LocalDate/IANA zone、随机稳定 TermId、唯一 current、同一 ReadSnapshot、Revision/plan EntityVersion、canonical digest/receipt/follow-up/watermark 和 pre/post-COMMIT 收敛均有证据；level 1 receipt/follow-up 经已验证 safety copy 和独立事务迁移保留，迁移中断不重建/重置；read-only/recovery 拒绝写入。首次 setup UI 只经冻结 preload capability → Main → 单一 Workspace utility → DATA，DTO/Renderer 无数据库、路径、Node/Electron/platform 类型。未实现课程、meeting、完整 Today/导航、深色模式或后续模块；macOS 本轮未重新打包/烟测，不从既有平台证据推断本提交通过。dirty source 的首次 smoke 尝试按 clean build ID 门禁被预期拒绝，随后在上述 clean implementation source 重新 package/smoke 通过。 |
+| 2026-08-23 | `WP-R2-03` | `— → Ready` | `WP-R2-02` clean implementation source `c14310457052ef1f27ab7a9bb0f32f6478b187e1` | `WP-R2-02` registry/证据已为 `Done`；`WP-R2-03` 无额外证据依赖 | `WP-R2-03` 成为唯一 `Ready` 工作包；课程与 meeting 仍未实现。 |
 
 ## 7. 拆包与变更规则
 
