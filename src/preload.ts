@@ -1,3 +1,7 @@
+/**
+ * @file Exposes the bounded CourseFlow Workspace Interface to the Renderer.
+ */
+
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   isBootstrapOutcome,
@@ -11,13 +15,21 @@ import {
   makeCreateCourseWithMeetingRequest,
   makeCreateTermRequest,
   makeInitializeWorkspaceRequest,
+  makeRestoreTermAsCurrentRequest,
   makeSetupQueryRequest,
+  makeUpdateTermEndDateRequest,
   WORKSPACE_SETUP_CHANNEL,
+  type RestoreTermAsCurrentRequestCommand,
   type WorkspaceSetupOutcome,
   type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
-import type { CreateTermCommand } from './shared/workspace-term-contract';
-import type { CreateCourseWithMeetingCommand } from './shared/workspace-course-contract';
+import type {
+  CreateTermCommand,
+  UpdateTermEndDateCommand,
+} from './shared/workspace-term-contract';
+import type {
+  AcceptedCreateCourseWithMeetingCommand,
+} from './shared/workspace-course-contract';
 
 let workspaceEpoch: string | undefined;
 
@@ -100,8 +112,22 @@ function createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome> 
   ));
 }
 
+function updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeUpdateTermEndDateRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+function restoreTermAsCurrent(
+  command: RestoreTermAsCurrentRequestCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeRestoreTermAsCurrentRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 function createCourseWithMeeting(
-  command: CreateCourseWithMeetingCommand,
+  command: AcceptedCreateCourseWithMeetingCommand,
 ): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeCreateCourseWithMeetingRequest(
@@ -120,6 +146,8 @@ contextBridge.exposeInMainWorld(
     initialize: initializeWorkspace,
     querySetup,
     createTerm,
+    updateTermEndDate,
+    restoreTermAsCurrent,
     createCourseWithMeeting,
   }),
 );

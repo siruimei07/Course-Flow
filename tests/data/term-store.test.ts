@@ -1,3 +1,7 @@
+/**
+ * @file Verifies Current Term persistence and transaction semantics.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -77,6 +81,7 @@ test('A-TERM-001/002: a valid Term is atomically created as the unique Current T
             startDate: '2026-09-08',
             endDate: '2026-12-18',
             timeZone: 'America/Toronto',
+            archived: false,
             entityVersion: '1',
         },
         terms: [{
@@ -85,6 +90,7 @@ test('A-TERM-001/002: a valid Term is atomically created as the unique Current T
             startDate: '2026-09-08',
             endDate: '2026-12-18',
             timeZone: 'America/Toronto',
+            archived: false,
             entityVersion: '1',
         }],
         courses: [],

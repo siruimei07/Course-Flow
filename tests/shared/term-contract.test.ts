@@ -1,8 +1,13 @@
+/**
+ * @file Verifies Term command normalization, digests, and explicit-zone date evaluation.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
     createTermDigestProjection,
+    localDateInTermZone,
     normalizeCreateTermCommand,
 } from '../../src/shared/workspace-term-contract';
 
@@ -25,6 +30,13 @@ const VALID_COMMAND = {
 
 test('A-TERM-001: CreateTerm normalizes a valid bounded DTO before the PLAN boundary', () => {
     assert.deepEqual(normalizeCreateTermCommand(VALID_COMMAND), VALID_COMMAND);
+});
+
+test('A-TERM-003: the same Instant resolves only through the supplied TermZone', () => {
+    const instant = '2026-12-19T04:59:59.999Z';
+    assert.equal(localDateInTermZone(instant, 'America/Toronto'), '2026-12-18');
+    assert.equal(localDateInTermZone(instant, 'UTC'), '2026-12-19');
+    assert.equal(localDateInTermZone(instant, 'Pacific/Kiritimati'), '2026-12-19');
 });
 
 test('A-TERM-001/TEST-PLAN-001/007: CreateTerm rejects invalid names, dates, ranges, and zones', () => {

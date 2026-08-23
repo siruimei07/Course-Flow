@@ -17,14 +17,33 @@ export type MeetingLocation =
     | Readonly<{ kind: 'known'; value: string }>
     | Readonly<{ kind: 'tba' }>;
 
+export type CourseTeachingRangeIntent =
+    | Readonly<{ kind: 'inherit-term' }>
+    | Readonly<{ kind: 'explicit'; startDate: string; endDate: string }>;
+
+export type MeetingEffectiveRangeIntent =
+    | Readonly<{ kind: 'inherit-course' }>
+    | Readonly<{ kind: 'explicit'; startDate: string; endDate: string }>;
+
+export type CourseTeachingRangeProjection = Readonly<{
+    kind: CourseTeachingRangeIntent['kind'];
+    startDate: string;
+    endDate: string;
+}>;
+
+export type MeetingEffectiveRangeProjection = Readonly<{
+    kind: MeetingEffectiveRangeIntent['kind'];
+    startDate: string;
+    endDate: string;
+}>;
+
 export type MeetingSeriesProjection = Readonly<{
     meetingSeriesId: string;
     type: Readonly<{ code: MeetingTypeCode; name: 'Lecture' | 'Tutorial' | 'Practical' }>;
     weekday: MeetingWeekday;
     localStart: string;
     localEnd: string;
-    effectiveStartDate: string;
-    effectiveEndDate: string;
+    effectiveRange: MeetingEffectiveRangeProjection;
     location: MeetingLocation;
     entityVersion: string;
 }>;
@@ -38,11 +57,13 @@ export type CourseProjection = Readonly<{
     instructor: string | null;
     color: CourseColor | null;
     credits: string | null;
+    teachingRange: CourseTeachingRangeProjection;
+    archived: boolean;
     entityVersion: string;
     meetings: readonly MeetingSeriesProjection[];
 }>;
 
-export type CreateCourseWithMeetingCommand = Readonly<{
+export type LegacyCreateCourseWithMeetingCommand = Readonly<{
     commandId: string;
     followUpId: string;
     expectedRevision: string;
@@ -71,6 +92,40 @@ export type CreateCourseWithMeetingCommand = Readonly<{
         }>;
     }>;
 }>;
+
+export type CreateCourseWithMeetingCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    intent: Readonly<{
+        kind: 'plan.create-course-with-first-meeting';
+        intentSchemaVersion: 2;
+        payload: Readonly<{
+            course: Readonly<{
+                code: string;
+                name: string;
+                section: string | null;
+                instructor: string | null;
+                color: CourseColor | null;
+                credits: string | null;
+                teachingRange: CourseTeachingRangeIntent;
+            }>;
+            meeting: Readonly<{
+                type: MeetingTypeCode;
+                weekday: MeetingWeekday;
+                localStart: string;
+                localEnd: string;
+                effectiveRange: MeetingEffectiveRangeIntent;
+                location: MeetingLocation;
+            }>;
+        }>;
+    }>;
+}>;
+
+export type AcceptedCreateCourseWithMeetingCommand =
+    | LegacyCreateCourseWithMeetingCommand
+    | CreateCourseWithMeetingCommand;
 
 const COURSE_COLORS = new Set<CourseColor>([
     'red',
@@ -176,6 +231,54 @@ function canonicalLocation(value: unknown): MeetingLocation | null {
     return text === null ? null : { kind: 'known', value: text };
 }
 
+/**
+ * Validates the persisted Course range intent without resolving its Term dates.
+ */
+function canonicalCourseTeachingRange(value: unknown): CourseTeachingRangeIntent | null {
+    if (hasExactDataKeys(value, ['kind']) && value.kind === 'inherit-term') {
+        return { kind: 'inherit-term' };
+    }
+    if (!hasExactDataKeys(value, ['kind', 'startDate', 'endDate'])
+        || value.kind !== 'explicit'
+        || !isCanonicalLocalDate(value.startDate)
+        || !isCanonicalLocalDate(value.endDate)
+        || value.endDate < value.startDate) {
+        return null;
+    }
+    return { kind: 'explicit', startDate: value.startDate, endDate: value.endDate };
+}
+
+/**
+ * Validates the persisted Meeting range intent without resolving its Course dates.
+ */
+function canonicalMeetingEffectiveRange(value: unknown): MeetingEffectiveRangeIntent | null {
+    if (hasExactDataKeys(value, ['kind']) && value.kind === 'inherit-course') {
+        return { kind: 'inherit-course' };
+    }
+    if (!hasExactDataKeys(value, ['kind', 'startDate', 'endDate'])
+        || value.kind !== 'explicit'
+        || !isCanonicalLocalDate(value.startDate)
+        || !isCanonicalLocalDate(value.endDate)
+        || value.endDate < value.startDate) {
+        return null;
+    }
+    return { kind: 'explicit', startDate: value.startDate, endDate: value.endDate };
+}
+
+/**
+ * Checks a resolved date range projection and its allowed inheritance discriminator.
+ */
+function isResolvedDateRange(
+    value: unknown,
+    inheritedKind: 'inherit-term' | 'inherit-course',
+): value is CourseTeachingRangeProjection | MeetingEffectiveRangeProjection {
+    return hasExactDataKeys(value, ['kind', 'startDate', 'endDate'])
+        && (value.kind === inheritedKind || value.kind === 'explicit')
+        && isCanonicalLocalDate(value.startDate)
+        && isCanonicalLocalDate(value.endDate)
+        && value.endDate >= value.startDate;
+}
+
 function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjection {
     if (!hasExactDataKeys(value, [
         'meetingSeriesId',
@@ -183,8 +286,7 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
         'weekday',
         'localStart',
         'localEnd',
-        'effectiveStartDate',
-        'effectiveEndDate',
+        'effectiveRange',
         'location',
         'entityVersion',
     ])
@@ -200,9 +302,7 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
         || !LOCAL_TIME_PATTERN.test(value.localStart)
         || !LOCAL_TIME_PATTERN.test(value.localEnd)
         || value.localEnd <= value.localStart
-        || !isCanonicalLocalDate(value.effectiveStartDate)
-        || !isCanonicalLocalDate(value.effectiveEndDate)
-        || value.effectiveEndDate < value.effectiveStartDate
+        || !isResolvedDateRange(value.effectiveRange, 'inherit-course')
         || JSON.stringify(canonicalLocation(value.location)) !== JSON.stringify(value.location)
         || !isCanonicalUnsignedSqliteInteger(value.entityVersion)) {
         return false;
@@ -214,7 +314,7 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
  * Validates the exact path-free Course projection crossing the Workspace boundary.
  */
 export function isCourseProjection(value: unknown): value is CourseProjection {
-    return hasExactDataKeys(value, [
+    if (!hasExactDataKeys(value, [
         'courseId',
         'termId',
         'code',
@@ -223,20 +323,35 @@ export function isCourseProjection(value: unknown): value is CourseProjection {
         'instructor',
         'color',
         'credits',
+        'teachingRange',
+        'archived',
         'entityVersion',
         'meetings',
     ])
-        && isCanonicalUuid(value.courseId)
-        && isCanonicalUuid(value.termId)
-        && canonicalText(value.code, 32) === value.code
-        && canonicalText(value.name, 120) === value.name
-        && canonicalOptionalText(value.section, 64) === value.section
-        && canonicalOptionalText(value.instructor, 120) === value.instructor
-        && (value.color === null || COURSE_COLORS.has(value.color as CourseColor))
-        && canonicalCredits(value.credits) === value.credits
-        && isCanonicalUnsignedSqliteInteger(value.entityVersion)
-        && Array.isArray(value.meetings)
-        && value.meetings.every(isMeetingSeriesProjection);
+        || !isCanonicalUuid(value.courseId)
+        || !isCanonicalUuid(value.termId)
+        || canonicalText(value.code, 32) !== value.code
+        || canonicalText(value.name, 120) !== value.name
+        || canonicalOptionalText(value.section, 64) !== value.section
+        || canonicalOptionalText(value.instructor, 120) !== value.instructor
+        || (value.color !== null && !COURSE_COLORS.has(value.color as CourseColor))
+        || canonicalCredits(value.credits) !== value.credits
+        || !isResolvedDateRange(value.teachingRange, 'inherit-term')
+        || typeof value.archived !== 'boolean'
+        || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
+        || !Array.isArray(value.meetings)
+        || !value.meetings.every(isMeetingSeriesProjection)) {
+        return false;
+    }
+
+    const teachingRange = value.teachingRange;
+    return value.meetings.every((meeting: MeetingSeriesProjection) => (
+        meeting.effectiveRange.startDate >= teachingRange.startDate
+        && meeting.effectiveRange.endDate <= teachingRange.endDate
+        && (meeting.effectiveRange.kind !== 'inherit-course'
+            || (meeting.effectiveRange.startDate === teachingRange.startDate
+                && meeting.effectiveRange.endDate === teachingRange.endDate))
+    ));
 }
 
 /**
@@ -254,6 +369,100 @@ export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateC
         || !isCanonicalUuid(value.followUpId)
         || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
         || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.create-course-with-first-meeting'
+        || value.intent.intentSchemaVersion !== 2
+        || !hasExactDataKeys(value.intent.payload, ['course', 'meeting'])
+        || !hasExactDataKeys(value.intent.payload.course, [
+            'code',
+            'name',
+            'section',
+            'instructor',
+            'color',
+            'credits',
+            'teachingRange',
+        ])
+        || !hasExactDataKeys(value.intent.payload.meeting, [
+            'type',
+            'weekday',
+            'localStart',
+            'localEnd',
+            'effectiveRange',
+            'location',
+        ])) {
+        throw new TypeError('CreateCourseWithMeetingCommand has invalid fields');
+    }
+
+    const course = value.intent.payload.course;
+    const meeting = value.intent.payload.meeting;
+    const code = canonicalText(course.code, 32);
+    const name = canonicalText(course.name, 120);
+    const section = canonicalOptionalText(course.section, 64);
+    const instructor = canonicalOptionalText(course.instructor, 120);
+    const color = course.color === null
+        ? null
+        : COURSE_COLORS.has(course.color as CourseColor)
+            ? course.color as CourseColor
+            : undefined;
+    const credits = canonicalCredits(course.credits);
+    const teachingRange = canonicalCourseTeachingRange(course.teachingRange);
+    const effectiveRange = canonicalMeetingEffectiveRange(meeting.effectiveRange);
+    const location = canonicalLocation(meeting.location);
+    if (code === null
+        || name === null
+        || section === undefined
+        || instructor === undefined
+        || color === undefined
+        || credits === undefined
+        || teachingRange === null
+        || effectiveRange === null
+        || !MEETING_TYPES.has(meeting.type as MeetingTypeCode)
+        || !MEETING_WEEKDAYS.has(meeting.weekday as MeetingWeekday)
+        || typeof meeting.localStart !== 'string'
+        || typeof meeting.localEnd !== 'string'
+        || !LOCAL_TIME_PATTERN.test(meeting.localStart)
+        || !LOCAL_TIME_PATTERN.test(meeting.localEnd)
+        || meeting.localEnd <= meeting.localStart
+        || location === null) {
+        throw new TypeError('CreateCourseWithMeetingCommand has invalid Course or Meeting facts');
+    }
+
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        intent: {
+            kind: 'plan.create-course-with-first-meeting',
+            intentSchemaVersion: 2,
+            payload: {
+                course: { code, name, section, instructor, color, credits, teachingRange },
+                meeting: {
+                    type: meeting.type as MeetingTypeCode,
+                    weekday: meeting.weekday as MeetingWeekday,
+                    localStart: meeting.localStart,
+                    localEnd: meeting.localEnd,
+                    effectiveRange,
+                    location,
+                },
+            },
+        },
+    };
+}
+
+/**
+ * Decodes the published schema-1 command only so migrated receipts remain replayable.
+ */
+export function normalizeLegacyCreateCourseWithMeetingCommand(
+    value: unknown,
+): LegacyCreateCourseWithMeetingCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'intent',
+    ])
         || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
         || value.intent.kind !== 'plan.create-course-with-first-meeting'
         || value.intent.intentSchemaVersion !== 1
@@ -275,60 +484,69 @@ export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateC
             'effectiveEndDate',
             'location',
         ])) {
-        throw new TypeError('CreateCourseWithMeetingCommand has invalid fields');
+        throw new TypeError('Legacy CreateCourseWithMeetingCommand has invalid fields');
     }
 
-    const course = value.intent.payload.course;
-    const meeting = value.intent.payload.meeting;
-    const code = canonicalText(course.code, 32);
-    const name = canonicalText(course.name, 120);
-    const section = canonicalOptionalText(course.section, 64);
-    const instructor = canonicalOptionalText(course.instructor, 120);
-    const color = course.color === null
-        ? null
-        : COURSE_COLORS.has(course.color as CourseColor)
-            ? course.color as CourseColor
-            : undefined;
-    const credits = canonicalCredits(course.credits);
-    const location = canonicalLocation(meeting.location);
-    if (code === null
-        || name === null
-        || section === undefined
-        || instructor === undefined
-        || color === undefined
-        || credits === undefined
-        || !MEETING_TYPES.has(meeting.type as MeetingTypeCode)
-        || !MEETING_WEEKDAYS.has(meeting.weekday as MeetingWeekday)
-        || typeof meeting.localStart !== 'string'
-        || typeof meeting.localEnd !== 'string'
-        || !LOCAL_TIME_PATTERN.test(meeting.localStart)
-        || !LOCAL_TIME_PATTERN.test(meeting.localEnd)
-        || meeting.localEnd <= meeting.localStart
-        || !isCanonicalLocalDate(meeting.effectiveStartDate)
-        || !isCanonicalLocalDate(meeting.effectiveEndDate)
-        || meeting.effectiveEndDate < meeting.effectiveStartDate
-        || location === null) {
-        throw new TypeError('CreateCourseWithMeetingCommand has invalid Course or Meeting facts');
-    }
-
-    return {
+    const legacyCourse = value.intent.payload.course;
+    const legacyMeeting = value.intent.payload.meeting;
+    const normalized = normalizeCreateCourseWithMeetingCommand({
         commandId: value.commandId,
         followUpId: value.followUpId,
         expectedRevision: value.expectedRevision,
         expectedPlanVersion: value.expectedPlanVersion,
         intent: {
             kind: 'plan.create-course-with-first-meeting',
+            intentSchemaVersion: 2,
+            payload: {
+                course: {
+                    ...legacyCourse,
+                    teachingRange: { kind: 'inherit-term' },
+                },
+                meeting: {
+                    type: legacyMeeting.type,
+                    weekday: legacyMeeting.weekday,
+                    localStart: legacyMeeting.localStart,
+                    localEnd: legacyMeeting.localEnd,
+                    effectiveRange: {
+                        kind: 'explicit',
+                        startDate: legacyMeeting.effectiveStartDate,
+                        endDate: legacyMeeting.effectiveEndDate,
+                    },
+                    location: legacyMeeting.location,
+                },
+            },
+        },
+    });
+    const course = normalized.intent.payload.course;
+    const meeting = normalized.intent.payload.meeting;
+    if (meeting.effectiveRange.kind !== 'explicit') {
+        throw new TypeError('Legacy Meeting range must remain explicit');
+    }
+    return {
+        commandId: normalized.commandId,
+        followUpId: normalized.followUpId,
+        expectedRevision: normalized.expectedRevision,
+        expectedPlanVersion: normalized.expectedPlanVersion,
+        intent: {
+            kind: 'plan.create-course-with-first-meeting',
             intentSchemaVersion: 1,
             payload: {
-                course: { code, name, section, instructor, color, credits },
+                course: {
+                    code: course.code,
+                    name: course.name,
+                    section: course.section,
+                    instructor: course.instructor,
+                    color: course.color,
+                    credits: course.credits,
+                },
                 meeting: {
-                    type: meeting.type as MeetingTypeCode,
-                    weekday: meeting.weekday as MeetingWeekday,
+                    type: meeting.type,
+                    weekday: meeting.weekday,
                     localStart: meeting.localStart,
                     localEnd: meeting.localEnd,
-                    effectiveStartDate: meeting.effectiveStartDate,
-                    effectiveEndDate: meeting.effectiveEndDate,
-                    location,
+                    effectiveStartDate: meeting.effectiveRange.startDate,
+                    effectiveEndDate: meeting.effectiveRange.endDate,
+                    location: meeting.location,
                 },
             },
         },
@@ -336,10 +554,30 @@ export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateC
 }
 
 /**
+ * Accepts current commands and the sole published legacy form needed for receipt replay.
+ */
+export function normalizeAcceptedCreateCourseWithMeetingCommand(
+    value: unknown,
+): AcceptedCreateCourseWithMeetingCommand {
+    if (hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'intent',
+    ])
+        && hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        && value.intent.intentSchemaVersion === 1) {
+        return normalizeLegacyCreateCourseWithMeetingCommand(value);
+    }
+    return normalizeCreateCourseWithMeetingCommand(value);
+}
+
+/**
  * Builds the versioned canonical digest projection for Course and first Meeting creation.
  */
 export function createCourseWithMeetingDigestProjection(
-    command: CreateCourseWithMeetingCommand,
+    command: AcceptedCreateCourseWithMeetingCommand,
 ): CanonicalValue {
     return {
         encoding: 'courseflow-canonical-json-v1',

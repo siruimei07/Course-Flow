@@ -70,6 +70,7 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
             startDate: '2026-09-08',
             endDate: '2026-12-18',
             timeZone: 'America/Toronto',
+            archived: false,
             entityVersion: '1',
         },
         terms: [{
@@ -78,6 +79,7 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
             startDate: '2026-09-08',
             endDate: '2026-12-18',
             timeZone: 'America/Toronto',
+            archived: false,
             entityVersion: '1',
         }],
         courses: [{
@@ -89,6 +91,12 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
             instructor: null,
             color: null,
             credits: null,
+            teachingRange: {
+                kind: 'inherit-term',
+                startDate: '2026-09-08',
+                endDate: '2026-12-18',
+            },
+            archived: false,
             entityVersion: '1',
             meetings: [{
                 meetingSeriesId: '33333333-3333-4333-8333-333333333333',
@@ -96,8 +104,11 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
                 weekday: 'MON',
                 localStart: '09:00',
                 localEnd: '10:00',
-                effectiveStartDate: '2026-09-08',
-                effectiveEndDate: '2026-12-18',
+                effectiveRange: {
+                    kind: 'inherit-course',
+                    startDate: '2026-09-08',
+                    endDate: '2026-12-18',
+                },
                 location: { kind: 'tba' },
                 entityVersion: '1',
             }],

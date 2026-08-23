@@ -1,3 +1,7 @@
+/**
+ * @file Verifies SQLite schema initialization, migration, and integrity gates.
+ */
+
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,6 +14,7 @@ import {
     CURRENT_SCHEMA_LEVEL,
     createSchemaLevel2,
     migrateLevel0To1,
+    migrateLevel2To3,
 } from '../../src/data/schema';
 import {
     initializeWorkspaceData,
@@ -18,6 +23,36 @@ import {
 } from '../../src/data/sqlite-data-store';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
+const LEGACY_COURSE_DIGEST_HEX = 'ea56e352db9e80e799cd0b31961a85849aa11d97de6995e5c7815062a6c69fbc';
+const LEGACY_COURSE_COMMAND = {
+    commandId: '66666666-6666-4666-8666-666666666666',
+    followUpId: '77777777-7777-4777-8777-777777777777',
+    expectedRevision: '2',
+    expectedPlanVersion: '1',
+    intent: {
+        kind: 'plan.create-course-with-first-meeting',
+        intentSchemaVersion: 1,
+        payload: {
+            course: {
+                code: 'CSC301',
+                name: 'Introduction to Software Engineering',
+                section: 'L0101',
+                instructor: 'Ada Lovelace',
+                color: 'blue',
+                credits: '0.5',
+            },
+            meeting: {
+                type: 'LEC',
+                weekday: 'MON',
+                localStart: '09:00',
+                localEnd: '10:00',
+                effectiveStartDate: '2026-09-08',
+                effectiveEndDate: '2026-12-18',
+                location: { kind: 'known', value: 'BA 1130' },
+            },
+        },
+    },
+} as const;
 
 function createTempDataSlots(t: test.TestContext): string {
     const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-data-'));
@@ -90,22 +125,22 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
     }
 }
 
-test('TEST-DATA-001/005: level 3 initializes the delivered Term, Course, and Meeting schema', async (t) => {
+test('TEST-DATA-001/005: level 4 initializes the delivered Term, Course, and Meeting schema', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 3);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 4);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 3,
+        schemaLevel: 4,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 3,
+        userVersion: 4,
         tables: [
             'command_receipts',
             'courses',
@@ -130,7 +165,7 @@ test('TEST-DATA-001/005: level 3 initializes the delivered Term, Course, and Mee
     }
 });
 
-test('level 3 rejects representative constraint violations without changing bootstrap facts', (t) => {
+test('level 4 rejects representative constraint violations without changing bootstrap facts', (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const activeDatabase = join(dataSlotsRoot, 'active', 'workspace.sqlite');
@@ -157,7 +192,7 @@ test('level 3 rejects representative constraint violations without changing boot
     });
 });
 
-test('level 3 rejects a same-name index whose required properties drift', async (t) => {
+test('level 4 rejects a same-name index whose required properties drift', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     await store.close();
@@ -207,7 +242,7 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 3,
+            schemaLevel: 4,
             revision: '0',
         });
         await store.close();
@@ -337,8 +372,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 3,
-        revision: '2',
+        schemaLevel: 4,
+        revision: '3',
     });
     await opened.store.close();
 
@@ -377,7 +412,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '3');
+    assert.equal(opened.store.status().revision, '4');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -444,7 +479,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 3,
+        requiredSchemaLevel: 4,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -554,7 +589,156 @@ function createLevel2WorkspaceWithTerm(dataSlotsRoot: string): void {
     }
 }
 
-test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity loss', async (t) => {
+function createLevel3WorkspaceWithCourse(dataSlotsRoot: string): void {
+    createLevel2WorkspaceWithTerm(dataSlotsRoot);
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel2To3(database);
+        database.exec(`
+            INSERT INTO courses (
+                course_id,
+                term_id,
+                code,
+                name,
+                section,
+                instructor,
+                color,
+                credits_coefficient,
+                credits_scale,
+                teaching_range_kind,
+                archived,
+                entity_version
+            ) VALUES (
+                '33333333-3333-4333-8333-333333333333',
+                '22222222-2222-4222-8222-222222222222',
+                'CSC301',
+                'Introduction to Software Engineering',
+                'L0101',
+                'Ada Lovelace',
+                'blue',
+                5,
+                1,
+                'inherit-term',
+                0,
+                1
+            );
+            INSERT INTO meeting_series (
+                meeting_series_id,
+                course_id,
+                retired,
+                entity_version
+            ) VALUES (
+                '44444444-4444-4444-8444-444444444444',
+                '33333333-3333-4333-8333-333333333333',
+                0,
+                1
+            );
+            INSERT INTO meeting_segments (
+                meeting_segment_id,
+                meeting_series_id,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                effective_start_date,
+                effective_end_date,
+                location_kind,
+                location_value
+            ) VALUES (
+                '55555555-5555-4555-8555-555555555555',
+                '44444444-4444-4444-8444-444444444444',
+                'LEC',
+                'MON',
+                '09:00',
+                '10:00',
+                '2026-09-08',
+                '2026-12-18',
+                'known',
+                'BA 1130'
+            );
+            INSERT INTO command_receipts (
+                command_id,
+                intent_kind,
+                intent_schema_version,
+                canonical_encoding,
+                digest_algorithm,
+                payload_digest,
+                committed_revision,
+                result_kind
+            ) VALUES (
+                '66666666-6666-4666-8666-666666666666',
+                'plan.create-course-with-first-meeting',
+                1,
+                'courseflow-canonical-json-v1',
+                'sha256',
+                zeroblob(32),
+                3,
+                'committed'
+            );
+            INSERT INTO receipt_effects (
+                command_id,
+                effect_order,
+                effect_code,
+                entity_kind,
+                entity_id,
+                entity_version
+            ) VALUES
+                (
+                    '66666666-6666-4666-8666-666666666666',
+                    0,
+                    'plan.course-created',
+                    'course',
+                    '33333333-3333-4333-8333-333333333333',
+                    1
+                ),
+                (
+                    '66666666-6666-4666-8666-666666666666',
+                    1,
+                    'plan.meeting-series-created',
+                    'meeting-series',
+                    '44444444-4444-4444-8444-444444444444',
+                    1
+                );
+            INSERT INTO durable_followups (
+                follow_up_id,
+                originating_command_id,
+                owner,
+                kind,
+                prerequisite_revision,
+                state,
+                follow_up_version
+            ) VALUES (
+                '77777777-7777-4777-8777-777777777777',
+                '66666666-6666-4666-8666-666666666666',
+                'protect',
+                'backup-needed-through',
+                3,
+                'pending',
+                0
+            );
+            UPDATE workspace_state SET revision = 3 WHERE singleton = 1;
+            UPDATE plan_state SET plan_entity_version = 2 WHERE singleton = 1;
+            UPDATE protection_watermarks SET backup_needed_through = 3 WHERE singleton = 1;
+            COMMIT;
+        `);
+        database.prepare(`
+            UPDATE command_receipts
+            SET payload_digest = ?
+            WHERE command_id = ?
+        `).run(
+            Buffer.from(LEGACY_COURSE_DIGEST_HEX, 'hex'),
+            LEGACY_COURSE_COMMAND.commandId,
+        );
+    }
+    finally {
+        database.close();
+    }
+}
+
+test('TEST-DATA-002/006: level 2 Term facts migrate to level 4 without identity loss', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel2WorkspaceWithTerm(dataSlotsRoot);
 
@@ -567,8 +751,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 3,
-        revision: '2',
+        schemaLevel: 4,
+        revision: '3',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -576,6 +760,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity 
         startDate: '2026-09-01',
         endDate: '2026-12-20',
         timeZone: 'America/Toronto',
+        archived: false,
         entityVersion: '1',
     });
     assert.deepEqual(opened.store.readSetupProjection().courses, []);
@@ -593,7 +778,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity 
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '2');
+    assert.equal(opened.store.readProtectionWatermark(), '3');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -615,6 +800,101 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity 
     }
     finally {
         safetyDatabase.close();
+    }
+});
+
+test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to level 4', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel3WorkspaceWithCourse(dataSlotsRoot);
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected migrated ready workspace');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 4,
+        revision: '4',
+    });
+    const projection = opened.store.readSetupProjection();
+    assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
+    assert.equal(projection.courses[0]?.courseId, '33333333-3333-4333-8333-333333333333');
+    assert.deepEqual(projection.courses[0]?.teachingRange, {
+        kind: 'inherit-term',
+        startDate: '2026-09-01',
+        endDate: '2026-12-20',
+    });
+    assert.equal(
+        projection.courses[0]?.meetings[0]?.meetingSeriesId,
+        '44444444-4444-4444-8444-444444444444',
+    );
+    assert.deepEqual(projection.courses[0]?.meetings[0]?.effectiveRange, {
+        kind: 'explicit',
+        startDate: '2026-09-08',
+        endDate: '2026-12-18',
+    });
+    assert.deepEqual(opened.store.receipt('66666666-6666-4666-8666-666666666666'), {
+        kind: 'committed',
+        revision: '3',
+        effects: [
+            {
+                code: 'plan.course-created',
+                entity: {
+                    kind: 'course',
+                    id: '33333333-3333-4333-8333-333333333333',
+                    version: '1',
+                },
+            },
+            {
+                code: 'plan.meeting-series-created',
+                entity: {
+                    kind: 'meeting-series',
+                    id: '44444444-4444-4444-8444-444444444444',
+                    version: '1',
+                },
+            },
+        ],
+        pendingFollowUps: ['77777777-7777-4777-8777-777777777777'],
+    });
+    const replayed = await opened.store.commit(LEGACY_COURSE_COMMAND);
+    assert.equal(replayed.ok, true);
+    assert.equal(replayed.ok && replayed.value.revision, '3');
+    const reused = await opened.store.commit({
+        ...LEGACY_COURSE_COMMAND,
+        intent: {
+            ...LEGACY_COURSE_COMMAND.intent,
+            payload: {
+                ...LEGACY_COURSE_COMMAND.intent.payload,
+                course: {
+                    ...LEGACY_COURSE_COMMAND.intent.payload.course,
+                    name: 'Changed legacy semantics',
+                },
+            },
+        },
+    });
+    assert.equal(reused.ok, false);
+    assert.equal(!reused.ok && reused.problem.details.reason, 'command-id-reused');
+    await assert.rejects(opened.store.commit({
+        ...LEGACY_COURSE_COMMAND,
+        commandId: '88888888-8888-4888-8888-888888888888',
+        followUpId: '99999999-9999-4999-8999-999999999999',
+    }), TypeError);
+    assert.equal(opened.store.status().revision, '4');
+    await opened.store.close();
+
+    const safetyDirectories = readdirSync(dataSlotsRoot)
+        .filter(name => name.startsWith('migration-safety-level-3-'));
+    assert.equal(safetyDirectories.length, 1);
+    const reopened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind === 'ready') {
+        assert.equal(
+            reopened.store.readSetupProjection().courses[0]?.meetings[0]?.meetingSeriesId,
+            '44444444-4444-4444-8444-444444444444',
+        );
+        await reopened.store.close();
     }
 });
 

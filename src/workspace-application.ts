@@ -1,3 +1,7 @@
+/**
+ * @file Coordinates Workspace queries and formal DATA intents for the desktop shell.
+ */
+
 import { randomUUID } from 'node:crypto';
 
 import {
@@ -21,14 +25,34 @@ import {
     isWorkspaceSetupRequest,
     type CreateCourseWithMeetingRequest,
     type CreateTermRequest,
+    type RestoreTermAsCurrentRequest,
+    type UpdateTermEndDateRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblemCode,
     type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
+import {
+    localDateInTermZone,
+    normalizeReconcileWorkspaceLifecycleCommand,
+    normalizeRestoreTermAsCurrentCommand,
+    type RestoreTermAsCurrentCommand,
+    type SetupProjection,
+} from './shared/workspace-term-contract';
+
+export interface ClockPort {
+    now(): string;
+}
+
+const SYSTEM_CLOCK: ClockPort = {
+    now(): string {
+        return new Date().toISOString();
+    },
+};
 
 export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     commitOptions?: CommitOptions;
+    clock?: ClockPort;
 }>;
 
 type WorkspaceDataState = Readonly<{
@@ -104,6 +128,8 @@ export class WorkspaceApplication {
                 : value?.workspaceEpoch !== undefined && value.workspaceEpoch !== this.workspaceEpoch
                     ? 'stale-workspace'
                     : (requestKind === 'workspace.term.create'
+                        || requestKind === 'workspace.term.update-end-date'
+                        || requestKind === 'workspace.term.restore-as-current'
                         || requestKind === 'workspace.course.create-with-first-meeting')
                         ? 'validation'
                         : 'invalid-request';
@@ -117,6 +143,10 @@ export class WorkspaceApplication {
                 return this.querySetup(request.requestId);
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
+            case 'workspace.term.update-end-date':
+                return this.updateTermEndDate(request.requestId, request.command);
+            case 'workspace.term.restore-as-current':
+                return this.restoreTermAsCurrent(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
         }
@@ -176,7 +206,7 @@ export class WorkspaceApplication {
         };
     }
 
-    private querySetup(requestId: string): WorkspaceSetupOutcome {
+    private async querySetup(requestId: string): Promise<WorkspaceSetupOutcome> {
         if (!this.dataState.store) {
             const code = this.dataState.status.kind === 'recovery'
                 ? 'recovery-required'
@@ -185,6 +215,11 @@ export class WorkspaceApplication {
         }
 
         try {
+            const initialProjection = this.dataState.store.readSetupProjection();
+            const reconciled = await this.reconcileWorkspaceLifecycle(requestId, initialProjection);
+            if (reconciled) {
+                return reconciled;
+            }
             return {
                 ok: true,
                 value: {
@@ -203,9 +238,135 @@ export class WorkspaceApplication {
         }
     }
 
+    private async reconcileWorkspaceLifecycle(
+        requestId: string,
+        projection: SetupProjection,
+    ): Promise<WorkspaceSetupOutcome | null> {
+        const term = projection.currentTerm;
+        if (!term || this.dataState.status.kind === 'read-only') {
+            return null;
+        }
+
+        const evaluatedAt = (this.options.clock ?? SYSTEM_CLOCK).now();
+        const applicableDate = localDateInTermZone(evaluatedAt, term.timeZone);
+        if (applicableDate <= term.endDate) {
+            return null;
+        }
+
+        const command = normalizeReconcileWorkspaceLifecycleCommand({
+            commandId: randomUUID(),
+            followUpId: randomUUID(),
+            expectedRevision: projection.workspaceRevision,
+            expectedPlanVersion: projection.planEntityVersion,
+            expectedTermVersion: term.entityVersion,
+            intent: {
+                kind: 'workspace.reconcile-lifecycle',
+                intentSchemaVersion: 1,
+                payload: {
+                    termId: term.termId,
+                    evaluation: {
+                        evaluatedAt,
+                        termZone: term.timeZone,
+                        applicableDate,
+                    },
+                },
+            },
+        });
+
+        try {
+            const committed = await this.dataState.store!.commit(command, this.options.commitOptions);
+            this.dataState = {
+                ...this.dataState,
+                status: this.dataState.store!.status(),
+            };
+            if (!committed.ok) {
+                const code = committed.problem.code === 'permission'
+                    ? 'permission'
+                    : committed.problem.code === 'conflict'
+                        ? 'conflict'
+                        : 'workspace-unavailable';
+                return this.problem(code, '学期生命周期未更新，正式数据没有改变。', requestId);
+            }
+            return null;
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt?.effects[0]?.code === 'plan.term-auto-archived') {
+                    return null;
+                }
+            }
+            return this.problem(
+                'recovery-required',
+                '无法确认学期生命周期提交结果；请重新打开工作区后查询。',
+                requestId,
+                error instanceof CommittedCommandOutcomeUnknownError ? 'unknown' : 'unchanged',
+            );
+        }
+    }
+
     private async createTerm(
         requestId: string,
         command: CreateTermRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        return this.commitTermCommand(requestId, command, '当前学期未保存，正式数据没有改变。');
+    }
+
+    private async updateTermEndDate(
+        requestId: string,
+        command: UpdateTermEndDateRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        return this.commitTermCommand(requestId, command, '学期结束日未更新，正式数据没有改变。');
+    }
+
+    private async restoreTermAsCurrent(
+        requestId: string,
+        command: RestoreTermAsCurrentRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+
+        try {
+            const projection = this.dataState.store.readSetupProjection();
+            const term = projection.terms.find(candidate => (
+                candidate.termId === command.intent.payload.termId
+            ));
+            if (!term) {
+                return this.problem('validation', '要恢复的学期不存在，正式数据没有改变。', requestId);
+            }
+            const evaluatedAt = (this.options.clock ?? SYSTEM_CLOCK).now();
+            const resolvedCommand = normalizeRestoreTermAsCurrentCommand({
+                ...command,
+                evaluation: {
+                    evaluatedAt,
+                    termZone: term.timeZone,
+                    applicableDate: localDateInTermZone(evaluatedAt, term.timeZone),
+                },
+            });
+            return this.commitTermCommand(
+                requestId,
+                resolvedCommand,
+                '学期未恢复为当前学期，正式数据没有改变。',
+            );
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '学期未恢复为当前学期，正式数据没有改变。', requestId);
+        }
+    }
+
+    private async commitTermCommand(
+        requestId: string,
+        command:
+            | CreateTermRequest['command']
+            | UpdateTermEndDateRequest['command']
+            | RestoreTermAsCurrentCommand,
+        unchangedMessage: string,
     ): Promise<WorkspaceSetupOutcome> {
         if (!this.dataState.store) {
             const code = this.dataState.status.kind === 'recovery'
@@ -226,7 +387,7 @@ export class WorkspaceApplication {
                     : committed.problem.code === 'conflict'
                         ? 'conflict'
                         : 'workspace-unavailable';
-                return this.problem(code, '当前学期未保存，正式数据没有改变。', requestId);
+                return this.problem(code, unchangedMessage, requestId);
             }
             return this.termCommandOutcome(requestId, committed.value);
         }
@@ -245,7 +406,7 @@ export class WorkspaceApplication {
                 );
             }
             const code = error instanceof TypeError ? 'validation' : 'recovery-required';
-            return this.problem(code, '当前学期未保存，正式数据没有改变。', requestId);
+            return this.problem(code, unchangedMessage, requestId);
         }
     }
 
@@ -312,7 +473,9 @@ export class WorkspaceApplication {
     ): WorkspaceSetupOutcome {
         const effect = committed.effects[0];
         if (committed.effects.length !== 1
-            || effect.code !== 'plan.term-created-current'
+            || (effect.code !== 'plan.term-created-current'
+                && effect.code !== 'plan.term-end-date-updated'
+                && effect.code !== 'plan.term-restored-current')
             || effect.entity.kind !== 'term') {
             return this.problem(
                 'recovery-required',

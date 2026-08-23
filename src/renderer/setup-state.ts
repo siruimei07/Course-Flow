@@ -34,7 +34,10 @@ export function setupStateFrom(outcome: WorkspaceSetupOutcome): SetupState {
     if (!projection.currentTerm) {
         return { kind: 'term', dataMode: outcome.value.dataMode, projection };
     }
-    if (projection.courses.length === 0) {
+    const hasCurrentCourse = projection.courses.some(
+        course => course.termId === projection.currentTerm?.termId,
+    );
+    if (!hasCurrentCourse) {
         return { kind: 'course', dataMode: outcome.value.dataMode, projection };
     }
     return outcome.value.dataMode === 'ready'

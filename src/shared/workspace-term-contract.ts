@@ -1,3 +1,7 @@
+/**
+ * @file Defines Term facts, lifecycle commands, and explicit-zone date evaluation.
+ */
+
 import type { CanonicalValue } from './canonical-json';
 import type { CourseProjection } from './workspace-course-contract';
 import {
@@ -11,6 +15,7 @@ export type TermProjection = Readonly<{
     startDate: string;
     endDate: string;
     timeZone: string;
+    archived: boolean;
     entityVersion: string;
 }>;
 
@@ -39,7 +44,53 @@ export type CreateTermCommand = Readonly<{
     }>;
 }>;
 
+export type TermEvaluation = Readonly<{
+    evaluatedAt: string;
+    termZone: string;
+    applicableDate: string;
+}>;
+
+type TermMutationCommandBase = Readonly<{
+    commandId: string;
+    followUpId: string;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedTermVersion: string;
+}>;
+
+export type ReconcileWorkspaceLifecycleCommand = TermMutationCommandBase & Readonly<{
+    intent: Readonly<{
+        kind: 'workspace.reconcile-lifecycle';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            termId: string;
+            evaluation: TermEvaluation;
+        }>;
+    }>;
+}>;
+
+export type UpdateTermEndDateCommand = TermMutationCommandBase & Readonly<{
+    intent: Readonly<{
+        kind: 'plan.update-term-end-date';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            termId: string;
+            endDate: string;
+        }>;
+    }>;
+}>;
+
+export type RestoreTermAsCurrentCommand = TermMutationCommandBase & Readonly<{
+    evaluation: TermEvaluation;
+    intent: Readonly<{
+        kind: 'plan.restore-term-as-current';
+        intentSchemaVersion: 1;
+        payload: Readonly<{ termId: string }>;
+    }>;
+}>;
+
 const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MAX_TERM_NAME_LENGTH = 120;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -105,6 +156,163 @@ function canonicalTimeZone(value: unknown): string | null {
     }
 }
 
+/**
+ * Converts an Instant to its calendar date using only the explicit TermZone.
+ */
+export function localDateInTermZone(evaluatedAt: string, termZone: string): string {
+    const canonicalZone = canonicalTimeZone(termZone);
+    if (!INSTANT_PATTERN.test(evaluatedAt)
+        || new Date(evaluatedAt).toISOString() !== evaluatedAt
+        || canonicalZone === null) {
+        throw new TypeError('Term evaluation has invalid time values');
+    }
+
+    const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: canonicalZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).formatToParts(new Date(evaluatedAt));
+    const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+}
+
+/**
+ * Validates that an EvaluationContext date was derived from its explicit zone and Instant.
+ */
+function normalizeTermEvaluation(value: unknown): TermEvaluation {
+    if (!hasExactDataKeys(value, ['evaluatedAt', 'termZone', 'applicableDate'])
+        || typeof value.evaluatedAt !== 'string'
+        || typeof value.termZone !== 'string'
+        || !isCanonicalLocalDate(value.applicableDate)
+        || localDateInTermZone(value.evaluatedAt, value.termZone) !== value.applicableDate) {
+        throw new TypeError('Term evaluation is inconsistent');
+    }
+    const termZone = canonicalTimeZone(value.termZone);
+    if (termZone === null) {
+        throw new TypeError('Term evaluation has invalid zone');
+    }
+    return {
+        evaluatedAt: value.evaluatedAt,
+        termZone,
+        applicableDate: value.applicableDate,
+    };
+}
+
+/**
+ * Validates the shared optimistic-concurrency fields for a Term mutation.
+ */
+function normalizeTermMutationBase(
+    value: unknown,
+    additionalKeys: readonly string[] = [],
+): TermMutationCommandBase & Record<string, unknown> {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedTermVersion',
+        'intent',
+        ...additionalKeys,
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedTermVersion)) {
+        throw new TypeError('Term mutation command has invalid fields');
+    }
+    return value as TermMutationCommandBase & Record<string, unknown>;
+}
+
+/**
+ * Normalizes the system lifecycle Intent before PLAN/DATA evaluation.
+ */
+export function normalizeReconcileWorkspaceLifecycleCommand(
+    value: unknown,
+): ReconcileWorkspaceLifecycleCommand {
+    const base = normalizeTermMutationBase(value);
+    if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || base.intent.kind !== 'workspace.reconcile-lifecycle'
+        || base.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(base.intent.payload, ['termId', 'evaluation'])
+        || !isCanonicalUuid(base.intent.payload.termId)) {
+        throw new TypeError('Lifecycle command has invalid fields');
+    }
+    return {
+        commandId: base.commandId,
+        followUpId: base.followUpId,
+        expectedRevision: base.expectedRevision,
+        expectedPlanVersion: base.expectedPlanVersion,
+        expectedTermVersion: base.expectedTermVersion,
+        intent: {
+            kind: 'workspace.reconcile-lifecycle',
+            intentSchemaVersion: 1,
+            payload: {
+                termId: base.intent.payload.termId,
+                evaluation: normalizeTermEvaluation(base.intent.payload.evaluation),
+            },
+        },
+    };
+}
+
+/**
+ * Normalizes an explicit Term end-date correction.
+ */
+export function normalizeUpdateTermEndDateCommand(value: unknown): UpdateTermEndDateCommand {
+    const base = normalizeTermMutationBase(value);
+    if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || base.intent.kind !== 'plan.update-term-end-date'
+        || base.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(base.intent.payload, ['termId', 'endDate'])
+        || !isCanonicalUuid(base.intent.payload.termId)
+        || !isCanonicalLocalDate(base.intent.payload.endDate)) {
+        throw new TypeError('Update Term command has invalid fields');
+    }
+    return {
+        commandId: base.commandId,
+        followUpId: base.followUpId,
+        expectedRevision: base.expectedRevision,
+        expectedPlanVersion: base.expectedPlanVersion,
+        expectedTermVersion: base.expectedTermVersion,
+        intent: {
+            kind: 'plan.update-term-end-date',
+            intentSchemaVersion: 1,
+            payload: {
+                termId: base.intent.payload.termId,
+                endDate: base.intent.payload.endDate,
+            },
+        },
+    };
+}
+
+/**
+ * Normalizes an explicit restore using the Workspace-derived EvaluationContext.
+ */
+export function normalizeRestoreTermAsCurrentCommand(value: unknown): RestoreTermAsCurrentCommand {
+    const base = normalizeTermMutationBase(value, ['evaluation']);
+    if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || base.intent.kind !== 'plan.restore-term-as-current'
+        || base.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(base.intent.payload, ['termId'])
+        || !isCanonicalUuid(base.intent.payload.termId)) {
+        throw new TypeError('Restore Term command has invalid fields');
+    }
+    return {
+        commandId: base.commandId,
+        followUpId: base.followUpId,
+        expectedRevision: base.expectedRevision,
+        expectedPlanVersion: base.expectedPlanVersion,
+        expectedTermVersion: base.expectedTermVersion,
+        evaluation: normalizeTermEvaluation(base.evaluation),
+        intent: {
+            kind: 'plan.restore-term-as-current',
+            intentSchemaVersion: 1,
+            payload: { termId: base.intent.payload.termId },
+        },
+    };
+}
+
 export function normalizeCreateTermCommand(value: unknown): CreateTermCommand {
     if (!hasExactDataKeys(value, [
         'commandId',
@@ -168,4 +376,50 @@ export function createTermDigestProjection(command: CreateTermCommand): Canonica
             kind: 'backup-needed-through',
         }],
     };
+}
+
+/**
+ * Builds the canonical receipt digest projection shared by Term lifecycle mutations.
+ * Restore evaluation is trusted commit context rather than stable user intent, so
+ * retries bind the same Term/versions/follow-up while Workspace may advance its Clock.
+ */
+function termMutationDigestProjection(
+    command: ReconcileWorkspaceLifecycleCommand | UpdateTermEndDateCommand | RestoreTermAsCurrentCommand,
+): CanonicalValue {
+    return {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: command.intent,
+        expectedRevision: command.expectedRevision,
+        expectedEntityVersions: [
+            {
+                entityKind: 'plan-state',
+                entityId: 'singleton',
+                version: command.expectedPlanVersion,
+            },
+            {
+                entityKind: 'term',
+                entityId: command.intent.payload.termId,
+                version: command.expectedTermVersion,
+            },
+        ],
+        durableFollowUps: [{
+            followUpId: command.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    };
+}
+
+export function reconcileWorkspaceLifecycleDigestProjection(
+    command: ReconcileWorkspaceLifecycleCommand,
+): CanonicalValue {
+    return termMutationDigestProjection(command);
+}
+
+export function updateTermEndDateDigestProjection(command: UpdateTermEndDateCommand): CanonicalValue {
+    return termMutationDigestProjection(command);
+}
+
+export function restoreTermAsCurrentDigestProjection(command: RestoreTermAsCurrentCommand): CanonicalValue {
+    return termMutationDigestProjection(command);
 }

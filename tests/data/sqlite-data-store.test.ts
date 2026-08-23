@@ -1,3 +1,7 @@
+/**
+ * @file Verifies the SQLite DATA owner's failure, concurrency, and recovery semantics.
+ */
+
 import assert from 'node:assert/strict';
 import {
     existsSync,
@@ -160,7 +164,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
             async prepare(dataSlotsRoot: string) {
                 await initializeAndClose(dataSlotsRoot);
                 const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
-                database.exec('PRAGMA user_version = 4');
+                database.exec('PRAGMA user_version = 5');
                 database.close();
             },
             options: undefined,
@@ -173,7 +177,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                     affectedCapabilities: ['workspace.read', 'workspace.write'],
                     allowedActions: [],
                     context: {},
-                    details: { actualSchemaLevel: 4, requiredSchemaLevel: 3 },
+                    details: { actualSchemaLevel: 5, requiredSchemaLevel: 4 },
                 },
             },
         },
@@ -338,7 +342,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                 assert.deepEqual(opened.store.status(), {
                     kind: 'read-only',
                     workspaceId: WORKSPACE_ID,
-                    schemaLevel: 3,
+                    schemaLevel: 4,
                     revision: '0',
                     problem: {
                         code: 'permission',

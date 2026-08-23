@@ -1,3 +1,7 @@
+/**
+ * @file Defines the versioned Workspace bootstrap contract and validators.
+ */
+
 import { isSupportedSqliteVersion } from './sqlite-version';
 import { isCanonicalUnsignedSqliteInteger, isCanonicalUuid } from './workspace-data-contract';
 
@@ -33,7 +37,7 @@ export type DataOpenProblem =
       affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
       allowedActions: readonly [];
       context: Readonly<Record<never, never>>;
-      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 3 }>;
+      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 4 }>;
     }>
   | Readonly<{
       code: 'integrity';
@@ -61,13 +65,13 @@ export type WorkspaceDataStatus =
   | Readonly<{
       kind: 'ready';
       workspaceId: string;
-      schemaLevel: 3;
+      schemaLevel: 4;
       revision: string;
     }>
   | Readonly<{
       kind: 'read-only';
       workspaceId: string;
-      schemaLevel: 3;
+      schemaLevel: 4;
       revision: string;
       problem: DataOpenProblem;
     }>
@@ -195,9 +199,9 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
       hasOnlyKeys(value.details, ['actualSchemaLevel', 'requiredSchemaLevel']) &&
       typeof value.details.actualSchemaLevel === 'number' &&
       Number.isSafeInteger(value.details.actualSchemaLevel) &&
-      value.details.actualSchemaLevel !== 3 &&
+      value.details.actualSchemaLevel !== 4 &&
       value.details.actualSchemaLevel >= 1 &&
-      value.details.requiredSchemaLevel === 3
+      value.details.requiredSchemaLevel === 4
     );
   }
 
@@ -240,7 +244,7 @@ function isWorkspaceDataStatus(value: unknown): value is WorkspaceDataStatus {
     (value.kind === 'ready' || value.kind === 'read-only') &&
     hasOnlyKeys(value, statusKeys) &&
     isCanonicalUuid(value.workspaceId) &&
-    value.schemaLevel === 3 &&
+    value.schemaLevel === 4 &&
     isCanonicalUnsignedSqliteInteger(value.revision) &&
     (value.kind === 'ready' || isDataOpenProblem(value.problem))
   );

@@ -1,3 +1,7 @@
+/**
+ * @file Starts the secure Electron shell and supervises its Workspace process.
+ */
+
 import { app, BrowserWindow, ipcMain, utilityProcess } from 'electron';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -67,7 +71,9 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
     problem: {
       code: isBuildMismatch(value)
         ? 'build-mismatch'
-        : kind === 'workspace.term.create'
+        : (kind === 'workspace.term.create'
+          || kind === 'workspace.term.update-end-date'
+          || kind === 'workspace.term.restore-as-current')
           ? 'validation'
           : 'invalid-request',
       message: 'Workspace request is unavailable.',

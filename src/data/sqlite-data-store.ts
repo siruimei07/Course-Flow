@@ -1,12 +1,18 @@
+/**
+ * @file Implements the transactional SQLite owner for Workspace facts and receipts.
+ */
+
 import { existsSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { backup, DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
 
 import {
-    normalizeCreateCourseWithMeetingCommand,
-    type CreateCourseWithMeetingCommand,
+    normalizeAcceptedCreateCourseWithMeetingCommand,
+    type AcceptedCreateCourseWithMeetingCommand,
     type CourseColor,
+    type CourseTeachingRangeIntent,
+    type MeetingEffectiveRangeIntent,
     type MeetingTypeCode,
     type MeetingWeekday,
 } from '../shared/workspace-course-contract';
@@ -16,25 +22,37 @@ import {
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
 import {
+    localDateInTermZone,
     normalizeCreateTermCommand,
+    normalizeReconcileWorkspaceLifecycleCommand,
+    normalizeRestoreTermAsCurrentCommand,
+    normalizeUpdateTermEndDateCommand,
     type CreateTermCommand,
+    type ReconcileWorkspaceLifecycleCommand,
+    type RestoreTermAsCurrentCommand,
     type SetupProjection,
+    type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import {
     digestCreateCourseWithMeeting,
     digestCreateTerm,
+    digestReconcileWorkspaceLifecycle,
     digestRecordSetupDecision,
+    digestRestoreTermAsCurrent,
+    digestUpdateTermEndDate,
 } from './command-digest';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel3,
+    createSchemaLevel4,
     migrateLevel1To2,
     migrateLevel2To3,
+    migrateLevel3To4,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
     validateSchemaLevel3,
+    validateSchemaLevel4,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -84,7 +102,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 3 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 4 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -117,13 +135,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 3;
+        schemaLevel: 4;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 3;
+        schemaLevel: 4;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -168,6 +186,9 @@ type ReceiptEffect = Readonly<{
     code:
         | 'workspace.setup-decision-recorded'
         | 'plan.term-created-current'
+        | 'plan.term-auto-archived'
+        | 'plan.term-end-date-updated'
+        | 'plan.term-restored-current'
         | 'plan.course-created'
         | 'plan.meeting-series-created';
     entity: Readonly<{
@@ -238,11 +259,22 @@ export type DataCommitResult =
     | Readonly<{ ok: false; problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem }>;
 
 type CommitWork = {
-    command: RecordSetupDecisionCommand | CreateTermCommand | CreateCourseWithMeetingCommand;
+    command: WorkspaceDataCommand;
     options: CommitOptions;
     resolve: (result: DataCommitResult) => void;
     reject: (error: unknown) => void;
 };
+
+type TermMutationCommand =
+    | ReconcileWorkspaceLifecycleCommand
+    | UpdateTermEndDateCommand
+    | RestoreTermAsCurrentCommand;
+
+type WorkspaceDataCommand =
+    | RecordSetupDecisionCommand
+    | CreateTermCommand
+    | AcceptedCreateCourseWithMeetingCommand
+    | TermMutationCommand;
 
 type CurrentVersions = Readonly<{
     revision: bigint;
@@ -348,9 +380,15 @@ function meetingTypeName(type: MeetingTypeCode): 'Lecture' | 'Tutorial' | 'Pract
 }
 
 function isCourseWithMeetingCommand(
-    command: CreateTermCommand | CreateCourseWithMeetingCommand,
-): command is CreateCourseWithMeetingCommand {
+    command: WorkspaceDataCommand,
+): command is AcceptedCreateCourseWithMeetingCommand {
     return command.intent.kind === 'plan.create-course-with-first-meeting';
+}
+
+function isTermMutationCommand(command: WorkspaceDataCommand): command is TermMutationCommand {
+    return command.intent.kind === 'workspace.reconcile-lifecycle'
+        || command.intent.kind === 'plan.update-term-end-date'
+        || command.intent.kind === 'plan.restore-term-as-current';
 }
 
 function freezeTuple<T>(value: [T]): readonly [T] {
@@ -635,7 +673,7 @@ class SqliteDataStoreImplementation {
             options.failpoint?.('read.after-revision');
 
             const termsStatement = this.database.prepare(`
-                SELECT term_id, name, start_date, end_date, time_zone, entity_version
+                SELECT term_id, name, start_date, end_date, time_zone, archived, entity_version
                 FROM terms
                 ORDER BY start_date, term_id
             `);
@@ -646,6 +684,7 @@ class SqliteDataStoreImplementation {
                 start_date: string;
                 end_date: string;
                 time_zone: string;
+                archived: bigint;
                 entity_version: bigint;
             }>;
             const terms = Object.freeze(termRows.map((row) => Object.freeze({
@@ -654,6 +693,7 @@ class SqliteDataStoreImplementation {
                 startDate: row.start_date,
                 endDate: row.end_date,
                 timeZone: row.time_zone,
+                archived: row.archived === 1n,
                 entityVersion: row.entity_version.toString(),
             })));
             const currentTerm = stateRow.current_term_id === null
@@ -665,24 +705,28 @@ class SqliteDataStoreImplementation {
 
             const courseStatement = this.database.prepare(`
                 SELECT
-                    course_id,
-                    term_id,
-                    code,
-                    name,
-                    section,
-                    instructor,
-                    color,
-                    credits_coefficient,
-                    credits_scale,
-                    entity_version
+                    courses.course_id,
+                    courses.term_id,
+                    courses.code,
+                    courses.name,
+                    courses.section,
+                    courses.instructor,
+                    courses.color,
+                    courses.credits_coefficient,
+                    courses.credits_scale,
+                    courses.teaching_range_kind,
+                    courses.teaching_start_date,
+                    courses.teaching_end_date,
+                    courses.archived,
+                    terms.start_date AS term_start_date,
+                    terms.end_date AS term_end_date,
+                    courses.entity_version
                 FROM courses
-                WHERE term_id = ?
+                JOIN terms ON terms.term_id = courses.term_id
                 ORDER BY code, course_id
             `);
             courseStatement.setReadBigInts(true);
-            const courseRows = stateRow.current_term_id === null
-                ? []
-                : courseStatement.all(stateRow.current_term_id) as Array<{
+            const courseRows = courseStatement.all() as Array<{
                     course_id: string;
                     term_id: string;
                     code: string;
@@ -692,6 +736,12 @@ class SqliteDataStoreImplementation {
                     color: CourseColor | null;
                     credits_coefficient: bigint | null;
                     credits_scale: bigint | null;
+                    teaching_range_kind: CourseTeachingRangeIntent['kind'];
+                    teaching_start_date: string | null;
+                    teaching_end_date: string | null;
+                    archived: bigint;
+                    term_start_date: string;
+                    term_end_date: string;
                     entity_version: bigint;
                 }>;
             const meetingStatement = this.database.prepare(`
@@ -703,6 +753,7 @@ class SqliteDataStoreImplementation {
                     meeting_segments.weekday,
                     meeting_segments.local_start,
                     meeting_segments.local_end,
+                    meeting_segments.effective_range_kind,
                     meeting_segments.effective_start_date,
                     meeting_segments.effective_end_date,
                     meeting_segments.location_kind,
@@ -710,14 +761,10 @@ class SqliteDataStoreImplementation {
                 FROM meeting_series
                 JOIN meeting_segments
                     ON meeting_segments.meeting_series_id = meeting_series.meeting_series_id
-                JOIN courses ON courses.course_id = meeting_series.course_id
-                WHERE courses.term_id = ?
                 ORDER BY meeting_series.course_id, meeting_series.meeting_series_id
             `);
             meetingStatement.setReadBigInts(true);
-            const meetingRows = stateRow.current_term_id === null
-                ? []
-                : meetingStatement.all(stateRow.current_term_id) as Array<{
+            const meetingRows = meetingStatement.all() as Array<{
                     meeting_series_id: string;
                     course_id: string;
                     entity_version: bigint;
@@ -725,46 +772,68 @@ class SqliteDataStoreImplementation {
                     weekday: MeetingWeekday;
                     local_start: string;
                     local_end: string;
-                    effective_start_date: string;
-                    effective_end_date: string;
+                    effective_range_kind: MeetingEffectiveRangeIntent['kind'];
+                    effective_start_date: string | null;
+                    effective_end_date: string | null;
                     location_kind: 'known' | 'tba';
                     location_value: string | null;
                 }>;
             // ponytail: WP-R2-03 owns one segment per series; R3 rule splitting must replace this mapping.
-            const courses = Object.freeze(courseRows.map((course) => Object.freeze({
-                courseId: course.course_id,
-                termId: course.term_id,
-                code: course.code,
-                name: course.name,
-                section: course.section,
-                instructor: course.instructor,
-                color: course.color,
-                credits: course.credits_coefficient === null || course.credits_scale === null
-                    ? null
-                    : decimalFromCoefficient(course.credits_coefficient, course.credits_scale),
-                entityVersion: course.entity_version.toString(),
-                meetings: Object.freeze(meetingRows
-                    .filter(meeting => meeting.course_id === course.course_id)
-                    .map(meeting => Object.freeze({
-                        meetingSeriesId: meeting.meeting_series_id,
-                        type: Object.freeze({
-                            code: meeting.meeting_type,
-                            name: meetingTypeName(meeting.meeting_type),
-                        }),
-                        weekday: meeting.weekday,
-                        localStart: meeting.local_start,
-                        localEnd: meeting.local_end,
-                        effectiveStartDate: meeting.effective_start_date,
-                        effectiveEndDate: meeting.effective_end_date,
-                        location: meeting.location_kind === 'tba'
-                            ? Object.freeze({ kind: 'tba' as const })
-                            : Object.freeze({
-                                kind: 'known' as const,
-                                value: meeting.location_value!,
+            const courses = Object.freeze(courseRows.map((course) => {
+                const teachingStartDate = course.teaching_range_kind === 'inherit-term'
+                    ? course.term_start_date
+                    : course.teaching_start_date!;
+                const teachingEndDate = course.teaching_range_kind === 'inherit-term'
+                    ? course.term_end_date
+                    : course.teaching_end_date!;
+                return Object.freeze({
+                    courseId: course.course_id,
+                    termId: course.term_id,
+                    code: course.code,
+                    name: course.name,
+                    section: course.section,
+                    instructor: course.instructor,
+                    color: course.color,
+                    credits: course.credits_coefficient === null || course.credits_scale === null
+                        ? null
+                        : decimalFromCoefficient(course.credits_coefficient, course.credits_scale),
+                    teachingRange: Object.freeze({
+                        kind: course.teaching_range_kind,
+                        startDate: teachingStartDate,
+                        endDate: teachingEndDate,
+                    }),
+                    archived: course.archived === 1n,
+                    entityVersion: course.entity_version.toString(),
+                    meetings: Object.freeze(meetingRows
+                        .filter(meeting => meeting.course_id === course.course_id)
+                        .map(meeting => Object.freeze({
+                            meetingSeriesId: meeting.meeting_series_id,
+                            type: Object.freeze({
+                                code: meeting.meeting_type,
+                                name: meetingTypeName(meeting.meeting_type),
                             }),
-                        entityVersion: meeting.entity_version.toString(),
-                    }))),
-            })));
+                            weekday: meeting.weekday,
+                            localStart: meeting.local_start,
+                            localEnd: meeting.local_end,
+                            effectiveRange: Object.freeze({
+                                kind: meeting.effective_range_kind,
+                                startDate: meeting.effective_range_kind === 'inherit-course'
+                                    ? teachingStartDate
+                                    : meeting.effective_start_date!,
+                                endDate: meeting.effective_range_kind === 'inherit-course'
+                                    ? teachingEndDate
+                                    : meeting.effective_end_date!,
+                            }),
+                            location: meeting.location_kind === 'tba'
+                                ? Object.freeze({ kind: 'tba' as const })
+                                : Object.freeze({
+                                    kind: 'known' as const,
+                                    value: meeting.location_value!,
+                                }),
+                            entityVersion: meeting.entity_version.toString(),
+                        }))),
+                });
+            }));
             this.database.exec('COMMIT');
 
             return Object.freeze({
@@ -782,7 +851,7 @@ class SqliteDataStoreImplementation {
     }
 
     public commit(
-        candidate: RecordSetupDecisionCommand | CreateTermCommand | CreateCourseWithMeetingCommand,
+        candidate: WorkspaceDataCommand,
         options: CommitOptions = {},
     ): Promise<DataCommitResult> {
         if (this.terminalError) {
@@ -796,11 +865,26 @@ class SqliteDataStoreImplementation {
                 return Promise.reject(error);
             }
         }
-        const command = candidate.intent.kind === 'plan.create-term'
-            ? normalizeCreateTermCommand(candidate)
-            : candidate.intent.kind === 'plan.create-course-with-first-meeting'
-                ? normalizeCreateCourseWithMeetingCommand(candidate)
-                : normalizeRecordSetupDecisionCommand(candidate);
+        let command: WorkspaceDataCommand;
+        switch (candidate.intent.kind) {
+            case 'plan.create-term':
+                command = normalizeCreateTermCommand(candidate);
+                break;
+            case 'plan.create-course-with-first-meeting':
+                command = normalizeAcceptedCreateCourseWithMeetingCommand(candidate);
+                break;
+            case 'workspace.reconcile-lifecycle':
+                command = normalizeReconcileWorkspaceLifecycleCommand(candidate);
+                break;
+            case 'plan.update-term-end-date':
+                command = normalizeUpdateTermEndDateCommand(candidate);
+                break;
+            case 'plan.restore-term-as-current':
+                command = normalizeRestoreTermAsCurrentCommand(candidate);
+                break;
+            default:
+                command = normalizeRecordSetupDecisionCommand(candidate);
+        }
         if (!this.accepting) {
             return Promise.reject(new Error('Workspace data store is closing'));
         }
@@ -983,7 +1067,7 @@ class SqliteDataStoreImplementation {
     }
 
     private commitSynchronously(
-        command: RecordSetupDecisionCommand | CreateTermCommand | CreateCourseWithMeetingCommand,
+        command: WorkspaceDataCommand,
         options: CommitOptions,
     ): DataCommitResult {
         if (!('expectedPlanVersion' in command)) {
@@ -991,6 +1075,9 @@ class SqliteDataStoreImplementation {
         }
         if (isCourseWithMeetingCommand(command)) {
             return this.commitCourseWithMeetingSynchronously(command, options);
+        }
+        if (isTermMutationCommand(command)) {
+            return this.commitTermMutationSynchronously(command, options);
         }
         return this.commitTermSynchronously(command, options);
     }
@@ -1306,10 +1393,286 @@ class SqliteDataStoreImplementation {
     }
 
     private commitCourseWithMeetingSynchronously(
-        command: CreateCourseWithMeetingCommand,
+        command: AcceptedCreateCourseWithMeetingCommand,
         options: CommitOptions,
     ): DataCommitResult {
         const digest = digestCreateCourseWithMeeting(command);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+            if (command.intent.intentSchemaVersion !== 2) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Legacy Course commands are replay-only');
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const term = this.database.prepare(`
+                SELECT terms.term_id, terms.start_date, terms.end_date
+                FROM plan_state
+                JOIN terms ON terms.term_id = plan_state.current_term_id
+                WHERE plan_state.singleton = 1
+            `).get() as {
+                term_id: string;
+                start_date: string;
+                end_date: string;
+            } | undefined;
+            const payload = command.intent.payload;
+            if (!term) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Course requires a Current Term');
+            }
+            const teachingStartDate = payload.course.teachingRange.kind === 'inherit-term'
+                ? term.start_date
+                : payload.course.teachingRange.startDate;
+            const teachingEndDate = payload.course.teachingRange.kind === 'inherit-term'
+                ? term.end_date
+                : payload.course.teachingRange.endDate;
+            const effectiveStartDate = payload.meeting.effectiveRange.kind === 'inherit-course'
+                ? teachingStartDate
+                : payload.meeting.effectiveRange.startDate;
+            const effectiveEndDate = payload.meeting.effectiveRange.kind === 'inherit-course'
+                ? teachingEndDate
+                : payload.meeting.effectiveRange.endDate;
+            if (teachingStartDate < term.start_date
+                || teachingEndDate > term.end_date
+                || effectiveStartDate < teachingStartDate
+                || effectiveEndDate > teachingEndDate) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Course and Meeting ranges must remain inside their owners');
+            }
+            if (versions.revision === SQLITE_INTEGER_MAX || versions.planVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const courseId = randomUUID();
+            const meetingSeriesId = randomUUID();
+            const meetingSegmentId = randomUUID();
+            const [creditsCoefficient, creditsScale] = decimalToCoefficient(payload.course.credits);
+            this.database.prepare(`
+                INSERT INTO courses (
+                    course_id,
+                    term_id,
+                    code,
+                    name,
+                    section,
+                    instructor,
+                    color,
+                    credits_coefficient,
+                    credits_scale,
+                    teaching_range_kind,
+                    teaching_start_date,
+                    teaching_end_date,
+                    archived,
+                    entity_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+            `).run(
+                courseId,
+                term.term_id,
+                payload.course.code,
+                payload.course.name,
+                payload.course.section,
+                payload.course.instructor,
+                payload.course.color,
+                creditsCoefficient,
+                creditsScale,
+                payload.course.teachingRange.kind,
+                payload.course.teachingRange.kind === 'explicit'
+                    ? payload.course.teachingRange.startDate
+                    : null,
+                payload.course.teachingRange.kind === 'explicit'
+                    ? payload.course.teachingRange.endDate
+                    : null,
+            );
+            this.database.prepare(`
+                INSERT INTO meeting_series (
+                    meeting_series_id,
+                    course_id,
+                    retired,
+                    entity_version
+                ) VALUES (?, ?, 0, 1)
+            `).run(meetingSeriesId, courseId);
+            this.database.prepare(`
+                INSERT INTO meeting_segments (
+                    meeting_segment_id,
+                    meeting_series_id,
+                    meeting_type,
+                    weekday,
+                    local_start,
+                    local_end,
+                    effective_range_kind,
+                    effective_start_date,
+                    effective_end_date,
+                    location_kind,
+                    location_value
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                meetingSegmentId,
+                meetingSeriesId,
+                payload.meeting.type,
+                payload.meeting.weekday,
+                payload.meeting.localStart,
+                payload.meeting.localEnd,
+                payload.meeting.effectiveRange.kind,
+                payload.meeting.effectiveRange.kind === 'explicit'
+                    ? payload.meeting.effectiveRange.startDate
+                    : null,
+                payload.meeting.effectiveRange.kind === 'explicit'
+                    ? payload.meeting.effectiveRange.endDate
+                    : null,
+                payload.meeting.location.kind,
+                payload.meeting.location.kind === 'known' ? payload.meeting.location.value : null,
+            );
+            this.database.prepare(`
+                UPDATE plan_state
+                SET plan_entity_version = ?
+                WHERE singleton = 1
+            `).run(newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, 'plan.create-course-with-first-meeting', 2,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES
+                    (?, 0, 'plan.course-created', 'course', ?, 1),
+                    (?, 1, 'plan.meeting-series-created', 'meeting-series', ?, 1)
+            `).run(command.commandId, courseId, command.commandId, meetingSeriesId);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
+    private commitTermMutationSynchronously(
+        command: TermMutationCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = command.intent.kind === 'workspace.reconcile-lifecycle'
+            ? digestReconcileWorkspaceLifecycle(command as ReconcileWorkspaceLifecycleCommand)
+            : command.intent.kind === 'plan.update-term-end-date'
+                ? digestUpdateTermEndDate(command as UpdateTermEndDateCommand)
+                : digestRestoreTermAsCurrent(command as RestoreTermAsCurrentCommand);
+        const effectCode: ReceiptEffect['code'] = command.intent.kind === 'workspace.reconcile-lifecycle'
+            ? 'plan.term-auto-archived'
+            : command.intent.kind === 'plan.update-term-end-date'
+                ? 'plan.term-end-date-updated'
+                : 'plan.term-restored-current';
         let commitAttempted = false;
 
         try {
@@ -1346,100 +1709,174 @@ class SqliteDataStoreImplementation {
                 this.rollbackOrRequireReopen();
                 return planConflictResult('expected-entity-version', versions);
             }
-            fireCommitFailpoint(options, 'commit.after-expected-versions');
 
             const term = this.database.prepare(`
-                SELECT terms.term_id, terms.start_date, terms.end_date
-                FROM plan_state
-                JOIN terms ON terms.term_id = plan_state.current_term_id
-                WHERE plan_state.singleton = 1
-            `).get() as {
+                SELECT
+                    terms.term_id,
+                    terms.start_date,
+                    terms.end_date,
+                    terms.time_zone,
+                    terms.archived,
+                    terms.entity_version,
+                    plan_state.current_term_id
+                FROM terms
+                JOIN plan_state ON plan_state.singleton = 1
+                WHERE terms.term_id = ?
+            `);
+            term.setReadBigInts(true);
+            const termRow = term.get(command.intent.payload.termId) as {
                 term_id: string;
                 start_date: string;
                 end_date: string;
+                time_zone: string;
+                archived: bigint;
+                entity_version: bigint;
+                current_term_id: string | null;
             } | undefined;
-            const payload = command.intent.payload;
-            if (!term
-                || payload.meeting.effectiveStartDate < term.start_date
-                || payload.meeting.effectiveEndDate > term.end_date) {
+            if (!termRow || termRow.entity_version !== BigInt(command.expectedTermVersion)) {
                 this.rollbackOrRequireReopen();
-                throw new TypeError('Meeting range must be inside the Current Term');
+                return planConflictResult('expected-entity-version', versions);
             }
-            if (versions.revision === SQLITE_INTEGER_MAX || versions.planVersion === SQLITE_INTEGER_MAX) {
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const evaluation = 'evaluation' in command
+                ? command.evaluation
+                : command.intent.kind === 'workspace.reconcile-lifecycle'
+                    ? command.intent.payload.evaluation
+                    : null;
+            if (evaluation
+                && (evaluation.termZone !== termRow.time_zone
+                    || localDateInTermZone(evaluation.evaluatedAt, termRow.time_zone)
+                        !== evaluation.applicableDate)) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Term evaluation no longer matches the target Term');
+            }
+
+            if (command.intent.kind === 'workspace.reconcile-lifecycle') {
+                if (termRow.current_term_id !== termRow.term_id
+                    || termRow.archived !== 0n
+                    || command.intent.payload.evaluation.applicableDate <= termRow.end_date) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Current Term is not eligible for automatic archive');
+                }
+            }
+            else if (command.intent.kind === 'plan.update-term-end-date') {
+                const newEndDate = command.intent.payload.endDate;
+                if (newEndDate < termRow.start_date) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Term end date must not precede its start date');
+                }
+
+                const courseStatement = this.database.prepare(`
+                    SELECT
+                        course_id,
+                        teaching_range_kind,
+                        teaching_start_date,
+                        teaching_end_date
+                    FROM courses
+                    WHERE term_id = ?
+                `);
+                const courses = courseStatement.all(termRow.term_id) as Array<{
+                    course_id: string;
+                    teaching_range_kind: CourseTeachingRangeIntent['kind'];
+                    teaching_start_date: string | null;
+                    teaching_end_date: string | null;
+                }>;
+                const resolvedCourses = courses.map(course => ({
+                    courseId: course.course_id,
+                    startDate: course.teaching_range_kind === 'inherit-term'
+                        ? termRow.start_date
+                        : course.teaching_start_date!,
+                    endDate: course.teaching_range_kind === 'inherit-term'
+                        ? newEndDate
+                        : course.teaching_end_date!,
+                }));
+                if (resolvedCourses.some(course => (
+                    course.startDate < termRow.start_date || course.endDate > newEndDate
+                ))) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Corrected Term range would exclude a Course');
+                }
+
+                const meetingStatement = this.database.prepare(`
+                    SELECT
+                        meeting_series.course_id,
+                        meeting_segments.effective_range_kind,
+                        meeting_segments.effective_start_date,
+                        meeting_segments.effective_end_date
+                    FROM meeting_segments
+                    JOIN meeting_series
+                        ON meeting_series.meeting_series_id = meeting_segments.meeting_series_id
+                    JOIN courses ON courses.course_id = meeting_series.course_id
+                    WHERE courses.term_id = ?
+                `);
+                const meetings = meetingStatement.all(termRow.term_id) as Array<{
+                    course_id: string;
+                    effective_range_kind: MeetingEffectiveRangeIntent['kind'];
+                    effective_start_date: string | null;
+                    effective_end_date: string | null;
+                }>;
+                const meetingOutsideCourse = meetings.some(meeting => {
+                    const course = resolvedCourses.find(candidate => candidate.courseId === meeting.course_id)!;
+                    const startDate = meeting.effective_range_kind === 'inherit-course'
+                        ? course.startDate
+                        : meeting.effective_start_date!;
+                    const endDate = meeting.effective_range_kind === 'inherit-course'
+                        ? course.endDate
+                        : meeting.effective_end_date!;
+                    return startDate < course.startDate || endDate > course.endDate;
+                });
+                if (meetingOutsideCourse) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Corrected Term range would exclude a Meeting');
+                }
+            }
+            else if (termRow.archived !== 1n
+                || termRow.current_term_id !== null
+                || evaluation === null
+                || evaluation.applicableDate > termRow.end_date) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Term is not eligible to restore as Current');
+            }
+
+            if (versions.revision === SQLITE_INTEGER_MAX
+                || versions.planVersion === SQLITE_INTEGER_MAX
+                || termRow.entity_version === SQLITE_INTEGER_MAX) {
                 this.rollbackOrRequireReopen();
                 throw this.enterTerminalState();
             }
 
             const newRevision = versions.revision + 1n;
             const newPlanVersion = versions.planVersion + 1n;
-            const courseId = randomUUID();
-            const meetingSeriesId = randomUUID();
-            const meetingSegmentId = randomUUID();
-            const [creditsCoefficient, creditsScale] = decimalToCoefficient(payload.course.credits);
-            this.database.prepare(`
-                INSERT INTO courses (
-                    course_id,
-                    term_id,
-                    code,
-                    name,
-                    section,
-                    instructor,
-                    color,
-                    credits_coefficient,
-                    credits_scale,
-                    teaching_range_kind,
-                    archived,
-                    entity_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'inherit-term', 0, 1)
-            `).run(
-                courseId,
-                term.term_id,
-                payload.course.code,
-                payload.course.name,
-                payload.course.section,
-                payload.course.instructor,
-                payload.course.color,
-                creditsCoefficient,
-                creditsScale,
-            );
-            this.database.prepare(`
-                INSERT INTO meeting_series (
-                    meeting_series_id,
-                    course_id,
-                    retired,
-                    entity_version
-                ) VALUES (?, ?, 0, 1)
-            `).run(meetingSeriesId, courseId);
-            this.database.prepare(`
-                INSERT INTO meeting_segments (
-                    meeting_segment_id,
-                    meeting_series_id,
-                    meeting_type,
-                    weekday,
-                    local_start,
-                    local_end,
-                    effective_start_date,
-                    effective_end_date,
-                    location_kind,
-                    location_value
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                meetingSegmentId,
-                meetingSeriesId,
-                payload.meeting.type,
-                payload.meeting.weekday,
-                payload.meeting.localStart,
-                payload.meeting.localEnd,
-                payload.meeting.effectiveStartDate,
-                payload.meeting.effectiveEndDate,
-                payload.meeting.location.kind,
-                payload.meeting.location.kind === 'known' ? payload.meeting.location.value : null,
-            );
-            this.database.prepare(`
-                UPDATE plan_state
-                SET plan_entity_version = ?
-                WHERE singleton = 1
-            `).run(newPlanVersion);
+            const newTermVersion = termRow.entity_version + 1n;
+            if (command.intent.kind === 'workspace.reconcile-lifecycle') {
+                this.database.prepare(`
+                    UPDATE terms SET archived = 1, entity_version = ? WHERE term_id = ?
+                `).run(newTermVersion, termRow.term_id);
+                this.database.prepare(`
+                    UPDATE plan_state
+                    SET current_term_id = NULL, plan_entity_version = ?
+                    WHERE singleton = 1
+                `).run(newPlanVersion);
+            }
+            else if (command.intent.kind === 'plan.update-term-end-date') {
+                this.database.prepare(`
+                    UPDATE terms SET end_date = ?, entity_version = ? WHERE term_id = ?
+                `).run(command.intent.payload.endDate, newTermVersion, termRow.term_id);
+                this.database.prepare(`
+                    UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
+                `).run(newPlanVersion);
+            }
+            else {
+                this.database.prepare(`
+                    UPDATE terms SET archived = 0, entity_version = ? WHERE term_id = ?
+                `).run(newTermVersion, termRow.term_id);
+                this.database.prepare(`
+                    UPDATE plan_state
+                    SET current_term_id = ?, plan_entity_version = ?
+                    WHERE singleton = 1
+                `).run(termRow.term_id, newPlanVersion);
+            }
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -1457,11 +1894,8 @@ class SqliteDataStoreImplementation {
                     payload_digest,
                     committed_revision,
                     result_kind
-                ) VALUES (
-                    ?, 'plan.create-course-with-first-meeting', 1,
-                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
-                )
-            `).run(command.commandId, digest, newRevision);
+                ) VALUES (?, ?, 1, 'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed')
+            `).run(command.commandId, command.intent.kind, digest, newRevision);
             fireCommitFailpoint(options, 'commit.after-receipt');
 
             this.database.prepare(`
@@ -1472,10 +1906,8 @@ class SqliteDataStoreImplementation {
                     entity_kind,
                     entity_id,
                     entity_version
-                ) VALUES
-                    (?, 0, 'plan.course-created', 'course', ?, 1),
-                    (?, 1, 'plan.meeting-series-created', 'meeting-series', ?, 1)
-            `).run(command.commandId, courseId, command.commandId, meetingSeriesId);
+                ) VALUES (?, 0, ?, 'term', ?, ?)
+            `).run(command.commandId, effectCode, termRow.term_id, newTermVersion);
             this.database.prepare(`
                 INSERT INTO durable_followups (
                     follow_up_id,
@@ -1730,7 +2162,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel3(stagingDatabase);
+        createSchemaLevel4(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -1762,7 +2194,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel3(validationDatabase);
+            validateSchemaLevel4(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -1771,7 +2203,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel3(activeDatabase);
+        const facts = validateSchemaLevel4(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -1844,7 +2276,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel3(validationDatabase);
+        const facts = validateSchemaLevel4(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -1894,7 +2326,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel3(activeDatabase);
+        const facts = validateSchemaLevel4(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -1930,7 +2362,9 @@ export async function openWorkspaceDataWithMigrations(
         source = openDatabase(path, true);
         const identity = readDatabaseIdentity(source);
         if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-            || (identity.schemaLevel !== 1 && identity.schemaLevel !== 2)) {
+            || (identity.schemaLevel !== 1
+                && identity.schemaLevel !== 2
+                && identity.schemaLevel !== 3)) {
             closeBestEffort(source);
             return opened;
         }
@@ -1942,8 +2376,11 @@ export async function openWorkspaceDataWithMigrations(
         if (identity.schemaLevel === 1) {
             validateSchemaLevel1(source);
         }
-        else {
+        else if (identity.schemaLevel === 2) {
             validateSchemaLevel2(source);
+        }
+        else {
+            validateSchemaLevel3(source);
         }
         const safetyDirectory = join(
             dataSlotsRoot,
@@ -1957,8 +2394,11 @@ export async function openWorkspaceDataWithMigrations(
             if (identity.schemaLevel === 1) {
                 validateSchemaLevel1(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 2) {
                 validateSchemaLevel2(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel3(safetyDatabase);
             }
         }
         finally {
@@ -1985,10 +2425,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel1To2(maintenance);
                         validateSchemaLevel2(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 2) {
                         validateSchemaLevel2(maintenance);
                         migrateLevel2To3(maintenance);
                         validateSchemaLevel3(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel3(maintenance);
+                        migrateLevel3To4(maintenance);
+                        validateSchemaLevel4(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -2012,7 +2457,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel3(maintenance);
+            validateSchemaLevel4(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

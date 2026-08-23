@@ -1,3 +1,7 @@
+/**
+ * @file Verifies setup flows through the public Workspace application boundary.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -52,7 +56,7 @@ function createCourseCommand() {
         expectedPlanVersion: '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting' as const,
-            intentSchemaVersion: 1 as const,
+            intentSchemaVersion: 2 as const,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -61,14 +65,14 @@ function createCourseCommand() {
                     instructor: 'Ada Lovelace',
                     color: 'blue' as const,
                     credits: '3',
+                    teachingRange: { kind: 'inherit-term' as const },
                 },
                 meeting: {
                     type: 'LEC' as const,
                     weekday: 'MON' as const,
                     localStart: '09:00',
                     localEnd: '10:00',
-                    effectiveStartDate: '2026-09-08',
-                    effectiveEndDate: '2026-12-18',
+                    effectiveRange: { kind: 'inherit-course' as const },
                     location: { kind: 'known' as const, value: 'BA 1170' },
                 },
             },

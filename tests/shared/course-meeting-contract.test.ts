@@ -1,3 +1,7 @@
+/**
+ * @file Verifies Course and Meeting command normalization and digest semantics.
+ */
+
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -13,7 +17,7 @@ const VALID_COMMAND = {
     expectedPlanVersion: '1',
     intent: {
         kind: 'plan.create-course-with-first-meeting',
-        intentSchemaVersion: 1,
+        intentSchemaVersion: 2,
         payload: {
             course: {
                 code: 'CSC108',
@@ -22,14 +26,14 @@ const VALID_COMMAND = {
                 instructor: 'Ada Lovelace',
                 color: 'blue',
                 credits: '3',
+                teachingRange: { kind: 'inherit-term' },
             },
             meeting: {
                 type: 'LEC',
                 weekday: 'MON',
                 localStart: '09:00',
                 localEnd: '10:00',
-                effectiveStartDate: '2026-09-08',
-                effectiveEndDate: '2026-12-18',
+                effectiveRange: { kind: 'inherit-course' },
                 location: { kind: 'known', value: 'BA 1170' },
             },
         },
@@ -67,6 +71,7 @@ test('A-COURSE-001–004: CreateCourseWithFirstMeeting normalizes every persiste
         instructor: null,
         color: null,
         credits: '3',
+        teachingRange: { kind: 'inherit-term' },
     });
     assert.deepEqual(normalized.intent.payload.meeting.location, {
         kind: 'known',
@@ -101,17 +106,27 @@ test('A-COURSE-003/TEST-PLAN-002: only LEC, TUT, and PRA meeting types are accep
     }), TypeError);
 });
 
-test('A-COURSE-004/TEST-PLAN-001/007: weekday, local times, and effective dates are validated', () => {
+test('A-COURSE-004/TEST-PLAN-001/007: weekday, local times, and effective ranges are validated', () => {
     const invalidMeetings = [
         { ...VALID_COMMAND.intent.payload.meeting, weekday: 'FUNDAY' },
         { ...VALID_COMMAND.intent.payload.meeting, localStart: '9:00' },
         { ...VALID_COMMAND.intent.payload.meeting, localStart: '10:00', localEnd: '10:00' },
         { ...VALID_COMMAND.intent.payload.meeting, localStart: '11:00', localEnd: '10:00' },
-        { ...VALID_COMMAND.intent.payload.meeting, effectiveStartDate: '2026-02-30' },
         {
             ...VALID_COMMAND.intent.payload.meeting,
-            effectiveStartDate: '2026-12-19',
-            effectiveEndDate: '2026-12-18',
+            effectiveRange: {
+                kind: 'explicit',
+                startDate: '2026-02-30',
+                endDate: '2026-12-18',
+            },
+        },
+        {
+            ...VALID_COMMAND.intent.payload.meeting,
+            effectiveRange: {
+                kind: 'explicit',
+                startDate: '2026-12-19',
+                endDate: '2026-12-18',
+            },
         },
     ];
 

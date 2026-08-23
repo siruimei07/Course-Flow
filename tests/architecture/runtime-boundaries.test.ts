@@ -1,3 +1,7 @@
+/**
+ * @file Verifies Electron runtime trust boundaries and the bounded preload surface.
+ */
+
 import assert from 'node:assert/strict';
 import { builtinModules } from 'node:module';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
@@ -585,9 +589,17 @@ test('preload exposes only the bounded CourseFlow setup capabilities on fixed IP
   assert.ok(exposedObject, 'courseFlow must expose an object literal, optionally frozen');
   assert.deepEqual(
     exposedObject.properties.map((property) => objectElementName(state, property)),
-    ['query', 'initialize', 'querySetup', 'createTerm', 'createCourseWithMeeting'],
+    [
+      'query',
+      'initialize',
+      'querySetup',
+      'createTerm',
+      'updateTermEndDate',
+      'restoreTermAsCurrent',
+      'createCourseWithMeeting',
+    ],
   );
-  const expectedParameterCounts = [0, 0, 0, 1, 1];
+  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1];
   exposedObject.properties.forEach((property, index) => {
     const method = publicMethod(state, preload, property);
     assert.ok(method, 'each exposed setup capability must resolve to a function body');

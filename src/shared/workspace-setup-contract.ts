@@ -1,7 +1,12 @@
+/**
+ * @file Defines setup and Term lifecycle requests crossing the Workspace boundary.
+ */
+
 import {
     isCourseProjection,
-    normalizeCreateCourseWithMeetingCommand,
-    type CreateCourseWithMeetingCommand,
+    normalizeAcceptedCreateCourseWithMeetingCommand,
+    type AcceptedCreateCourseWithMeetingCommand,
+    type CourseProjection,
 } from './workspace-course-contract';
 import {
     BOOTSTRAP_PROTOCOL_VERSION,
@@ -13,8 +18,11 @@ import {
 } from './workspace-data-contract';
 import {
     normalizeCreateTermCommand,
+    normalizeUpdateTermEndDateCommand,
     type CreateTermCommand,
     type SetupProjection,
+    type TermProjection,
+    type UpdateTermEndDateCommand,
 } from './workspace-term-contract';
 
 export const WORKSPACE_SETUP_CHANNEL = 'courseflow:workspace-setup' as const;
@@ -39,20 +47,47 @@ export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
     command: CreateTermCommand;
 }>;
 
+export type UpdateTermEndDateRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.term.update-end-date';
+    command: UpdateTermEndDateCommand;
+}>;
+
+export type RestoreTermAsCurrentRequestCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedTermVersion: string;
+    intent: Readonly<{
+        kind: 'plan.restore-term-as-current';
+        intentSchemaVersion: 1;
+        payload: Readonly<{ termId: string }>;
+    }>;
+}>;
+
+export type RestoreTermAsCurrentRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.term.restore-as-current';
+    command: RestoreTermAsCurrentRequestCommand;
+}>;
+
 export type CreateCourseWithMeetingRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.course.create-with-first-meeting';
-    command: CreateCourseWithMeetingCommand;
+    command: AcceptedCreateCourseWithMeetingCommand;
 }>;
 
 export type WorkspaceSetupRequest =
     | InitializeWorkspaceRequest
     | SetupQueryRequest
     | CreateTermRequest
+    | UpdateTermEndDateRequest
+    | RestoreTermAsCurrentRequest
     | CreateCourseWithMeetingRequest;
 
 type WorkspaceCommandEffect = Readonly<{
     code:
         | 'plan.term-created-current'
+        | 'plan.term-end-date-updated'
+        | 'plan.term-restored-current'
         | 'plan.course-created'
         | 'plan.meeting-series-created';
     entity: Readonly<{
@@ -157,6 +192,43 @@ function isRequestBase(value: Record<string, unknown>): boolean {
         && isCanonicalUuid(value.workspaceEpoch);
 }
 
+function normalizeRestoreTermAsCurrentRequestCommand(
+    value: unknown,
+): RestoreTermAsCurrentRequestCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedTermVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedTermVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.restore-term-as-current'
+        || value.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(value.intent.payload, ['termId'])
+        || !isCanonicalUuid(value.intent.payload.termId)) {
+        throw new TypeError('Restore Term request has invalid fields');
+    }
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        expectedTermVersion: value.expectedTermVersion,
+        intent: {
+            kind: 'plan.restore-term-as-current',
+            intentSchemaVersion: 1,
+            payload: { termId: value.intent.payload.termId },
+        },
+    };
+}
+
 export function makeInitializeWorkspaceRequest(
     requestId: string,
     appBuildId: string,
@@ -201,11 +273,43 @@ export function makeCreateTermRequest(
     };
 }
 
+export function makeUpdateTermEndDateRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: UpdateTermEndDateCommand,
+): UpdateTermEndDateRequest {
+    return {
+        kind: 'workspace.term.update-end-date',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeUpdateTermEndDateCommand(command),
+    };
+}
+
+export function makeRestoreTermAsCurrentRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: RestoreTermAsCurrentRequestCommand,
+): RestoreTermAsCurrentRequest {
+    return {
+        kind: 'workspace.term.restore-as-current',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeRestoreTermAsCurrentRequestCommand(command),
+    };
+}
+
 export function makeCreateCourseWithMeetingRequest(
     requestId: string,
     appBuildId: string,
     workspaceEpoch: string,
-    command: CreateCourseWithMeetingCommand,
+    command: AcceptedCreateCourseWithMeetingCommand,
 ): CreateCourseWithMeetingRequest {
     return {
         kind: 'workspace.course.create-with-first-meeting',
@@ -213,7 +317,7 @@ export function makeCreateCourseWithMeetingRequest(
         appBuildId,
         requestId,
         workspaceEpoch,
-        command: normalizeCreateCourseWithMeetingCommand(command),
+        command: normalizeAcceptedCreateCourseWithMeetingCommand(command),
     };
 }
 
@@ -239,6 +343,8 @@ export function isWorkspaceSetupRequest(
         ]);
     }
     if ((value.kind !== 'workspace.term.create'
+            && value.kind !== 'workspace.term.update-end-date'
+            && value.kind !== 'workspace.term.restore-as-current'
             && value.kind !== 'workspace.course.create-with-first-meeting')
         || !hasExactDataKeys(value, [
             'kind',
@@ -255,8 +361,14 @@ export function isWorkspaceSetupRequest(
         if (value.kind === 'workspace.term.create') {
             normalizeCreateTermCommand(value.command);
         }
+        else if (value.kind === 'workspace.term.update-end-date') {
+            normalizeUpdateTermEndDateCommand(value.command);
+        }
+        else if (value.kind === 'workspace.term.restore-as-current') {
+            normalizeRestoreTermAsCurrentRequestCommand(value.command);
+        }
         else {
-            normalizeCreateCourseWithMeetingCommand(value.command);
+            normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
         }
         return true;
     }
@@ -272,6 +384,7 @@ function isTermProjection(value: unknown): boolean {
         'startDate',
         'endDate',
         'timeZone',
+        'archived',
         'entityVersion',
     ])
         && isCanonicalUuid(value.termId)
@@ -279,24 +392,56 @@ function isTermProjection(value: unknown): boolean {
         && typeof value.startDate === 'string'
         && typeof value.endDate === 'string'
         && typeof value.timeZone === 'string'
+        && typeof value.archived === 'boolean'
         && isCanonicalUnsignedSqliteInteger(value.entityVersion);
 }
 
+function sameTermProjection(first: TermProjection, second: TermProjection): boolean {
+    return first.termId === second.termId
+        && first.name === second.name
+        && first.startDate === second.startDate
+        && first.endDate === second.endDate
+        && first.timeZone === second.timeZone
+        && first.archived === second.archived
+        && first.entityVersion === second.entityVersion;
+}
+
 function isSetupProjection(value: unknown): boolean {
-    return hasExactDataKeys(value, [
+    if (!hasExactDataKeys(value, [
         'workspaceRevision',
         'planEntityVersion',
         'currentTerm',
         'terms',
         'courses',
     ])
-        && isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
-        && isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
-        && (value.currentTerm === null || isTermProjection(value.currentTerm))
-        && Array.isArray(value.terms)
-        && value.terms.every(isTermProjection)
-        && Array.isArray(value.courses)
-        && value.courses.every(isCourseProjection);
+        || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
+        || (value.currentTerm !== null && !isTermProjection(value.currentTerm))
+        || !Array.isArray(value.terms)
+        || !value.terms.every(isTermProjection)
+        || !Array.isArray(value.courses)
+        || !value.courses.every(isCourseProjection)) {
+        return false;
+    }
+
+    const terms = value.terms as TermProjection[];
+    const courses = value.courses as CourseProjection[];
+    if (value.currentTerm !== null) {
+        const currentTerm = value.currentTerm as TermProjection;
+        const storedTerm = terms.find(term => term.termId === currentTerm.termId);
+        if (!storedTerm || !sameTermProjection(currentTerm, storedTerm)) {
+            return false;
+        }
+    }
+    return courses.every(course => {
+        const term = terms.find(candidate => candidate.termId === course.termId);
+        return term !== undefined
+            && course.teachingRange.startDate >= term.startDate
+            && course.teachingRange.endDate <= term.endDate
+            && (course.teachingRange.kind !== 'inherit-term'
+                || (course.teachingRange.startDate === term.startDate
+                    && course.teachingRange.endDate === term.endDate));
+    });
 }
 
 function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResult {
@@ -322,7 +467,9 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
         && isCanonicalUuid(effect.entity.id)
         && isCanonicalUnsignedSqliteInteger(effect.entity.version);
     if (value.effects.length === 1) {
-        return isEffect(value.effects[0], 'plan.term-created-current', 'term');
+        return isEffect(value.effects[0], 'plan.term-created-current', 'term')
+            || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
+            || isEffect(value.effects[0], 'plan.term-restored-current', 'term');
     }
     return isEffect(value.effects[0], 'plan.course-created', 'course')
         && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');

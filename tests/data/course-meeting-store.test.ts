@@ -1,3 +1,7 @@
+/**
+ * @file Verifies transactional Course and first Meeting persistence behavior.
+ */
+
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -45,7 +49,7 @@ function makeCourseCommand(options: Readonly<{
         expectedPlanVersion: options.expectedPlanVersion ?? '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting',
-            intentSchemaVersion: 1,
+            intentSchemaVersion: 2,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -54,14 +58,20 @@ function makeCourseCommand(options: Readonly<{
                     instructor: 'Ada Lovelace',
                     color: 'blue',
                     credits: '3',
+                    teachingRange: { kind: 'inherit-term' },
                 },
                 meeting: {
                     type: options.type ?? 'LEC',
                     weekday: 'MON',
                     localStart: '09:00',
                     localEnd: '10:00',
-                    effectiveStartDate: options.effectiveStartDate ?? '2026-09-08',
-                    effectiveEndDate: options.effectiveEndDate ?? '2026-12-18',
+                    effectiveRange: options.effectiveStartDate || options.effectiveEndDate
+                        ? {
+                            kind: 'explicit',
+                            startDate: options.effectiveStartDate ?? '2026-09-08',
+                            endDate: options.effectiveEndDate ?? '2026-12-18',
+                        }
+                        : { kind: 'inherit-course' },
                     location: options.location ?? { kind: 'known', value: 'BA 1170' },
                 },
             },
@@ -130,6 +140,12 @@ test('A-COURSE-001–004/FLOW-01: Course and first Meeting commit atomically in 
         instructor: 'Ada Lovelace',
         color: 'blue',
         credits: '3',
+        teachingRange: {
+            kind: 'inherit-term',
+            startDate: '2026-09-08',
+            endDate: '2026-12-18',
+        },
+        archived: false,
         entityVersion: '1',
         meetings: [{
             meetingSeriesId,
@@ -137,8 +153,11 @@ test('A-COURSE-001–004/FLOW-01: Course and first Meeting commit atomically in 
             weekday: 'MON',
             localStart: '09:00',
             localEnd: '10:00',
-            effectiveStartDate: '2026-09-08',
-            effectiveEndDate: '2026-12-18',
+            effectiveRange: {
+                kind: 'inherit-course',
+                startDate: '2026-09-08',
+                endDate: '2026-12-18',
+            },
             location: { kind: 'known', value: 'BA 1170' },
             entityVersion: '1',
         }],

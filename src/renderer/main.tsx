@@ -398,7 +398,7 @@ function SetupCourse(props: Readonly<{
                 expectedPlanVersion: props.projection.planEntityVersion,
                 intent: {
                     kind: 'plan.create-course-with-first-meeting',
-                    intentSchemaVersion: 1,
+                    intentSchemaVersion: 2,
                     payload: {
                         course: {
                             code: draft.code,
@@ -407,14 +407,21 @@ function SetupCourse(props: Readonly<{
                             instructor: draft.instructor.trim() || null,
                             color: draft.color || null,
                             credits: draft.credits.trim() || null,
+                            teachingRange: { kind: 'inherit-term' },
                         },
                         meeting: {
                             type: draft.meetingType,
                             weekday: draft.weekday,
                             localStart: draft.localStart,
                             localEnd: draft.localEnd,
-                            effectiveStartDate: draft.effectiveStartDate,
-                            effectiveEndDate: draft.effectiveEndDate,
+                            effectiveRange: draft.effectiveStartDate === currentTerm.startDate
+                                && draft.effectiveEndDate === currentTerm.endDate
+                                ? { kind: 'inherit-course' }
+                                : {
+                                    kind: 'explicit',
+                                    startDate: draft.effectiveStartDate,
+                                    endDate: draft.effectiveEndDate,
+                                },
                             location: draft.locationKind === 'tba'
                                 ? { kind: 'tba' }
                                 : { kind: 'known', value: draft.locationValue },
@@ -704,7 +711,7 @@ function FormFooter(props: Readonly<{
 
 function SetupComplete({ projection }: Readonly<{ projection: SetupProjection }>) {
     const currentTerm = projection.currentTerm;
-    const course = projection.courses[0];
+    const course = projection.courses.find(candidate => candidate.termId === currentTerm?.termId);
     const meeting = course?.meetings[0];
     if (!currentTerm || !course || !meeting) {
         return null;
@@ -740,7 +747,7 @@ function SetupComplete({ projection }: Readonly<{ projection: SetupProjection }>
                 </div>
                 <div>
                     <dt>生效日期</dt>
-                    <dd>{meeting.effectiveStartDate} — {meeting.effectiveEndDate}</dd>
+                    <dd>{meeting.effectiveRange.startDate} — {meeting.effectiveRange.endDate}</dd>
                 </div>
                 <div><dt>地点</dt><dd>{location}</dd></div>
                 <div><dt>学期身份</dt><dd className="stable-id">{currentTerm.termId}</dd></div>
