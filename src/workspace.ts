@@ -1,10 +1,11 @@
-import { DatabaseSync } from 'node:sqlite';
-import { isSupportedSqliteVersion } from './shared/sqlite-version';
+import { randomUUID } from 'node:crypto';
+import { openWorkspaceData, type SqliteDataStore } from './data/sqlite-data-store';
 import {
   BOOTSTRAP_PROTOCOL_VERSION,
   isWorkspaceProbeRequest,
   makeBootstrapProblem,
   type BootstrapOutcome,
+  type WorkspaceDataStatus,
 } from './shared/bootstrap-contract';
 
 const parentPort = process.parentPort;
@@ -12,6 +13,20 @@ const parentPort = process.parentPort;
 if (!parentPort) {
   throw new Error('CourseFlow Workspace utility process requires process.parentPort.');
 }
+
+const workspaceEpoch = randomUUID();
+const dataSlotsRoot = dataSlotsRootFrom(process.argv);
+const workspaceState = dataSlotsRoot ? openWorkspaceState(dataSlotsRoot) : undefined;
+let acceptsBootstrap = true;
+let lifecycleClosePromise: Promise<void> | undefined;
+
+process.on('exit', () => {
+  try {
+    void workspaceState?.store?.close();
+  } catch {
+    // The process is exiting; the DATA owner has no caller left to notify.
+  }
+});
 
 function requestIdFrom(value: unknown): string | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -35,7 +50,18 @@ function isBuildMismatch(value: unknown): boolean {
 parentPort.on('message', (event) => {
   const request = event.data;
 
-  if (!isWorkspaceProbeRequest(request, __COURSEFLOW_APP_BUILD_ID__)) {
+  if (isLifecycleCloseRequest(request)) {
+    acceptsBootstrap = false;
+    if (!lifecycleClosePromise) {
+      lifecycleClosePromise = closeWorkspace();
+      void lifecycleClosePromise.then(() => {
+        parentPort.postMessage({ kind: 'workspace.lifecycle.closed' });
+      }).catch(() => {});
+    }
+    return;
+  }
+
+  if (!acceptsBootstrap || !isWorkspaceProbeRequest(request, __COURSEFLOW_APP_BUILD_ID__)) {
     parentPort.postMessage(
       makeBootstrapProblem(
         isBuildMismatch(request) ? 'build-mismatch' : 'invalid-request',
@@ -47,53 +73,95 @@ parentPort.on('message', (event) => {
     return;
   }
 
-  parentPort.postMessage(probeWorkspace(request));
+  parentPort.postMessage(bootstrapWorkspace(request));
 });
 
-function probeWorkspace(request: import('./shared/bootstrap-contract').WorkspaceProbeRequest): BootstrapOutcome {
-  let database: DatabaseSync | undefined;
+function isLifecycleCloseRequest(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return false;
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  return (
+    Reflect.ownKeys(descriptors).length === 1 &&
+    descriptors.kind !== undefined &&
+    'value' in descriptors.kind &&
+    descriptors.kind.enumerable === true &&
+    descriptors.kind.value === 'workspace.lifecycle.close'
+  );
+}
 
+async function closeWorkspace(): Promise<void> {
+  await workspaceState?.store?.close();
+}
+
+function dataSlotsRootFrom(argv: readonly string[]): string | undefined {
+  const marker = '--courseflow-data-slots-root';
+  const markerIndex = argv.indexOf(marker);
+  if (markerIndex !== argv.length - 2 || argv.lastIndexOf(marker) !== markerIndex) {
+    return undefined;
+  }
+
+  const value = argv[markerIndex + 1];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+type WorkspaceState = Readonly<{
+  sqliteVersion: string;
+  workspaceData: WorkspaceDataStatus;
+  store?: SqliteDataStore;
+}>;
+
+function openWorkspaceState(dataSlotsRoot: string): WorkspaceState | undefined {
   try {
-    database = new DatabaseSync(':memory:');
-    const row = database.prepare('SELECT sqlite_version() AS version').get() as { version?: unknown };
-    if (typeof row.version !== 'string') {
-      return makeBootstrapProblem(
-        'workspace-unavailable',
-        'Workspace is unavailable. Please try again.',
-        __COURSEFLOW_APP_BUILD_ID__,
-        request.requestId,
-      );
+    const opened = openWorkspaceData(dataSlotsRoot);
+    if (opened.kind === 'absent') {
+      return { sqliteVersion: opened.sqliteVersion, workspaceData: { kind: 'absent' } };
     }
 
-    if (!isSupportedSqliteVersion(row.version)) {
-      return makeBootstrapProblem(
-        'sqlite-unsupported',
-        'The bundled SQLite runtime is unsupported.',
-        __COURSEFLOW_APP_BUILD_ID__,
-        request.requestId,
-      );
+    if (opened.kind === 'recovery') {
+      return {
+        sqliteVersion: opened.sqliteVersion,
+        workspaceData: { kind: 'recovery', problem: opened.problem },
+      };
     }
 
-    const outcome: BootstrapOutcome = {
-      ok: true,
-      value: {
-        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-        appBuildId: __COURSEFLOW_APP_BUILD_ID__,
-        requestId: request.requestId,
-        workspaceProcess: 'ready',
-        sqliteVersion: row.version,
-        dataRootClass: request.dataRootClass,
-      },
+    return {
+      sqliteVersion: opened.sqliteVersion,
+      workspaceData: opened.store.status(),
+      store: opened.store,
     };
-    return outcome;
   } catch {
+    return undefined;
+  }
+}
+
+function bootstrapWorkspace(
+  request: import('./shared/bootstrap-contract').WorkspaceProbeRequest,
+): BootstrapOutcome {
+  if (!workspaceState) {
     return makeBootstrapProblem(
       'workspace-unavailable',
       'Workspace is unavailable. Please try again.',
       __COURSEFLOW_APP_BUILD_ID__,
       request.requestId,
     );
-  } finally {
-    database?.close();
   }
+
+  return {
+    ok: true,
+    value: {
+      protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+      appBuildId: __COURSEFLOW_APP_BUILD_ID__,
+      requestId: request.requestId,
+      workspaceProcess: 'ready',
+      sqliteVersion: workspaceState.sqliteVersion,
+      dataRootClass: request.dataRootClass,
+      workspaceEpoch,
+      workspaceData: workspaceState.workspaceData,
+    },
+  };
 }

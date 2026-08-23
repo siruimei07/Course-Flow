@@ -28,7 +28,15 @@ function App() {
       <p role="status">正在连接 Workspace 进程…</p>
     ) : status.kind === 'ready' ? (
       <>
-        <p role="status">Workspace 进程已就绪</p>
+        {status.outcome.value.workspaceData.kind === 'absent' ? (
+          <p role="status">Workspace 进程已就绪；尚未创建本地工作区；</p>
+        ) : status.outcome.value.workspaceData.kind === 'ready' ? (
+          <p role="status">本地数据已就绪；Revision {status.outcome.value.workspaceData.revision}</p>
+        ) : status.outcome.value.workspaceData.kind === 'read-only' ? (
+          <p role="alert">本地数据为只读，正式保存不可用；</p>
+        ) : (
+          <p role="alert">本地数据需要恢复。</p>
+        )}
         <p>Build {status.outcome.value.appBuildId.split(':')[1]?.slice(0, 12) ?? 'unknown'}</p>
         <p>SQLite {status.outcome.value.sqliteVersion}</p>
         <p>本地开发数据根已验证</p>

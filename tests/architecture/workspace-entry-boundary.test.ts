@@ -8,6 +8,7 @@ import { makeBootstrapRequest } from '../../src/shared/bootstrap-contract';
 
 const repositoryRoot = process.cwd();
 const appBuildId = '0.0.0-dev';
+const workspaceEpoch = '11111111-1111-4111-8111-111111111111';
 
 class FakeUtilityProcess extends EventEmitter {
   readonly messages: unknown[] = [];
@@ -60,6 +61,10 @@ function unavailable(requestId: string) {
   };
 }
 
+function gracefulShutdown(supervisor: WorkspaceSupervisor): Promise<void> {
+  return (supervisor as WorkspaceSupervisor & { gracefulShutdown(): Promise<void> }).gracefulShutdown();
+}
+
 test('WorkspaceSupervisor resolves a matching ready response and clears its timeout', async (t) => {
   const timers = useControlledTimers(t);
   const child = new FakeUtilityProcess();
@@ -74,24 +79,28 @@ test('WorkspaceSupervisor resolves a matching ready response and clears its time
   child.emit('message', {
     ok: true,
     value: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       appBuildId,
       requestId: 'request-ready',
       workspaceProcess: 'ready',
       sqliteVersion: '3.50.4',
       dataRootClass: 'verified-local',
+      workspaceEpoch,
+      workspaceData: { kind: 'absent' },
     },
   });
 
   assert.deepEqual(await outcomePromise, {
     ok: true,
     value: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       appBuildId,
       requestId: 'request-ready',
       workspaceProcess: 'ready',
       sqliteVersion: '3.50.4',
       dataRootClass: 'verified-local',
+      workspaceEpoch,
+      workspaceData: { kind: 'absent' },
     },
   });
   assert.equal(timers[0]!.cleared, true);
@@ -180,6 +189,65 @@ test('WorkspaceSupervisor disposal clears pending timers, settles queries, and k
   assert.equal(timers[0]!.cleared, true);
   assert.deepEqual(await pending, unavailable('request-dispose'));
   assert.throws(() => child.emit('error', new Error('after disposal')));
+});
+
+test('WorkspaceSupervisor graceful shutdown waits for the exact close acknowledgement before cleanup', async (t) => {
+  const timers = useControlledTimers(t);
+  const child = new FakeUtilityProcess();
+  const supervisor = new WorkspaceSupervisor(appBuildId, child);
+  const pending = supervisor.query(makeBootstrapRequest('request-graceful', appBuildId), 'verified-local');
+
+  const shutdown = gracefulShutdown(supervisor);
+
+  assert.deepEqual(child.messages, [
+    { ...makeBootstrapRequest('request-graceful', appBuildId), dataRootClass: 'verified-local' },
+    { kind: 'workspace.lifecycle.close' },
+  ]);
+  assert.equal(child.killed, false);
+  assert.equal(timers.length, 2);
+  assert.equal(timers[1]!.delay, 5_000);
+  assert.equal(shutdown, gracefulShutdown(supervisor));
+
+  const nonPlainAcknowledgement = Object.assign(
+    Object.create({}),
+    { kind: 'workspace.lifecycle.closed' },
+  );
+  child.emit('message', nonPlainAcknowledgement);
+  assert.equal(child.killed, false);
+
+  child.emit('message', { kind: 'workspace.lifecycle.closed' });
+
+  await shutdown;
+  assert.equal(shutdown, gracefulShutdown(supervisor));
+  assert.equal(child.killCount, 1);
+  assert.equal(timers[0]!.cleared, true);
+  assert.equal(timers[1]!.cleared, true);
+  assert.deepEqual(await pending, unavailable('request-graceful'));
+  assert.equal(child.listenerCount('message'), 0);
+  assert.equal(child.listenerCount('error'), 0);
+  assert.equal(child.listenerCount('exit'), 0);
+});
+
+test('WorkspaceSupervisor graceful shutdown forces a bounded kill without an acknowledgement', async (t) => {
+  const timers = useControlledTimers(t);
+  const child = new FakeUtilityProcess();
+  const supervisor = new WorkspaceSupervisor(appBuildId, child);
+
+  const shutdown = gracefulShutdown(supervisor);
+
+  assert.deepEqual(child.messages, [{ kind: 'workspace.lifecycle.close' }]);
+  assert.equal(child.killed, false);
+  assert.equal(timers.length, 1);
+  assert.equal(timers[0]!.delay, 5_000);
+
+  timers[0]!.callback();
+  await shutdown;
+
+  assert.equal(child.killCount, 1);
+  assert.equal(timers[0]!.cleared, true);
+  assert.equal(child.listenerCount('message'), 0);
+  assert.equal(child.listenerCount('error'), 0);
+  assert.equal(child.listenerCount('exit'), 0);
 });
 
 test('Workspace entry keeps the trusted process boundary and shared channel consumers', () => {

@@ -385,7 +385,7 @@ function exportedForgeConfig(state: CompilerState): TypeScriptAst.ObjectLiteralE
 
 test('production keeps one utility process and Renderer imports no privileged runtime capability', async () => {
   const state = await compilerState();
-  let forkCalls = 0;
+  const utilityForkCalls: TypeScriptAst.CallExpression[] = [];
 
   for (const sourcePath of productionSourcePaths) {
     visit(sourceFor(state, sourcePath), (node) => {
@@ -396,7 +396,7 @@ test('production keeps one utility process and Renderer imports no privileged ru
         node.expression.expression.text === 'utilityProcess' &&
         node.expression.name.text === 'fork'
       ) {
-        forkCalls += 1;
+        utilityForkCalls.push(node);
       }
     });
   }
@@ -423,8 +423,123 @@ test('production keeps one utility process and Renderer imports no privileged ru
     );
   });
 
-  assert.equal(forkCalls, 1);
+  assert.equal(utilityForkCalls.length, 1);
+  const dataSlotsRootArgument = utilityForkCalls[0]!.arguments[1];
+  assert.ok(dataSlotsRootArgument && state.is.isArrayLiteralExpression(dataSlotsRootArgument));
+  assert.equal(dataSlotsRootArgument.elements.length, 2);
+  assert.equal(stringLiteralText(state, dataSlotsRootArgument.elements[0]), '--courseflow-data-slots-root');
+  const rootValue = dataSlotsRootArgument.elements[1];
+  assert.equal(
+    rootValue !== undefined && state.is.isPropertyAccessExpression(rootValue)
+      && state.is.isIdentifier(rootValue.expression)
+      && rootValue.expression.text === 'roots'
+      && rootValue.name.text === 'dataSlotsRoot',
+    true,
+  );
+
+  const workspaceSpecifiers = moduleSpecifiers(state, sourceFor(state, path.join(sourceRoot, 'workspace.ts')));
+  assert.deepEqual(
+    workspaceSpecifiers.filter((specifier) => /^node:(?:fs|path|sqlite)(?:\/|$)/.test(specifier)),
+    [],
+  );
+
+  const nodeSqliteImporters = productionSourcePaths
+    .filter((sourcePath) => moduleSpecifiers(state, sourceFor(state, sourcePath)).includes('node:sqlite'))
+    .map((sourcePath) => path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'))
+    .sort();
+  assert.deepEqual(nodeSqliteImporters, [
+    'src/data/schema.ts',
+    'src/data/sqlite-data-store.ts',
+  ]);
   assert.deepEqual(rendererViolations, []);
+});
+
+test('Main awaits graceful Workspace shutdown for smoke exit and ordinary quit', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath);
+  const beforeQuitHandlers: TypeScriptAst.FunctionLikeDeclaration[] = [];
+  let exitSmoke: TypeScriptAst.FunctionLikeDeclaration | undefined;
+  for (const statement of main.statements) {
+    if (state.is.isFunctionDeclaration(statement) && statement.name?.text === 'exitSmoke') {
+      exitSmoke = statement;
+    }
+  }
+
+  function gracefulAwaitPositionsIn(node: TypeScriptAst.Node): number[] {
+    const positions: number[] = [];
+    visit(node, (candidate) => {
+      if (!state.is.isAwaitExpression(candidate)) {
+        return;
+      }
+      const expression = candidate.expression;
+      if (
+        state.is.isCallExpression(expression) &&
+        state.is.isPropertyAccessExpression(expression.expression) &&
+        expression.expression.name.text === 'gracefulShutdown'
+      ) {
+        positions.push(candidate.getStart(main));
+      }
+    });
+    return positions;
+  }
+
+  function methodCallPositionsIn(node: TypeScriptAst.Node, receiver: string, method: string): number[] {
+    const positions: number[] = [];
+    visit(node, (candidate) => {
+      if (
+        state.is.isCallExpression(candidate) &&
+        state.is.isPropertyAccessExpression(candidate.expression) &&
+        state.is.isIdentifier(candidate.expression.expression) &&
+        candidate.expression.expression.text === receiver &&
+        candidate.expression.name.text === method
+      ) {
+        positions.push(candidate.getStart(main));
+      }
+    });
+    return positions;
+  }
+
+  visit(main, (node) => {
+    if (
+      state.is.isCallExpression(node) &&
+      state.is.isPropertyAccessExpression(node.expression) &&
+      state.is.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'app' &&
+      node.expression.name.text === 'on' &&
+      stringLiteralText(state, node.arguments[0]) === 'before-quit' &&
+      node.arguments[1] &&
+      state.is.isFunctionLikeDeclaration(node.arguments[1])
+    ) {
+      beforeQuitHandlers.push(node.arguments[1]);
+    }
+  });
+
+  assert.ok(exitSmoke?.body, 'Main must retain the smoke exit function');
+  const smokeAwaits = gracefulAwaitPositionsIn(exitSmoke.body);
+  const smokeExits = methodCallPositionsIn(exitSmoke.body, 'app', 'exit');
+  assert.equal(smokeAwaits.length, 1);
+  assert.equal(smokeExits.length, 1);
+  assert.ok(smokeAwaits[0]! < smokeExits[0]!);
+  assert.equal(beforeQuitHandlers.length, 1);
+  const beforeQuit = beforeQuitHandlers[0]!;
+  assert.ok(beforeQuit.body);
+  const quitAwaits = gracefulAwaitPositionsIn(beforeQuit.body);
+  const preventDefaults = methodCallPositionsIn(beforeQuit.body, 'event', 'preventDefault');
+  const reentryQuits = methodCallPositionsIn(beforeQuit.body, 'app', 'quit');
+  assert.equal(quitAwaits.length, 1);
+  assert.equal(preventDefaults.length, 1);
+  assert.equal(reentryQuits.length, 1);
+  assert.ok(preventDefaults[0]! < quitAwaits[0]! && quitAwaits[0]! < reentryQuits[0]!);
+  assert.equal(
+    state.is.isBlock(beforeQuit.body) && beforeQuit.body.statements.some(
+      (statement) =>
+        state.is.isIfStatement(statement) &&
+        (state.is.isReturnStatement(statement.thenStatement) ||
+          (state.is.isBlock(statement.thenStatement) &&
+            statement.thenStatement.statements.some((child) => state.is.isReturnStatement(child)))),
+    ),
+    true,
+  );
 });
 
 test('preload exposes only the zero-argument courseFlow.query capability on a fixed IPC channel', async () => {

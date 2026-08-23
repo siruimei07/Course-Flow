@@ -14,6 +14,7 @@ import { WorkspaceSupervisor } from './main/workspace-supervisor';
 
 let mainWindow: BrowserWindow | undefined;
 let workspaceSupervisor: WorkspaceSupervisor | undefined;
+let ordinaryQuitPending = false;
 const smokeMode = process.argv.includes('--courseflow-smoke');
 
 function requestIdFrom(value: unknown): string | null {
@@ -102,8 +103,8 @@ function initializeDevelopmentRuntime(): DevelopmentRoots | undefined {
   }
 }
 
-function exitSmoke(code: number): void {
-  workspaceSupervisor?.dispose();
+async function exitSmoke(code: number): Promise<void> {
+  await workspaceSupervisor?.gracefulShutdown();
   app.exit(code);
 }
 
@@ -117,7 +118,12 @@ async function runSmokeMode(): Promise<void> {
     if (!isBootstrapOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, (outcome as { value?: { requestId?: string } }).value?.requestId ?? '')) {
       throw new Error('Smoke query returned an invalid outcome.');
     }
-    if (!outcome.ok || !isSupportedSqliteVersion(outcome.value.sqliteVersion) || outcome.value.dataRootClass !== 'verified-local') {
+    if (
+      !outcome.ok ||
+      !isSupportedSqliteVersion(outcome.value.sqliteVersion) ||
+      outcome.value.dataRootClass !== 'verified-local' ||
+      (outcome.value.workspaceData.kind !== 'absent' && outcome.value.workspaceData.kind !== 'ready')
+    ) {
       throw new Error('Smoke query did not confirm the local SQLite runtime.');
     }
 
@@ -150,7 +156,10 @@ async function querySmokeOutcome(window: BrowserWindow): Promise<unknown> {
 }
 
 async function startApplication(roots: DevelopmentRoots): Promise<void> {
-  const workspace = utilityProcess.fork(path.join(__dirname, 'workspace.js'), [], {
+  const workspace = utilityProcess.fork(path.join(__dirname, 'workspace.js'), [
+    '--courseflow-data-slots-root',
+    roots.dataSlotsRoot,
+  ], {
     serviceName: 'CourseFlow Workspace',
   });
   workspaceSupervisor = new WorkspaceSupervisor(__COURSEFLOW_APP_BUILD_ID__, workspace);
@@ -218,6 +227,15 @@ app.on('activate', () => {
   }
 });
 
-app.on('before-quit', () => {
-  workspaceSupervisor?.dispose();
+app.on('before-quit', (event) => {
+  if (ordinaryQuitPending) {
+    return;
+  }
+
+  ordinaryQuitPending = true;
+  event.preventDefault();
+  void (async () => {
+    await workspaceSupervisor?.gracefulShutdown();
+    app.quit();
+  })();
 });

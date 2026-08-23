@@ -11,6 +11,7 @@
   },
   "include": [
     "src/shared/**/*.ts",
+    "src/data/**/*.ts",
     "src/main/runtime-paths.ts",
     "tests/**/*.ts"
   ]

@@ -12,6 +12,8 @@ import {
 
 const buildId = '0.0.0-dev';
 const requestId = 'req-1';
+const workspaceEpoch = '11111111-1111-4111-8111-111111111111';
+const workspaceId = '22222222-2222-4222-8222-222222222222';
 
 test('makeBootstrapRequest emits only the bootstrap query fields', () => {
   assert.deepEqual(makeBootstrapRequest(requestId, buildId), {
@@ -25,7 +27,7 @@ test('makeBootstrapRequest emits only the bootstrap query fields', () => {
 test('isBootstrapRequest rejects values outside the exact bootstrap request shape', () => {
   const validRequest = {
     kind: 'bootstrap.status',
-    protocolVersion: 1,
+    protocolVersion: 2,
     appBuildId: buildId,
     requestId,
   };
@@ -34,7 +36,7 @@ test('isBootstrapRequest rejects values outside the exact bootstrap request shap
     { ...validRequest, kind: 'bootstrap.other' },
     { ...validRequest, appBuildId: 'other-build' },
     { ...validRequest, appBuildId: 1 },
-    { ...validRequest, protocolVersion: 2 },
+    { ...validRequest, protocolVersion: 1 },
     { ...validRequest, requestId: '' },
     { ...validRequest, requestId: 1 },
     { ...validRequest, unexpected: true },
@@ -47,31 +49,98 @@ test('isBootstrapRequest rejects values outside the exact bootstrap request shap
   assert.equal(isBootstrapRequest(validRequest, buildId), true);
 });
 
-test('isBootstrapOutcome accepts only a ready value correlated to its request and build', () => {
+test('isBootstrapOutcome accepts only complete path-free states correlated to its request and build', () => {
   const validOutcome = {
     ok: true,
     value: {
-      protocolVersion: 1,
+      protocolVersion: 2,
       appBuildId: buildId,
       requestId,
       workspaceProcess: 'ready',
       sqliteVersion: '3.50.4',
       dataRootClass: 'verified-local',
+      workspaceEpoch,
+      workspaceData: {
+        kind: 'ready',
+        workspaceId,
+        schemaLevel: 1,
+        revision: '42',
+      },
     },
   };
 
   assert.equal(isBootstrapOutcome(validOutcome, buildId, requestId), true);
+  assert.doesNotMatch(JSON.stringify(validOutcome.value), /DataSlots|workspace\.sqlite|[A-Za-z]:[\\/]|\/Users\//);
+
+  for (const workspaceData of [
+    { kind: 'absent' },
+    validOutcome.value.workspaceData,
+    {
+      kind: 'read-only',
+      workspaceId,
+      schemaLevel: 1,
+      revision: '42',
+      problem: {
+        code: 'permission',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.write'],
+        allowedActions: [],
+        context: {},
+        details: { reason: 'read-only' },
+      },
+    },
+    {
+      kind: 'recovery',
+      problem: {
+        code: 'integrity',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.read', 'workspace.write'],
+        allowedActions: [],
+        context: {},
+        details: { reason: 'database-corrupt' },
+      },
+    },
+  ]) {
+    assert.equal(
+      isBootstrapOutcome({ ...validOutcome, value: { ...validOutcome.value, workspaceData } }, buildId, requestId),
+      true,
+    );
+  }
 
   for (const value of [
     { ok: 'true', value: validOutcome.value },
     { ...validOutcome, value: { ...validOutcome.value, appBuildId: 'other-build' } },
     { ...validOutcome, value: { ...validOutcome.value, requestId: 'req-2' } },
-    { ...validOutcome, value: { ...validOutcome.value, protocolVersion: 2 } },
+    { ...validOutcome, value: { ...validOutcome.value, protocolVersion: 1 } },
     { ...validOutcome, value: { ...validOutcome.value, workspaceProcess: 'starting' } },
     { ...validOutcome, value: { ...validOutcome.value, sqliteVersion: '3.36.9' } },
     { ...validOutcome, value: { ...validOutcome.value, sqliteVersion: '3.50' } },
     { ...validOutcome, value: { ...validOutcome.value, dataRootClass: 'unknown' } },
     { ...validOutcome, value: { ...validOutcome.value, dataRootClass: undefined } },
+    { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: 'not-a-uuid' } },
+    { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: Buffer.from('workspace-epoch') } },
+    {
+      ...validOutcome,
+      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 1, revision: '01' } },
+    },
+    {
+      ...validOutcome,
+      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 2, revision: '42' } },
+    },
+    { ...validOutcome, value: { ...validOutcome.value, workspaceData: { kind: 'absent', extra: true } } },
+    {
+      ...validOutcome,
+      value: { ...validOutcome.value, workspaceData: { kind: 'recovery', problem: { code: 'integrity' } } },
+    },
+    {
+      ...validOutcome,
+      value: {
+        ...validOutcome.value,
+        workspaceData: { kind: 'read-only', workspaceId, schemaLevel: 1, revision: 42n, problem: {} },
+      },
+    },
     { ...validOutcome, value: { ...validOutcome.value, extra: true } },
     { ...validOutcome, extra: true },
     { ok: true, value: null },
@@ -131,7 +200,7 @@ test('isBootstrapOutcome accepts only known, complete bootstrap problems', () =>
 test('isWorkspaceProbeRequest accepts only a build-correlated verified-local probe', () => {
   const validProbe = {
     kind: 'bootstrap.status',
-    protocolVersion: 1,
+    protocolVersion: 2,
     appBuildId: buildId,
     requestId,
     dataRootClass: 'verified-local',
@@ -143,7 +212,7 @@ test('isWorkspaceProbeRequest accepts only a build-correlated verified-local pro
     { ...validProbe, dataRootClass: 'unverified' },
     { ...validProbe, appBuildId: 'other-build' },
     { ...validProbe, extra: true },
-    { kind: 'bootstrap.status', protocolVersion: 1, appBuildId: buildId, requestId },
+    { kind: 'bootstrap.status', protocolVersion: 2, appBuildId: buildId, requestId },
   ]) {
     assert.equal(isWorkspaceProbeRequest(value, buildId), false);
   }
