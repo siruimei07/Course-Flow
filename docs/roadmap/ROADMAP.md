@@ -124,6 +124,6 @@ Backlog 生命周期为 `Ready → In Progress → Verification → Done`，遇�
 
 ## 8. 当前执行点
 
-R0 与 `WP-R1-01`–`WP-R1-04` 已经 `Done`。`WP-R1-05` 因缺少同一源码提交的真实 macOS arm64 结果而保持 `Blocked`；该平台证据依赖继续开放，但不阻止主链开始 R2。
+R0 与 R1 已经 `Done`。`WP-R1-05` 已在同一源码提交 `cd3a2fd66bca0fbd7e51c9eadef4dac1393484a2` 上取得 Windows x64 与 macOS arm64 的开发 package 证据并关闭 R1 Gate；签名、安装和公开发布仍由 R12 的独立门禁负责。
 
-当前唯一 `Ready` 的主链工作包是 [`WP-R2-01`](./BACKLOG.md#r2--首次真实保存)：建立可重启重开的 DATA commit、schema/迁移、事务和幂等摘要基础。领取前以 [Backlog 证据台账](./BACKLOG.md#6-证据台账) 的最新记录确认 `WP-R1-05` 阻塞范围及 `WP-R2-01` 的开放证据依赖；已完成的 R0–R1 步骤仍可查阅 [2026-08-21-courseflow-r0-r1-implementation.md](../superpowers/plans/2026-08-21-courseflow-r0-r1-implementation.md)，但不再把该计划当作当前领取点。
+`WP-R2-01` 已经 `Done`。当前唯一 `Ready` 的主链工作包是 [`WP-R2-02`](./BACKLOG.md#r2--首次真实保存)：首次 setup 可创建并选择当前学期，重启后保持稳定身份。领取前以 [Backlog 证据台账](./BACKLOG.md#6-证据台账) 的最新记录确认当前状态；已完成的 R0–R1 步骤仍可查阅 [2026-08-21-courseflow-r0-r1-implementation.md](../superpowers/plans/2026-08-21-courseflow-r0-r1-implementation.md)，但不再把该计划当作当前领取点。

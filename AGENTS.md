@@ -8,13 +8,13 @@
 
 ## 项目状态与规范来源
 
-CourseFlow 是面向大学生的跨平台、本地优先桌面应用。当前仓库已经完成产品、逻辑架构与初始 ADR 基线，并进入首个公开版本的实现阶段：R0 已完成，R1 的工具链、安全桌面壳、单一 Workspace utility process、稳定开发数据根与 SQLite 运行时探针已经落地；Windows x64 开发包烟测已有证据，`WP-R1-05` 仍等待同一源码提交的真实 macOS arm64 证据，主链下一工作包是 `WP-R2-01`。工作包的实时生命周期只以 `docs/roadmap/BACKLOG.md` 注册表和证据台账为准，不从本段推断。
+CourseFlow 是面向大学生的跨平台、本地优先桌面应用。当前仓库已经完成产品、逻辑架构与初始 ADR 基线，并进入首个公开版本的实现阶段：R0、R1 与 `WP-R2-01` 已完成；R1 的工具链、安全桌面壳、单一 Workspace utility process、稳定开发数据根与 SQLite 运行时探针已经在同一源码提交上取得 Windows x64 与 macOS arm64 开发包证据，R2 的首个正式持久化 DATA 基础也已经落地。主链下一工作包是 `WP-R2-02`。工作包的实时生命周期只以 `docs/roadmap/BACKLOG.md` 注册表和证据台账为准，不从本段推断。
 
 `ADR-01` 已确认 Electron + React + TypeScript，`ADR-02` 已确认 Main 监督单一 Workspace utility process 的部署方式，`ADR-03` 已确认活动数据存储、事务与并发控制，`ADR-04` 已确认 schema、迁移、兼容、Workspace DTO 与幂等摘要协议，`ADR-05` 已确认资料库根身份、路径/扫描、watcher hint、FileId 对账与可恢复文件操作，`ADR-06` 已确认受验证资源预览、数据面与系统打开边界，`ADR-07` 已确认不可变快照格式、完整性、发布和分备份集保留，`ADR-08` 已确认整库恢复的安全恢复集、同卷暂存、外部激活协调记录、确定性继续/回滚与成功边界，`ADR-09` 已确认生产环境不建设诊断、持久日志、崩溃收集、遥测或支持包，只保留当前 StructuredProblem 与正式正确性记录，`ADR-10` 已确认外部手动更新、双平台签名原生制品、稳定数据根、迁移安全副本、精确版本回退与发布门禁。初始跨切面 ADR 基线已经闭合；后续实现仍须引用适用 ADR，不得自行替换或扩张技术栈。
 
 ### 当前实现与运行时
 
-- 当前代码只是 R1 walking skeleton：Main/preload/Renderer/Workspace 进程边界、bootstrap Query、开发身份与数据根、单实例和内存 SQLite probe 已实现；正式持久化 DATA、schema/migration 与产品领域流程从 `WP-R2-01` 开始，不得把 probe 或开发根当作已经完成的活动数据层。
+- 当前代码在 R1 walking skeleton 之上完成了 `WP-R2-01`：Main/preload/Renderer/Workspace 进程边界、bootstrap Query、开发身份与数据根、单实例、SQLite 运行时探针，以及首个正式持久化 DATA、schema/migration、事务与幂等摘要基础已经实现；setup 与产品领域流程从 `WP-R2-02` 开始，不得把 probe 或开发根当作活动数据本身，也不得把 DATA 基础当作已经交付领域流程。
 - 精确 Node、pnpm、Electron、React、TypeScript 与 Vite 版本由 `package.json`、`pnpm-workspace.yaml` 和 `pnpm-lock.yaml` 拥有。使用仓库脚本 `pnpm test`、`pnpm typecheck`、`pnpm package` 和 `pnpm smoke:packaged`，不要从 `ATTEMPT.md`、全局安装或未锁定的 latest 版本推断运行时。
 - Codex Desktop 的初始 `PATH` 可能只有 bundled `pnpm`，没有 `node`/`npm`。此环境中先通过 workspace dependency runtime 定位 Node，并把其 `bin` 目录临时加入当前进程 `PATH`；不得为解决 PATH 问题改写 lockfile、安装全局运行时或把用户机器绝对路径写入仓库。
 
