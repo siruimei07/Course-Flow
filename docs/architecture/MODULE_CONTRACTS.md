@@ -1,9 +1,10 @@
 # CourseFlow 模块与接口契约
 
-> 状态：候选规范（设计已确认，待文档终审）
-> 版本：0.16
+> 状态：已批准实现基线
+> 版本：0.18
 > 日期：2026-08-21
 > 配套总览：[ARCHITECTURE.md](./ARCHITECTURE.md)
+> 首发运行时剖面：MVP-A、MVP-A-P、MVP-B；本文保留已批准的 MVP-C1 契约，C1 不进入首发构建。
 
 ## 1. 契约约定
 
@@ -36,7 +37,7 @@
 
 若产品要采用 UI 规格中的另一口径，必须先同步修改 PRD、MVP_SCOPE、User Flow 与 UI 规格，再扩展 PLAN 类型和测试，不得仅由实现增加隐藏兼容分支。
 
-`GAP-PRODUCT-01`：上游要求“即将到期/临近提示”，但没有定义阈值、边界等于时的归类或可配置范围。PLAN 已为 `near-due` 保留单一分类规则位置，Shell 不得自行设阈值；在该状态进入发布验收前，产品文档必须补充确定值与示例。该缺口不是 ADR 可决定的技术参数。
+`GAP-PRODUCT-01`（已解决）：产品语义所有者已在 [PRD.md §3.4“临近截止规则”](../product/PRD.md#临近截止规则) 中完成确定裁定（`WP-R0-01`）。PLAN 保持 `near-due` 的单一规则位置，Shell 不得自行定义或复制该规则；契约只引用 PRD，不重复其算法。
 
 ### 1.4 契约实现完成标准
 
@@ -1474,7 +1475,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `TEST-SHELL-001` | 每个空、unknown、unavailable、stale、problem 和 Operation state 有文字原因、dataEffect 与下一步 |
 | `TEST-SHELL-002` | 所有核心旅程可键盘完成；焦点不被顶栏/抽屉/Toast 遮挡；状态消息可感知；文件预览的页码/缩放/适合页面、失效/扫描件/动画暂停/失败提示和适用文本结构可由键盘与辅助技术使用 |
 | `TEST-SHELL-003` | not-committed/conflict/decision-required 保留输入；committed 后才更新正式状态；Undo Toast 语义正确 |
-| `TEST-SHELL-004` | 24 个正式页面/表面只使用 `IF-WORKSPACE` 五种能力及其 outcome，不绕过到领域/平台能力，也不包含独立领域公式 |
+| `TEST-SHELL-004` | 首发剖面的 19 个正式页面/表面只使用 `IF-WORKSPACE` 五种能力及其 outcome，不绕过到领域/平台能力，也不包含独立领域公式；完整已批准产品设计仍有 24 个表面，MVP-C1 不进入首发构建。 |
 | `TEST-SHELL-005` | MigrationSafetyCopy/rollback preview、结构化数据损失确认、planned/prepared/awaiting-target/wrong-build/completing/recovery 状态及 source cancel/target continue 具备准确文字、键盘、焦点与状态公告；不暴露路径/DataSlot/journal 或提供应用内下载 |
 | `TEST-WORKSPACE-001` | 每个复合 Envelope 使用单一 revision/EvaluationContext，跨页面结果一致 |
 | `TEST-WORKSPACE-002` | CommandId 幂等、entity conflict、preview token 过期、recoverability 声明和 UndoCapability 一次性 |
@@ -1597,9 +1598,11 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 ## 11. 完整追溯矩阵
 
-### 11.1 当前功能需求（75）
+### 11.1 已批准完整设计功能需求（75；首发 61）
 
 为保持密集矩阵可读，§11 的 TEST 列允许省略共同前缀：例如 `PLAN-001/007` 精确展开为 `TEST-PLAN-001` 与 `TEST-PLAN-007`。roadmap、backlog、测试报告和 Agent 工作包必须使用 §10 定义的完整 `TEST-*` ID。
+
+首发剖面追溯 MVP-A、MVP-A-P 与 MVP-B 的 61 条需求；`C-GRADE-001–014` 的 14 条需求保留在完整已批准设计中，作为 MVP-C1 的未来契约，不进入首发构建。
 
 | Requirement | MOD owner / coordinator | IF | FLOW | 关键 Q | TEST obligation |
 |---|---|---|---|---|---|
@@ -1640,9 +1643,9 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `C-GRADE-010–011` | GRADE | IF-GRADE-QUERY | 06 | PROVENANCE、STATE、DIAG | GRADE-006、FLOW-06 |
 | `C-GRADE-012–014` | GRADE | IF-GRADE-COMMAND/QUERY/EXPORT | 01、06 | CONSIST、PROVENANCE、EVOLVE | GRADE-003–007 |
 
-计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 + GRADE 14 = 75。C-TARGET-001–007 不计入当前功能覆盖，映射到 `EXT-C2`。
+完整已批准设计计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 + GRADE 14 = 75。首发计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 = 61；C1 的 GRADE 14 条不进入首发构建。C-TARGET-001–007 不计入完整设计或首发功能覆盖，映射到 `EXT-C2`。
 
-“已覆盖”表示架构边界、接口和证据位置存在，不伪称上游参数已经完整。`A-VIEW-004/005` 的 `near-due` 可由 PLAN 单点实现，但其数值验收在 `GAP-PRODUCT-01` 解决前保持未校准。
+“已覆盖”表示架构边界、接口和证据位置存在，不伪称上游参数已经完整。`A-VIEW-004/005` 的 `near-due` 由 PLAN 单点实现，并引用 PRD 的已裁定产品规则。
 
 ### 11.2 共享状态与 NFR（19）
 
@@ -1701,16 +1704,16 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `UF-A-09` 手动更新/迁移/精确版本回退 | WORKSPACE/DATA/PROTECT/LIBRARY/PLATFORM；FLOW-00/03/07 | RELEASE-001–005、DATA-007、PROTECT-007、WORKSPACE-007、SHELL-005、FLOW-07 |
 | `UF-A-P01` 出席 | ATTEND；FLOW-01/02/06 | ATTEND-001–004、FLOW-06 |
 
-### 11.5 UI 表面（24）
+### 11.5 UI 表面（首发 19 / 完整设计 24）
 
-所有 UI 表面由 `MOD-SHELL` 拥有，只通过 `IF-WORKSPACE`。下表指定主要 Query/Intent；详细布局仍以 UI 规格为准。
+所有 UI 表面由 `MOD-SHELL` 拥有，只通过 `IF-WORKSPACE`。首发剖面验收 19 个表面，即下表中除 `UI-GRADE-01` 至 `UI-GRADE-05` 外的表面；这五个表面与其 `MOD-GRADE` 契约保留为已批准的 MVP-C1 设计，不进入首发构建。下表指定主要 Query/Intent；详细布局仍以 UI 规格为准。
 
 | UI surface | 主要契约 |
 |---|---|
 | `UI-ENTRY-01` | Restore/MigrationRollbackBootState、WorkspaceStatus、InitializeWorkspace、SelectRestoreCandidate；maintenance/recovery 未收敛时只呈现 allowed actions |
 | `UI-SETUP-01` | SetupProjection、DraftCheckpoint、PLAN intents、RecordSetupDecision |
 | `UI-TODAY-01` | TodayProjection、TodayAttendanceOverlay、Task/Attendance intents |
-| `UI-COURSE-01`、`UI-COURSE-02` | CourseList/Detail、CourseAttendanceProjection、CourseGradeProjection、Course/Meeting intents |
+| `UI-COURSE-01`、`UI-COURSE-02` | 首发：CourseList/Detail、CourseAttendanceProjection、Course/Meeting intents；完整已批准 MVP-C1 设计才包含 CourseGradeProjection |
 | `UI-MEETING-01` | MeetingSeriesDetail、PlanImpactProjection、scope intents |
 | `UI-TASK-01`、`UI-TASK-02` | TaskList/Detail、Task state/progress/scope intents |
 | `UI-REPEAT-01` | TaskSeriesDetail、PlanImpactProjection、series intents |
@@ -1729,7 +1732,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `UI-DATA-03` | MigrationRollbackPreview/Status、ApplicationBuildStatus、confirm/continue-as-target/cancel-as-source 与 exact-build allowed actions |
 | `UI-TERM-01` | TermList/Detail、set/archive/restore current intents、PlanImpactProjection |
 
-计数按 UI 规格目录展开为 24 个正式页面/表面。抽屉、模态框和 Toast 是这些表面的交互形态，不建立新的领域模块或数据接口。
+首发为 19 个正式页面/表面；完整已批准产品设计按 UI 规格目录展开为 24 个正式页面/表面。抽屉、模态框和 Toast 是这些表面的交互形态，不建立新的领域模块或数据接口。
 
 ### 11.6 非当前范围与未来接缝
 
@@ -1825,12 +1828,12 @@ WorkPacket
 
 ### 12.4 文档终审清单
 
-- [ ] 75 条当前功能需求全部出现在 §11.1，C2/C3 未计入当前覆盖；
-- [ ] 7 条 STATE、12 条 NFR、13 条 DOD、10 条 User Flow 和 24 个 UI 表面全部可追溯；
+- [ ] 首发 61 条功能需求和完整已批准设计 75 条功能需求全部出现在 §11.1；C2/C3 未计入两者覆盖；
+- [ ] 7 条 STATE、12 条 NFR、13 条 DOD、10 条 User Flow、首发 19 个 UI 表面及完整设计 24 个 UI 表面全部可追溯；
 - [ ] 九个模块都包含 Purpose、Owns、Does not own、Interfaces、Invariants、Problems、Test seams、Trace；
 - [ ] 八条 FLOW 都定义 Trigger、步骤、成功边界和失败/降级语义；
 - [ ] 16 条 Q 均有 TEST evidence，G1–G8 均可判定；
 - [ ] 没有 UI、存储、进程或平台实现类型泄漏到领域接口；
 - [ ] 没有具体技术选型、ADR 结论、roadmap、backlog 或未来占位实现；
 - [ ] 上游差异已显式记录，未靠架构猜测同时支持互相冲突的产品语义。
-- [ ] `GAP-PRODUCT-01` 已由产品文档补值，或被明确标为阻止 A-VIEW-004/005 发布验收。
+- [ ] `GAP-PRODUCT-01` 已解决并引用 PRD 的唯一产品规则所有者；A-VIEW-004/005 不再由未校准参数阻止发布验收。

@@ -1,7 +1,7 @@
 # CourseFlow MVP-A User Flow 设计
 
-> 状态：已由用户逐段确认，待用户审阅书面规格
-> 版本：0.5
+> 状态：已批准实现基线
+> 版本：0.6
 > 日期：2026-08-21
 > 方法：Superpowers brainstorming + visual companion
 > 适用范围：macOS / Windows 本地优先桌面应用

@@ -124,4 +124,6 @@ Backlog 生命周期为 `Ready → In Progress → Verification → Done`，遇�
 
 ## 8. 当前执行点
 
-当前唯一 `Ready` 工作包是 `WP-R0-01`。其余 52 个工作包已经登记但尚未进入生命周期。执行顺序和逐步命令见 [2026-08-21-courseflow-r0-r1-implementation.md](../superpowers/plans/2026-08-21-courseflow-r0-r1-implementation.md)。
+R0 与 `WP-R1-01`–`WP-R1-04` 已经 `Done`。`WP-R1-05` 因缺少同一源码提交的真实 macOS arm64 结果而保持 `Blocked`；该平台证据依赖继续开放，但不阻止主链开始 R2。
+
+当前唯一 `Ready` 的主链工作包是 [`WP-R2-01`](./BACKLOG.md#r2--首次真实保存)：建立可重启重开的 DATA commit、schema/迁移、事务和幂等摘要基础。领取前以 [Backlog 证据台账](./BACKLOG.md#6-证据台账) 的最新记录确认 `WP-R1-05` 阻塞范围及 `WP-R2-01` 的开放证据依赖；已完成的 R0–R1 步骤仍可查阅 [2026-08-21-courseflow-r0-r1-implementation.md](../superpowers/plans/2026-08-21-courseflow-r0-r1-implementation.md)，但不再把该计划当作当前领取点。
