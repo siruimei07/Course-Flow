@@ -180,7 +180,8 @@ test('FLOW-00/A-TERM-003/TEST-PLAN-007: Workspace archives only after the TermZo
     await restarted.close();
 });
 
-test('A-TERM-003/Q-CONTINUITY-01: Workspace correction and explicit restore reuse the same Term identity', async (t) => {
+test('A-TERM-003/Q-CONTINUITY-01: Workspace correction and explicit restore reuse'
+    + ' the same Term identity', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const clock = new MutableClock('2026-12-19T05:00:00.000Z');
     const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, { clock });

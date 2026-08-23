@@ -105,7 +105,8 @@ test('A-COURSE-007/TEST-PLAN-001: Course inherits Term and Meeting inherits Cour
     await store.close();
 });
 
-test('A-COURSE-007/TEST-PLAN-002/Q-CONTINUITY-01: legal shorter ranges survive reopen with stable identity', async (t) => {
+test('A-COURSE-007/TEST-PLAN-002/Q-CONTINUITY-01: legal shorter ranges survive reopen'
+    + ' with stable identity', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     await createCurrentTerm(store);
