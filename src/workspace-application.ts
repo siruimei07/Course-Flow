@@ -1,8 +1,11 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+    CommittedCommandOutcomeUnknownError,
     initializeWorkspaceData,
     openWorkspaceDataWithMigrations,
+    type CommandReceiptOutcome,
+    type CommitOptions,
     type DataOpenResult,
     type OpenWorkspaceDataOptions,
     type SqliteDataStore,
@@ -16,6 +19,7 @@ import {
 } from './shared/bootstrap-contract';
 import {
     isWorkspaceSetupRequest,
+    type CreateCourseWithMeetingRequest,
     type CreateTermRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
@@ -23,7 +27,9 @@ import {
     type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
 
-export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions;
+export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
+    commitOptions?: CommitOptions;
+}>;
 
 type WorkspaceDataState = Readonly<{
     sqliteVersion: string;
@@ -92,11 +98,13 @@ export class WorkspaceApplication {
 
         if (!isWorkspaceSetupRequest(request, this.appBuildId, this.workspaceEpoch)) {
             const value = request as { appBuildId?: unknown; workspaceEpoch?: unknown } | null;
+            const requestKind = requestKindFrom(request);
             const code = value?.appBuildId !== undefined && value.appBuildId !== this.appBuildId
                 ? 'build-mismatch'
                 : value?.workspaceEpoch !== undefined && value.workspaceEpoch !== this.workspaceEpoch
                     ? 'stale-workspace'
-                    : requestKindFrom(request) === 'workspace.term.create'
+                    : (requestKind === 'workspace.term.create'
+                        || requestKind === 'workspace.course.create-with-first-meeting')
                         ? 'validation'
                         : 'invalid-request';
             return this.problem(code, 'Workspace 请求无效。', requestIdFrom(request));
@@ -109,6 +117,8 @@ export class WorkspaceApplication {
                 return this.querySetup(request.requestId);
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
+            case 'workspace.course.create-with-first-meeting':
+                return this.createCourseWithMeeting(request.requestId, request.command);
         }
     }
 
@@ -205,7 +215,7 @@ export class WorkspaceApplication {
         }
 
         try {
-            const committed = await this.dataState.store.commit(command);
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
             this.dataState = {
                 ...this.dataState,
                 status: this.dataState.store.status(),
@@ -218,45 +228,184 @@ export class WorkspaceApplication {
                         : 'workspace-unavailable';
                 return this.problem(code, '当前学期未保存，正式数据没有改变。', requestId);
             }
-            const effect = committed.value.effects[0];
-            if (effect.code !== 'plan.term-created-current' || effect.entity.kind !== 'term') {
-                return this.problem('recovery-required', '命令回执与学期事实不一致。', requestId);
-            }
-            const outcome: WorkspaceCommandResult = {
-                kind: 'committed',
-                revision: committed.value.revision,
-                effects: [{
-                    code: effect.code,
-                    entity: {
-                        kind: effect.entity.kind,
-                        id: effect.entity.id,
-                        version: effect.entity.version,
-                    },
-                }],
-                pendingFollowUps: [committed.value.pendingFollowUps[0]],
-            };
-            return {
-                ok: true,
-                value: {
-                    kind: 'workspace.command-outcome',
-                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-                    appBuildId: this.appBuildId,
-                    requestId,
-                    workspaceEpoch: this.workspaceEpoch,
-                    outcome,
-                },
-            };
+            return this.termCommandOutcome(requestId, committed.value);
         }
         catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.termCommandOutcome(requestId, receipt);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
             const code = error instanceof TypeError ? 'validation' : 'recovery-required';
             return this.problem(code, '当前学期未保存，正式数据没有改变。', requestId);
         }
+    }
+
+    private async createCourseWithMeeting(
+        requestId: string,
+        command: CreateCourseWithMeetingRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = {
+                ...this.dataState,
+                status: this.dataState.store.status(),
+            };
+            if (!committed.ok) {
+                const code = committed.problem.code === 'permission'
+                    ? 'permission'
+                    : committed.problem.code === 'conflict'
+                        ? 'conflict'
+                        : 'workspace-unavailable';
+                return this.problem(code, '课程与首个课节未保存，正式数据没有改变。', requestId);
+            }
+            return this.courseCommandOutcome(requestId, committed.value);
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.courseCommandOutcome(requestId, receipt);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '课程与首个课节未保存，正式数据没有改变。', requestId);
+        }
+    }
+
+    private async recoverCommittedReceipt(commandId: string): Promise<CommandReceiptOutcome | null> {
+        try {
+            const reopened = await openWorkspaceDataWithMigrations(this.dataSlotsRoot, this.options);
+            this.dataState = dataStateFrom(reopened);
+            return this.dataState.store?.receipt(commandId) ?? null;
+        }
+        catch {
+            return null;
+        }
+    }
+
+    private termCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== 'plan.term-created-current'
+            || effect.entity.kind !== 'term') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与学期事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: effect.code,
+                entity: {
+                    kind: effect.entity.kind,
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
+    }
+
+    private courseCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+    ): WorkspaceSetupOutcome {
+        const courseEffect = committed.effects[0];
+        const meetingEffect = committed.effects[1];
+        if (committed.effects.length !== 2
+            || courseEffect.code !== 'plan.course-created'
+            || courseEffect.entity.kind !== 'course'
+            || meetingEffect.code !== 'plan.meeting-series-created'
+            || meetingEffect.entity.kind !== 'meeting-series') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与课程事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [
+                {
+                    code: courseEffect.code,
+                    entity: {
+                        kind: 'course',
+                        id: courseEffect.entity.id,
+                        version: courseEffect.entity.version,
+                    },
+                },
+                {
+                    code: meetingEffect.code,
+                    entity: {
+                        kind: 'meeting-series',
+                        id: meetingEffect.entity.id,
+                        version: meetingEffect.entity.version,
+                    },
+                },
+            ],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
     }
 
     private problem(
         code: WorkspaceSetupProblemCode,
         message: string,
         requestId: string | null,
+        dataEffect: 'unchanged' | 'unknown' = 'unchanged',
     ): WorkspaceSetupOutcome {
         return {
             ok: false,
@@ -266,7 +415,7 @@ export class WorkspaceApplication {
                 requestId,
                 appBuildId: this.appBuildId,
                 workspaceEpoch: this.workspaceEpoch,
-                dataEffect: 'unchanged',
+                dataEffect,
             },
         };
     }

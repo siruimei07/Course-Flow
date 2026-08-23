@@ -1,4 +1,9 @@
 import {
+    isCourseProjection,
+    normalizeCreateCourseWithMeetingCommand,
+    type CreateCourseWithMeetingCommand,
+} from './workspace-course-contract';
+import {
     BOOTSTRAP_PROTOCOL_VERSION,
     type WorkspaceDataStatus,
 } from './bootstrap-contract';
@@ -34,22 +39,33 @@ export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
     command: CreateTermCommand;
 }>;
 
+export type CreateCourseWithMeetingRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.course.create-with-first-meeting';
+    command: CreateCourseWithMeetingCommand;
+}>;
+
 export type WorkspaceSetupRequest =
     | InitializeWorkspaceRequest
     | SetupQueryRequest
-    | CreateTermRequest;
+    | CreateTermRequest
+    | CreateCourseWithMeetingRequest;
+
+type WorkspaceCommandEffect = Readonly<{
+    code:
+        | 'plan.term-created-current'
+        | 'plan.course-created'
+        | 'plan.meeting-series-created';
+    entity: Readonly<{
+        kind: 'term' | 'course' | 'meeting-series';
+        id: string;
+        version: string;
+    }>;
+}>;
 
 export type WorkspaceCommandResult = Readonly<{
     kind: 'committed';
     revision: string;
-    effects: readonly [Readonly<{
-        code: 'plan.term-created-current';
-        entity: Readonly<{
-            kind: 'term';
-            id: string;
-            version: string;
-        }>;
-    }>];
+    effects: readonly [WorkspaceCommandEffect, ...WorkspaceCommandEffect[]];
     pendingFollowUps: readonly [string];
 }>;
 
@@ -69,7 +85,7 @@ export type WorkspaceSetupProblem = Readonly<{
     requestId: string | null;
     appBuildId: string;
     workspaceEpoch: string;
-    dataEffect: 'unchanged';
+    dataEffect: 'unchanged' | 'unknown';
 }>;
 
 export type WorkspaceSetupOutcome =
@@ -185,6 +201,22 @@ export function makeCreateTermRequest(
     };
 }
 
+export function makeCreateCourseWithMeetingRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CreateCourseWithMeetingCommand,
+): CreateCourseWithMeetingRequest {
+    return {
+        kind: 'workspace.course.create-with-first-meeting',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCreateCourseWithMeetingCommand(command),
+    };
+}
+
 export function isWorkspaceSetupRequest(
     value: unknown,
     expectedBuildId: string,
@@ -206,7 +238,8 @@ export function isWorkspaceSetupRequest(
             'workspaceEpoch',
         ]);
     }
-    if (value.kind !== 'workspace.term.create'
+    if ((value.kind !== 'workspace.term.create'
+            && value.kind !== 'workspace.course.create-with-first-meeting')
         || !hasExactDataKeys(value, [
             'kind',
             'protocolVersion',
@@ -219,7 +252,12 @@ export function isWorkspaceSetupRequest(
     }
 
     try {
-        normalizeCreateTermCommand(value.command);
+        if (value.kind === 'workspace.term.create') {
+            normalizeCreateTermCommand(value.command);
+        }
+        else {
+            normalizeCreateCourseWithMeetingCommand(value.command);
+        }
         return true;
     }
     catch {
@@ -250,12 +288,15 @@ function isSetupProjection(value: unknown): boolean {
         'planEntityVersion',
         'currentTerm',
         'terms',
+        'courses',
     ])
         && isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         && isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
         && (value.currentTerm === null || isTermProjection(value.currentTerm))
         && Array.isArray(value.terms)
-        && value.terms.every(isTermProjection);
+        && value.terms.every(isTermProjection)
+        && Array.isArray(value.courses)
+        && value.courses.every(isCourseProjection);
 }
 
 function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResult {
@@ -263,20 +304,28 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
         || value.kind !== 'committed'
         || !isCanonicalUnsignedSqliteInteger(value.revision)
         || !Array.isArray(value.effects)
-        || value.effects.length !== 1
+        || (value.effects.length !== 1 && value.effects.length !== 2)
         || !Array.isArray(value.pendingFollowUps)
         || value.pendingFollowUps.length !== 1
         || !isCanonicalUuid(value.pendingFollowUps[0])) {
         return false;
     }
 
-    const effect = value.effects[0];
-    return hasExactDataKeys(effect, ['code', 'entity'])
-        && effect.code === 'plan.term-created-current'
+    const isEffect = (
+        effect: unknown,
+        code: WorkspaceCommandEffect['code'],
+        entityKind: WorkspaceCommandEffect['entity']['kind'],
+    ): boolean => hasExactDataKeys(effect, ['code', 'entity'])
+        && effect.code === code
         && hasExactDataKeys(effect.entity, ['kind', 'id', 'version'])
-        && effect.entity.kind === 'term'
+        && effect.entity.kind === entityKind
         && isCanonicalUuid(effect.entity.id)
         && isCanonicalUnsignedSqliteInteger(effect.entity.version);
+    if (value.effects.length === 1) {
+        return isEffect(value.effects[0], 'plan.term-created-current', 'term');
+    }
+    return isEffect(value.effects[0], 'plan.course-created', 'course')
+        && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
 }
 
 export function isWorkspaceSetupOutcome(
@@ -315,7 +364,8 @@ export function isWorkspaceSetupOutcome(
             && problem.requestId === expectedRequestId
             && problem.appBuildId === expectedBuildId
             && problem.workspaceEpoch === expectedWorkspaceEpoch
-            && problem.dataEffect === 'unchanged';
+            && (problem.dataEffect === 'unchanged'
+                || (problem.code === 'recovery-required' && problem.dataEffect === 'unknown'));
     }
 
     if (value.ok !== true || !hasExactDataKeys(value, ['ok', 'value']) || !isPlainObject(value.value)) {

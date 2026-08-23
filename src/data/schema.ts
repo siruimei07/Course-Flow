@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 2;
+export const CURRENT_SCHEMA_LEVEL = 3;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -22,6 +22,9 @@ const followUpIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'follow_up_id');
 const originatingCommandIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'originating_command_id');
 const termIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'term_id');
 const currentTermIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_term_id');
+const courseIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'course_id');
+const meetingSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_series_id');
+const meetingSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_segment_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -154,6 +157,126 @@ const LEVEL_2_DDL = LEVEL_1_DDL
     )
     + LEVEL_2_PLAN_DDL;
 
+const LEVEL_3_RECEIPT_DDL = `
+    CREATE TABLE command_receipts (
+        command_id TEXT PRIMARY KEY CHECK (${commandIdCheck}),
+        intent_kind TEXT NOT NULL CHECK (
+            intent_kind IN (
+                'workspace.record-setup-decision',
+                'plan.create-term',
+                'plan.create-course-with-first-meeting'
+            )
+        ),
+        intent_schema_version INTEGER NOT NULL CHECK (intent_schema_version = 1),
+        canonical_encoding TEXT NOT NULL CHECK (canonical_encoding = 'courseflow-canonical-json-v1'),
+        digest_algorithm TEXT NOT NULL CHECK (digest_algorithm = 'sha256'),
+        payload_digest BLOB NOT NULL CHECK (length(payload_digest) = 32),
+        committed_revision INTEGER NOT NULL CHECK (committed_revision > 0),
+        result_kind TEXT NOT NULL CHECK (result_kind = 'committed')
+    ) STRICT;
+
+    CREATE TABLE receipt_effects (
+        command_id TEXT NOT NULL CHECK (${commandIdCheck}),
+        effect_order INTEGER NOT NULL CHECK (effect_order >= 0),
+        effect_code TEXT NOT NULL,
+        entity_kind TEXT NOT NULL,
+        entity_id TEXT NOT NULL CHECK (${effectEntityIdCheck}),
+        entity_version INTEGER NOT NULL CHECK (entity_version >= 0),
+        CHECK (
+            (effect_code = 'workspace.setup-decision-recorded' AND entity_kind = 'workspace-setup')
+            OR (effect_code = 'plan.term-created-current' AND entity_kind = 'term')
+            OR (effect_code = 'plan.course-created' AND entity_kind = 'course')
+            OR (effect_code = 'plan.meeting-series-created' AND entity_kind = 'meeting-series')
+        ),
+        PRIMARY KEY (command_id, effect_order),
+        FOREIGN KEY (command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_3_PLAN_DDL = `
+    CREATE TABLE courses (
+        course_id TEXT PRIMARY KEY CHECK (${courseIdCheck}),
+        term_id TEXT NOT NULL CHECK (${termIdCheck}),
+        code TEXT NOT NULL CHECK (length(code) BETWEEN 1 AND 32 AND code = trim(code)),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120 AND name = trim(name)),
+        section TEXT CHECK (section IS NULL OR (length(section) BETWEEN 1 AND 64 AND section = trim(section))),
+        instructor TEXT CHECK (
+            instructor IS NULL
+            OR (length(instructor) BETWEEN 1 AND 120 AND instructor = trim(instructor))
+        ),
+        color TEXT CHECK (
+            color IS NULL
+            OR color IN ('red', 'orange', 'yellow', 'green', 'blue', 'purple', 'gray')
+        ),
+        credits_coefficient INTEGER CHECK (credits_coefficient IS NULL OR credits_coefficient >= 0),
+        credits_scale INTEGER CHECK (credits_scale IS NULL OR credits_scale BETWEEN 0 AND 6),
+        teaching_range_kind TEXT NOT NULL CHECK (teaching_range_kind = 'inherit-term'),
+        archived INTEGER NOT NULL CHECK (archived IN (0, 1)),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        CHECK ((credits_coefficient IS NULL) = (credits_scale IS NULL)),
+        FOREIGN KEY (term_id) REFERENCES terms(term_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX courses_by_term ON courses(term_id);
+
+    CREATE TABLE meeting_series (
+        meeting_series_id TEXT PRIMARY KEY CHECK (${meetingSeriesIdCheck}),
+        course_id TEXT NOT NULL CHECK (${courseIdCheck}),
+        retired INTEGER NOT NULL CHECK (retired IN (0, 1)),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX meeting_series_by_course ON meeting_series(course_id);
+
+    CREATE TABLE meeting_segments (
+        meeting_segment_id TEXT PRIMARY KEY CHECK (${meetingSegmentIdCheck}),
+        meeting_series_id TEXT NOT NULL CHECK (${meetingSeriesIdCheck}),
+        meeting_type TEXT NOT NULL CHECK (meeting_type IN ('LEC', 'TUT', 'PRA')),
+        weekday TEXT NOT NULL CHECK (weekday IN ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')),
+        local_start TEXT NOT NULL CHECK (
+            length(local_start) = 5
+            AND substr(local_start, 3, 1) = ':'
+            AND local_start NOT GLOB '*[^0-9:]*'
+        ),
+        local_end TEXT NOT NULL CHECK (
+            length(local_end) = 5
+            AND substr(local_end, 3, 1) = ':'
+            AND local_end NOT GLOB '*[^0-9:]*'
+            AND local_end > local_start
+        ),
+        effective_start_date TEXT NOT NULL CHECK (
+            length(effective_start_date) = 10
+            AND substr(effective_start_date, 5, 1) = '-'
+            AND substr(effective_start_date, 8, 1) = '-'
+            AND effective_start_date NOT GLOB '*[^0-9-]*'
+        ),
+        effective_end_date TEXT NOT NULL CHECK (
+            length(effective_end_date) = 10
+            AND substr(effective_end_date, 5, 1) = '-'
+            AND substr(effective_end_date, 8, 1) = '-'
+            AND effective_end_date NOT GLOB '*[^0-9-]*'
+            AND effective_end_date >= effective_start_date
+        ),
+        location_kind TEXT NOT NULL CHECK (location_kind IN ('known', 'tba')),
+        location_value TEXT CHECK (
+            (location_kind = 'tba' AND location_value IS NULL)
+            OR (
+                location_kind = 'known'
+                AND length(location_value) BETWEEN 1 AND 240
+                AND location_value = trim(location_value)
+            )
+        ),
+        FOREIGN KEY (meeting_series_id)
+            REFERENCES meeting_series(meeting_series_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX meeting_segments_by_series ON meeting_segments(meeting_series_id);
+`;
+
+const LEVEL_3_DDL = LEVEL_2_DDL.replace(LEVEL_2_RECEIPT_DDL, LEVEL_3_RECEIPT_DDL)
+    + LEVEL_3_PLAN_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -212,6 +335,38 @@ const TABLE_COLUMNS = {
         ['current_term_id', 'TEXT', 0, 0],
         ['plan_entity_version', 'INTEGER', 1, 0],
     ],
+    courses: [
+        ['course_id', 'TEXT', 1, 1],
+        ['term_id', 'TEXT', 1, 0],
+        ['code', 'TEXT', 1, 0],
+        ['name', 'TEXT', 1, 0],
+        ['section', 'TEXT', 0, 0],
+        ['instructor', 'TEXT', 0, 0],
+        ['color', 'TEXT', 0, 0],
+        ['credits_coefficient', 'INTEGER', 0, 0],
+        ['credits_scale', 'INTEGER', 0, 0],
+        ['teaching_range_kind', 'TEXT', 1, 0],
+        ['archived', 'INTEGER', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
+    meeting_series: [
+        ['meeting_series_id', 'TEXT', 1, 1],
+        ['course_id', 'TEXT', 1, 0],
+        ['retired', 'INTEGER', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
+    meeting_segments: [
+        ['meeting_segment_id', 'TEXT', 1, 1],
+        ['meeting_series_id', 'TEXT', 1, 0],
+        ['meeting_type', 'TEXT', 1, 0],
+        ['weekday', 'TEXT', 1, 0],
+        ['local_start', 'TEXT', 1, 0],
+        ['local_end', 'TEXT', 1, 0],
+        ['effective_start_date', 'TEXT', 1, 0],
+        ['effective_end_date', 'TEXT', 1, 0],
+        ['location_kind', 'TEXT', 1, 0],
+        ['location_value', 'TEXT', 0, 0],
+    ],
 } as const;
 
 const FOREIGN_KEYS = {
@@ -226,6 +381,9 @@ const FOREIGN_KEYS = {
         ['current_term_id', 'terms', 'term_id'],
         ['singleton', 'workspace_state', 'singleton'],
     ],
+    courses: [['term_id', 'terms', 'term_id']],
+    meeting_series: [['course_id', 'courses', 'course_id']],
+    meeting_segments: [['meeting_series_id', 'meeting_series', 'meeting_series_id']],
 } as const;
 
 const LEVEL_1_TABLES = [
@@ -235,6 +393,12 @@ const LEVEL_1_TABLES = [
     'receipt_effects',
     'durable_followups',
     'protection_watermarks',
+] as const;
+
+const LEVEL_2_TABLES = [
+    ...LEVEL_1_TABLES,
+    'terms',
+    'plan_state',
 ] as const;
 
 type CurrentTable = keyof typeof TABLE_COLUMNS;
@@ -257,10 +421,14 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-function tableNames(level: 1 | 2): readonly CurrentTable[] {
-    return level === 1
-        ? LEVEL_1_TABLES
-        : Object.keys(TABLE_COLUMNS) as CurrentTable[];
+function tableNames(level: 1 | 2 | 3): readonly CurrentTable[] {
+    if (level === 1) {
+        return LEVEL_1_TABLES;
+    }
+    if (level === 2) {
+        return LEVEL_2_TABLES;
+    }
+    return Object.keys(TABLE_COLUMNS) as CurrentTable[];
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -280,8 +448,12 @@ function normalizeTableSql(sql: string): string {
         .toLowerCase();
 }
 
-function expectedTableSql(table: CurrentTable, level: 1 | 2): string {
-    const ddl = level === 1 ? LEVEL_1_DDL : LEVEL_2_DDL;
+function expectedTableSql(table: CurrentTable, level: 1 | 2 | 3): string {
+    const ddl = level === 1
+        ? LEVEL_1_DDL
+        : level === 2
+            ? LEVEL_2_DDL
+            : LEVEL_3_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -291,7 +463,7 @@ function expectedTableSql(table: CurrentTable, level: 1 | 2): string {
     return normalizeTableSql(statement);
 }
 
-function validateTables(database: DatabaseSync, level: 1 | 2): void {
+function validateTables(database: DatabaseSync, level: 1 | 2 | 3): void {
     const expectedNames = Array.from(tableNames(level)).sort();
     const rows = database.prepare('PRAGMA table_list').all() as Array<{
         name: string;
@@ -368,15 +540,20 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
         index.origin,
         index.partial,
     ]);
-    const expectedIndexes = table === 'durable_followups'
-        ? [['durable_followups_by_command', 0, 'c', 0]]
-        : [];
+    const indexByTable: Partial<Record<CurrentTable, readonly [string, string]>> = {
+        durable_followups: ['durable_followups_by_command', 'originating_command_id'],
+        courses: ['courses_by_term', 'term_id'],
+        meeting_series: ['meeting_series_by_course', 'course_id'],
+        meeting_segments: ['meeting_segments_by_series', 'meeting_series_id'],
+    };
+    const expectedIndex = indexByTable[table];
+    const expectedIndexes = expectedIndex ? [[expectedIndex[0], 0, 'c', 0]] : [];
     if (!equalRows(customIndexes, expectedIndexes)) {
         rejectSchema();
     }
 
-    if (table === 'durable_followups') {
-        const indexColumns = database.prepare('PRAGMA index_xinfo(durable_followups_by_command)').all() as Array<{
+    if (expectedIndex) {
+        const indexColumns = database.prepare(`PRAGMA index_xinfo(${expectedIndex[0]})`).all() as Array<{
             seqno: number;
             cid: number;
             name: string | null;
@@ -394,13 +571,13 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
                 column.coll,
                 column.key,
             ]);
-        if (!equalRows(keyColumns, [[0, 1, 'originating_command_id', 0, 'BINARY', 1]])) {
+        if (!equalRows(keyColumns, [[0, 1, expectedIndex[1], 0, 'BINARY', 1]])) {
             rejectSchema();
         }
     }
 }
 
-function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2): SchemaFacts {
+function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2 | 3): SchemaFacts {
     const workspace = database.prepare(
         'SELECT workspace_id, revision FROM workspace_state WHERE singleton = 1',
     );
@@ -457,7 +634,7 @@ function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2): SchemaFac
         rejectSchema();
     }
 
-    if (level === 2) {
+    if (level >= 2) {
         const plan = database.prepare(
             'SELECT current_term_id, plan_entity_version FROM plan_state WHERE singleton = 1',
         );
@@ -482,7 +659,7 @@ function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2): SchemaFac
     };
 }
 
-function validateSchema(database: DatabaseSync, level: 1 | 2): SchemaFacts {
+function validateSchema(database: DatabaseSync, level: 1 | 2 | 3): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
         rejectSchema();
@@ -555,8 +732,53 @@ export function migrateLevel1To2(database: DatabaseSync): void {
     `);
 }
 
+export function migrateLevel2To3(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_2;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_2;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_2;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_3_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_2;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_2;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_2;
+
+        DROP TABLE receipt_effects_level_2;
+        DROP TABLE durable_followups_level_2;
+        DROP TABLE command_receipts_level_2;
+
+        ${LEVEL_3_PLAN_DDL}
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 3;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
+}
+
+export function createSchemaLevel3(database: DatabaseSync): void {
+    database.exec(LEVEL_3_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -565,4 +787,8 @@ export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
 
 export function validateSchemaLevel2(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 2);
+}
+
+export function validateSchemaLevel3(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 3);
 }

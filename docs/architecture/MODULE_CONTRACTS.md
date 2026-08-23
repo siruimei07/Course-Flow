@@ -1030,12 +1030,14 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 |---|---|
 | Term | `CreateTerm`、`UpdateTerm`、`SetCurrentTerm`、`ArchiveTerm`、`RestoreTermAsCurrent` |
 | Holiday | `CreateHolidayRange`、`UpdateHolidayRange`、`DeleteHolidayRange` |
-| Course | `CreateCourse`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
+| Course | `CreateCourse`、`CreateCourseWithFirstMeeting`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
 | Meeting | `CreateMeetingSeries`、`UpdateMeetingSeries`、`ChangeMeetingOccurrence(scope=only-this|this-and-future)`、`CancelMeetingOccurrence`、`DeleteMeetingSeries` |
 | Task | `CreateTaskSeries`、`UpdateTaskSeries`、`ChangeTaskOccurrence(scope=only-this|this-and-future)`、`DeleteTaskOccurrenceOrSeries` |
 | Task state | `SetTaskOccurrenceStatus(pending|completed|skipped)`、`SetTaskProgress` |
 
 Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDetail`、`TaskList/TaskDetail/TaskSeriesDetail`、`TodayProjection`、`WeekProjection`、`CalendarWindowProjection`、`AgendaProjection`、`TbaProjection`、`PlanImpactProjection`。
+
+`CreateCourseWithFirstMeeting` 是 `WP-R2-03` 的原子 setup 变体：在已有 Current Term 中一次创建 Course 与首个 MeetingSeries；它不表示 Meeting 拥有 instructor override，也不扩展 occurrence、规则分段或多个 meeting 的生命周期语义。
 
 ### 6.3 ATTEND
 
@@ -1642,6 +1644,8 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `C-GRADE-008–009` | GRADE / PLAN refs | IF-GRADE-COMMAND/QUERY | 01、06 | STATE、PROVENANCE | GRADE-005/006 |
 | `C-GRADE-010–011` | GRADE | IF-GRADE-QUERY | 06 | PROVENANCE、STATE、DIAG | GRADE-006、FLOW-06 |
 | `C-GRADE-012–014` | GRADE | IF-GRADE-COMMAND/QUERY/EXPORT | 01、06 | CONSIST、PROVENANCE、EVOLVE | GRADE-003–007 |
+
+`WP-R2-03` 只关闭 `A-COURSE-001–004` 中“创建 Course 与首个周期 Meeting”的纵向切片；Course 编辑/归档、同一 Course 的多个 Meeting 及其后续生命周期仍由后续工作包验收，不因本切片 `Done` 而声称完整 Requirement 已关闭。
 
 完整已批准设计计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 + GRADE 14 = 75。首发计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 = 61；C1 的 GRADE 14 条不进入首发构建。C-TARGET-001–007 不计入完整设计或首发功能覆盖，映射到 `EXT-C2`。
 

@@ -585,9 +585,9 @@ test('preload exposes only the bounded CourseFlow setup capabilities on fixed IP
   assert.ok(exposedObject, 'courseFlow must expose an object literal, optionally frozen');
   assert.deepEqual(
     exposedObject.properties.map((property) => objectElementName(state, property)),
-    ['query', 'initialize', 'querySetup', 'createTerm'],
+    ['query', 'initialize', 'querySetup', 'createTerm', 'createCourseWithMeeting'],
   );
-  const expectedParameterCounts = [0, 0, 0, 1];
+  const expectedParameterCounts = [0, 0, 0, 1, 1];
   exposedObject.properties.forEach((property, index) => {
     const method = publicMethod(state, preload, property);
     assert.ok(method, 'each exposed setup capability must resolve to a function body');

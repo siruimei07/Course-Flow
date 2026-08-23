@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
+    createSchemaLevel2,
     migrateLevel0To1,
 } from '../../src/data/schema';
 import {
@@ -89,25 +90,28 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
     }
 }
 
-test('TEST-DATA-001/005: level 2 initializes the common and delivered Term schema and reopens', async (t) => {
+test('TEST-DATA-001/005: level 3 initializes the delivered Term, Course, and Meeting schema', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 2);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 3);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 2,
+        schemaLevel: 3,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 2,
+        userVersion: 3,
         tables: [
             'command_receipts',
+            'courses',
             'durable_followups',
+            'meeting_segments',
+            'meeting_series',
             'plan_state',
             'protection_watermarks',
             'receipt_effects',
@@ -126,7 +130,7 @@ test('TEST-DATA-001/005: level 2 initializes the common and delivered Term schem
     }
 });
 
-test('level 2 rejects representative constraint violations without changing bootstrap facts', (t) => {
+test('level 3 rejects representative constraint violations without changing bootstrap facts', (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const activeDatabase = join(dataSlotsRoot, 'active', 'workspace.sqlite');
@@ -153,7 +157,7 @@ test('level 2 rejects representative constraint violations without changing boot
     });
 });
 
-test('level 2 rejects a same-name index whose required properties drift', async (t) => {
+test('level 3 rejects a same-name index whose required properties drift', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     await store.close();
@@ -203,7 +207,7 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 2,
+            schemaLevel: 3,
             revision: '0',
         });
         await store.close();
@@ -333,8 +337,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 2,
-        revision: '1',
+        schemaLevel: 3,
+        revision: '2',
     });
     await opened.store.close();
 
@@ -373,7 +377,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '2');
+    assert.equal(opened.store.status().revision, '3');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -440,7 +444,218 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 2,
+        requiredSchemaLevel: 3,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
+});
+
+function createLevel2WorkspaceWithTerm(dataSlotsRoot: string): void {
+    const active = join(dataSlotsRoot, 'active');
+    mkdirSync(active);
+    const database = new DatabaseSync(join(active, 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+
+    try {
+        database.exec('BEGIN IMMEDIATE');
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel2(database);
+        database.prepare(
+            'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 1)',
+        ).run(WORKSPACE_ID);
+        database.exec(`
+            INSERT INTO setup_state (
+                singleton,
+                last_decision,
+                setup_decision_version,
+                ever_reached_minimum
+            ) VALUES (1, NULL, 0, 1);
+            INSERT INTO protection_watermarks (
+                singleton,
+                backup_needed_through,
+                backup_succeeded_through
+            ) VALUES (1, 1, 0);
+            INSERT INTO terms (
+                term_id,
+                name,
+                start_date,
+                end_date,
+                time_zone,
+                archived,
+                entity_version
+            ) VALUES (
+                '22222222-2222-4222-8222-222222222222',
+                'Fall 2026',
+                '2026-09-01',
+                '2026-12-20',
+                'America/Toronto',
+                0,
+                1
+            );
+            INSERT INTO plan_state (singleton, current_term_id, plan_entity_version)
+                VALUES (1, '22222222-2222-4222-8222-222222222222', 1);
+            INSERT INTO command_receipts (
+                command_id,
+                intent_kind,
+                intent_schema_version,
+                canonical_encoding,
+                digest_algorithm,
+                payload_digest,
+                committed_revision,
+                result_kind
+            ) VALUES (
+                'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+                'plan.create-term',
+                1,
+                'courseflow-canonical-json-v1',
+                'sha256',
+                zeroblob(32),
+                1,
+                'committed'
+            );
+            INSERT INTO receipt_effects (
+                command_id,
+                effect_order,
+                effect_code,
+                entity_kind,
+                entity_id,
+                entity_version
+            ) VALUES (
+                'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+                0,
+                'plan.term-created-current',
+                'term',
+                '22222222-2222-4222-8222-222222222222',
+                1
+            );
+            INSERT INTO durable_followups (
+                follow_up_id,
+                originating_command_id,
+                owner,
+                kind,
+                prerequisite_revision,
+                state,
+                follow_up_version
+            ) VALUES (
+                'ffffffff-ffff-4fff-8fff-ffffffffffff',
+                'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+                'protect',
+                'backup-needed-through',
+                1,
+                'pending',
+                0
+            );
+            PRAGMA user_version = 2;
+            COMMIT;
+        `);
+    }
+    finally {
+        database.close();
+    }
+}
+
+test('TEST-DATA-002/006: level 2 Term facts migrate to level 3 without identity loss', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel2WorkspaceWithTerm(dataSlotsRoot);
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected migrated ready workspace');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 3,
+        revision: '2',
+    });
+    assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
+        termId: '22222222-2222-4222-8222-222222222222',
+        name: 'Fall 2026',
+        startDate: '2026-09-01',
+        endDate: '2026-12-20',
+        timeZone: 'America/Toronto',
+        entityVersion: '1',
+    });
+    assert.deepEqual(opened.store.readSetupProjection().courses, []);
+    assert.deepEqual(opened.store.receipt('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'), {
+        kind: 'committed',
+        revision: '1',
+        effects: [{
+            code: 'plan.term-created-current',
+            entity: {
+                kind: 'term',
+                id: '22222222-2222-4222-8222-222222222222',
+                version: '1',
+            },
+        }],
+        pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
+    });
+    assert.equal(opened.store.readPendingFollowUps().length, 1);
+    assert.equal(opened.store.readProtectionWatermark(), '2');
+    await opened.store.close();
+
+    const safetyDirectories = readdirSync(dataSlotsRoot)
+        .filter((name) => name.startsWith('migration-safety-level-2-'));
+    assert.equal(safetyDirectories.length, 1);
+    const safetyDatabase = new DatabaseSync(
+        join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
+        { readOnly: true, readBigInts: true },
+    );
+    try {
+        assert.equal(
+            (safetyDatabase.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version,
+            2n,
+        );
+        assert.equal(
+            (safetyDatabase.prepare('SELECT count(*) AS count FROM terms').get() as { count: bigint }).count,
+            1n,
+        );
+    }
+    finally {
+        safetyDatabase.close();
+    }
+});
+
+test('TEST-DATA-006: interrupted level 2 migration leaves all Term facts at level 2', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel2WorkspaceWithTerm(dataSlotsRoot);
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.before-level-commit') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    assert.equal(opened.kind, 'recovery');
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        readOnly: true,
+        readBigInts: true,
+    });
+    try {
+        assert.equal(
+            (database.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version,
+            2n,
+        );
+        assert.equal(
+            (database.prepare('SELECT count(*) AS count FROM terms').get() as { count: bigint }).count,
+            1n,
+        );
+        assert.equal(
+            (database.prepare('SELECT count(*) AS count FROM command_receipts').get() as {
+                count: bigint;
+            }).count,
+            1n,
+        );
+    }
+    finally {
+        database.close();
+    }
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-2-')).length,
+        1,
+    );
 });

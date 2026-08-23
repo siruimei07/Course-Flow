@@ -1,4 +1,5 @@
 import type { CanonicalValue } from './canonical-json';
+import type { CourseProjection } from './workspace-course-contract';
 import {
     isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
@@ -18,6 +19,7 @@ export type SetupProjection = Readonly<{
     planEntityVersion: string;
     currentTerm: TermProjection | null;
     terms: readonly TermProjection[];
+    courses: readonly CourseProjection[];
 }>;
 
 export type CreateTermCommand = Readonly<{
@@ -69,7 +71,7 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
     });
 }
 
-function isCanonicalLocalDate(value: unknown): value is string {
+export function isCanonicalLocalDate(value: unknown): value is string {
     if (typeof value !== 'string') {
         return false;
     }

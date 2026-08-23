@@ -43,7 +43,8 @@ body::after {
 }
 
 button,
-input {
+input,
+select {
     font: inherit;
 }
 
@@ -148,6 +149,8 @@ dd {
 
 .progress-list {
     position: relative;
+    display: grid;
+    gap: 1.5rem;
     margin-top: 3rem;
     padding: 0;
     list-style: none;
@@ -156,7 +159,7 @@ dd {
 .progress-list::before {
     position: absolute;
     top: 2.45rem;
-    bottom: -7.5rem;
+    bottom: 1.8rem;
     left: 1.08rem;
     width: 1px;
     background: #cfdbf5;
@@ -176,11 +179,21 @@ dd {
     height: 2.2rem;
     place-items: center;
     border-radius: 50%;
-    color: #ffffff;
-    background: #2859d9;
+    color: #64738c;
+    background: #e3e9f4;
     font-size: 0.86rem;
     font-weight: 750;
+}
+
+.progress-list li[aria-current="step"] .progress-number {
+    color: #ffffff;
+    background: #2859d9;
     box-shadow: 0 0 0 5px #e6edff;
+}
+
+.progress-list li.is-complete .progress-number {
+    color: #12674e;
+    background: #d9f3e9;
 }
 
 .progress-list strong,
@@ -259,7 +272,8 @@ dd {
     font-weight: 700;
 }
 
-.field input {
+.field input,
+.field select {
     width: 100%;
     min-height: 3rem;
     padding: 0.7rem 0.85rem;
@@ -270,11 +284,13 @@ dd {
     transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
-.field input:hover {
+.field input:hover,
+.field select:hover {
     border-color: #9eabc0;
 }
 
-.field input:focus {
+.field input:focus,
+.field select:focus {
     border-color: #2859d9;
     outline: 0;
     box-shadow: 0 0 0 3px rgba(40, 89, 217, 0.14);
@@ -287,6 +303,72 @@ dd {
 .field small {
     color: #76839a;
     font-size: 0.74rem;
+}
+
+.setup-layout--course {
+    align-self: start;
+}
+
+.setup-form-panel--course {
+    align-content: start;
+    padding-block: 2.5rem;
+}
+
+.setup-form--course {
+    max-width: 44rem;
+}
+
+.form-section {
+    min-width: 0;
+    margin: 0;
+    padding: 1.15rem;
+    border: 1px solid #dfe5ef;
+    border-radius: 0.8rem;
+}
+
+.form-section > legend,
+.location-choice > legend {
+    padding: 0 0.35rem;
+    color: #172033;
+    font-size: 0.88rem;
+    font-weight: 750;
+}
+
+.form-section-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+}
+
+.location-choice {
+    display: grid;
+    grid-template-columns: max-content max-content 1fr;
+    gap: 0.8rem 1.25rem;
+    align-items: center;
+    min-width: 0;
+    margin: 0;
+    padding: 0.9rem;
+    border: 1px solid #e2e7ef;
+    border-radius: 0.65rem;
+}
+
+.radio-option {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
+    color: #39465b;
+    font-size: 0.82rem;
+    font-weight: 650;
+}
+
+.radio-option input {
+    width: 1rem;
+    min-height: 1rem;
+    margin: 0;
+}
+
+.location-input {
+    grid-column: 1 / -1;
 }
 
 .form-footer {
@@ -375,7 +457,7 @@ dd {
     box-shadow: 0 0 0 6px #e5ecff;
 }
 
-.current-term {
+.setup-complete {
     gap: 0.8rem;
 }
 
@@ -391,13 +473,13 @@ dd {
     font-weight: 800;
 }
 
-.current-term dl {
+.setup-complete dl {
     display: grid;
     gap: 0.75rem;
     margin-top: 0.6rem;
 }
 
-.current-term dl div {
+.setup-complete dl div {
     display: grid;
     grid-template-columns: 6rem 1fr;
     gap: 1rem;
@@ -405,20 +487,24 @@ dd {
     border-top: 1px solid #e4e9f1;
 }
 
-.current-term dt {
+.setup-complete dt {
     color: #6e7c92;
     font-size: 0.8rem;
 }
 
-.current-term dd {
+.setup-complete dd {
     min-width: 0;
     color: #25334b;
     font-size: 0.88rem;
 }
 
-.term-id {
+.stable-id {
     overflow-wrap: anywhere;
     font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+
+.complete-term {
+    color: #64738c;
 }
 
 .continuity-note {
@@ -472,6 +558,11 @@ dd {
 
 @media (max-width: 520px) {
     .setup-form {
+        grid-template-columns: 1fr;
+    }
+
+    .form-section-grid,
+    .location-choice {
         grid-template-columns: 1fr;
     }
 

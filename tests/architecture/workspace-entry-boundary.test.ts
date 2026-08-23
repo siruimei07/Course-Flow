@@ -128,6 +128,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         planEntityVersion: '0',
         currentTerm: null,
         terms: [],
+        courses: [],
       },
     },
   });
@@ -146,6 +147,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         planEntityVersion: '0',
         currentTerm: null,
         terms: [],
+        courses: [],
       },
     },
   });

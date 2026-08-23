@@ -46,7 +46,7 @@
 |---|---|---|---|---|---|---|
 | `WP-R2-01` | DATA commit、schema/迁移、事务和幂等摘要基础可持久化并在重启后重开 | `WP-R1-04` | `WP-R1-05` | `A-DATA-001` | `TEST-DATA-001`, `TEST-DATA-002`, `TEST-DATA-003`, `TEST-DATA-005` | `Done` |
 | `WP-R2-02` | 首次 setup 可创建并选择当前学期，重启后保持稳定身份 | `WP-R2-01` | — | `A-TERM-001`, `A-TERM-002` | — | `Done` |
-| `WP-R2-03` | 用户可创建课程和首个 meeting，并保留课程核心字段与 TBA 区分 | `WP-R2-02` | — | `A-COURSE-001`–`A-COURSE-004` | — | `Ready` |
+| `WP-R2-03` | 用户可创建课程和首个 meeting，并保留课程核心字段与 TBA 区分 | `WP-R2-02` | — | `A-COURSE-001`–`A-COURSE-004` 的创建/首个 meeting 切片 | `TEST-PLAN-001`, `TEST-PLAN-002`, `TEST-PLAN-007`, `TEST-DATA-001`–`TEST-DATA-006` | `In Progress` |
 | `WP-R2-04` | setup → 当前学期 → 课程 → meeting → 重启的 UI 纵向切片通过 | `WP-R2-03` | `WP-R1-05` | — | — | — |
 
 ### R3 — 可用课表
@@ -222,6 +222,8 @@
 | 2026-08-23 | `WP-R2-02` | `In Progress → Done` | clean implementation source `c14310457052ef1f27ab7a9bb0f32f6478b187e1`；Windows x64 package `out/CourseFlow Dev-win32-x64` | Windows 11 `10.0.26200` / build `26200` / x64；Node `v24.19.0`、pnpm `11.19.0`、Electron `v43.4.1`、SQLite `3.53.1`；targeted 52/52 PASS；`pnpm test` 101/101 PASS；`pnpm typecheck`、`git diff --check`、clean source `pnpm package` 均 PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:c14310457052ef1f27ab7a9bb0f32f6478b187e1 SQLite 3.53.1 verified-local` | level 2 仅交付 Term/Current Term：规范化名称/LocalDate/IANA zone、随机稳定 TermId、唯一 current、同一 ReadSnapshot、Revision/plan EntityVersion、canonical digest/receipt/follow-up/watermark 和 pre/post-COMMIT 收敛均有证据；level 1 receipt/follow-up 经已验证 safety copy 和独立事务迁移保留，迁移中断不重建/重置；read-only/recovery 拒绝写入。首次 setup UI 只经冻结 preload capability → Main → 单一 Workspace utility → DATA，DTO/Renderer 无数据库、路径、Node/Electron/platform 类型。未实现课程、meeting、完整 Today/导航、深色模式或后续模块；macOS 本轮未重新打包/烟测，不从既有平台证据推断本提交通过。dirty source 的首次 smoke 尝试按 clean build ID 门禁被预期拒绝，随后在上述 clean implementation source 重新 package/smoke 通过。 |
 | 2026-08-23 | `WP-R2-02` | `Done → Done` | clean implementation source `c14310457052ef1f27ab7a9bb0f32f6478b187e1` 的 Windows x64 packaged app；隔离的临时 `LOCALAPPDATA` | 真实可见窗口通过键盘/日期选择器填写名称 `2026 Fall`、`2026-09-08`、`2026-12-19`、`America/Toronto` 并执行“创建并继续”；完成面显示 canonical UUID `TermId`。关闭窗口、确认无 CourseFlow 窗口后，以同一隔离数据根重新启动；名称、日期、时区与同一个 `TermId` 逐字一致 | packaged Renderer → preload → Main → Workspace → DATA 的首次设置和进程重启持久化取得实际 Windows E2E 证据；没有触碰既有开发数据根。macOS packaged 交互 E2E 仍未在本提交上执行。 |
 | 2026-08-23 | `WP-R2-03` | `— → Ready` | `WP-R2-02` clean implementation source `c14310457052ef1f27ab7a9bb0f32f6478b187e1` | `WP-R2-02` registry/证据已为 `Done`；`WP-R2-03` 无额外证据依赖 | `WP-R2-03` 成为唯一 `Ready` 工作包；课程与 meeting 仍未实现。 |
+| 2026-08-23 | `WP-R2-03` | `Ready → In Progress` | 本工作包 | Course/首个 Meeting 的 contract、DATA、迁移、Workspace 与 setup UI 失败测试待写入和运行 | 开始当前学期下 Course 与首个 Meeting 的原子持久化纵向切片；不实现 occurrence、规则分段、冲突检测、假期 skip、Today/Calendar 或完整导航。 |
+| 2026-08-23 | `WP-R2-03` | `In Progress → In Progress` | TDD RED | `pnpm run clean:test` 后 `pnpm run test:compile` exit 2：缺少 `workspace-course-contract`，`SetupProjection.courses` 与 Course/Meeting 双 effect command 类型尚不存在；随后定向 `setup-ui.test` 为 1 pass / 1 fail，精确失败于缺少课程字段和 `createCourseWithMeeting` UI capability | RED 先固定 PLAN/DATA/schema/Workspace/IPC/UI 义务，再在共同语义所有者处实现；未用模拟数据或扩大到 occurrence/分段/冲突/假期。 |
 
 ## 7. 拆包与变更规则
 

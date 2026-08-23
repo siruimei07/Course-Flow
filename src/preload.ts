@@ -8,6 +8,7 @@ import {
 } from './shared/bootstrap-contract';
 import {
   isWorkspaceSetupOutcome,
+  makeCreateCourseWithMeetingRequest,
   makeCreateTermRequest,
   makeInitializeWorkspaceRequest,
   makeSetupQueryRequest,
@@ -16,6 +17,7 @@ import {
   type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
 import type { CreateTermCommand } from './shared/workspace-term-contract';
+import type { CreateCourseWithMeetingCommand } from './shared/workspace-course-contract';
 
 let workspaceEpoch: string | undefined;
 
@@ -98,6 +100,19 @@ function createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome> 
   ));
 }
 
+function createCourseWithMeeting(
+  command: CreateCourseWithMeetingCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateCourseWithMeetingRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
+  ));
+}
+
 contextBridge.exposeInMainWorld(
   'courseFlow',
   Object.freeze({
@@ -105,5 +120,6 @@ contextBridge.exposeInMainWorld(
     initialize: initializeWorkspace,
     querySetup,
     createTerm,
+    createCourseWithMeeting,
   }),
 );
