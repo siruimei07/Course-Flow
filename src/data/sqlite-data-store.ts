@@ -1,20 +1,27 @@
 import { existsSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
-import { DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
+import { backup, DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
 
 import {
     isCanonicalUuid,
     normalizeRecordSetupDecisionCommand,
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
-import { digestRecordSetupDecision } from './command-digest';
+import {
+    normalizeCreateTermCommand,
+    type CreateTermCommand,
+    type SetupProjection,
+} from '../shared/workspace-term-contract';
+import { digestCreateTerm, digestRecordSetupDecision } from './command-digest';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    migrateLevel0To1,
+    createSchemaLevel2,
+    migrateLevel1To2,
     SchemaValidationError,
     validateSchemaLevel1,
+    validateSchemaLevel2,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -40,7 +47,12 @@ export type InitializeWorkspaceDataOptions = Readonly<{
 
 export type OpenWorkspaceDataOptions = Readonly<{
     readOnly?: boolean;
+    migrationFailpoint?: (point: MigrationFailpoint) => void;
 }>;
+
+export type MigrationFailpoint =
+    | 'migration.after-safety-copy'
+    | 'migration.before-level-commit';
 
 export type DataOpenProblem =
     | Readonly<{
@@ -59,7 +71,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 1 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 2 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -92,13 +104,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 1;
+        schemaLevel: 2;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 1;
+        schemaLevel: 2;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -136,9 +148,9 @@ export type CommandReceiptOutcome = Readonly<{
     kind: 'committed';
     revision: string;
     effects: readonly [Readonly<{
-        code: 'workspace.setup-decision-recorded';
+        code: 'workspace.setup-decision-recorded' | 'plan.term-created-current';
         entity: Readonly<{
-            kind: 'workspace-setup';
+            kind: 'workspace-setup' | 'term';
             id: string;
             version: string;
         }>;
@@ -167,7 +179,7 @@ type ConflictProblem = Readonly<{
     context: Readonly<{
         revision: string;
         entityVersions: readonly [Readonly<{
-            kind: 'workspace-setup';
+            kind: 'workspace-setup' | 'plan-state';
             id: string;
             version: string;
         }>];
@@ -200,7 +212,7 @@ export type DataCommitResult =
     | Readonly<{ ok: false; problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem }>;
 
 type CommitWork = {
-    command: RecordSetupDecisionCommand;
+    command: RecordSetupDecisionCommand | CreateTermCommand;
     options: CommitOptions;
     resolve: (result: DataCommitResult) => void;
     reject: (error: unknown) => void;
@@ -209,6 +221,7 @@ type CommitWork = {
 type CurrentVersions = Readonly<{
     revision: bigint;
     setupVersion: bigint;
+    planVersion: bigint;
 }>;
 
 const COMMIT_QUEUE_CAPACITY = 64;
@@ -298,17 +311,19 @@ function freezePair<T, U>(value: [T, U]): readonly [T, U] {
 
 function committedOutcome(
     revision: bigint,
-    workspaceId: string,
-    setupVersion: bigint,
+    effectCode: 'workspace.setup-decision-recorded' | 'plan.term-created-current',
+    entityKind: 'workspace-setup' | 'term',
+    entityId: string,
+    entityVersion: bigint,
     followUpId: string,
 ): CommandReceiptOutcome {
     const entity = Object.freeze({
-        kind: 'workspace-setup' as const,
-        id: workspaceId,
-        version: setupVersion.toString(),
+        kind: entityKind,
+        id: entityId,
+        version: entityVersion.toString(),
     });
     const effect = Object.freeze({
-        code: 'workspace.setup-decision-recorded' as const,
+        code: effectCode,
         entity,
     });
     return Object.freeze({
@@ -332,6 +347,28 @@ function conflictResult(
         kind: 'workspace-setup' as const,
         id: workspaceId,
         version: versions.setupVersion.toString(),
+    });
+    const context = Object.freeze({
+        revision: versions.revision.toString(),
+        entityVersions: freezeTuple([entityVersion]),
+    });
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context,
+        details: Object.freeze({ reason }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+function planConflictResult(reason: ConflictReason, versions: CurrentVersions): DataCommitResult {
+    const entityVersion = Object.freeze({
+        kind: 'plan-state' as const,
+        id: 'singleton',
+        version: versions.planVersion.toString(),
     });
     const context = Object.freeze({
         revision: versions.revision.toString(),
@@ -509,8 +546,69 @@ class SqliteDataStoreImplementation {
         }
     }
 
+    public readSetupProjection(options: ReadSnapshotOptions = {}): SetupProjection {
+        this.requireOpen();
+        try {
+            this.database.exec('BEGIN');
+            const state = this.database.prepare(`
+                SELECT workspace_state.revision, plan_state.current_term_id, plan_state.plan_entity_version
+                FROM workspace_state
+                JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+                WHERE workspace_state.singleton = 1
+            `);
+            state.setReadBigInts(true);
+            const stateRow = state.get() as {
+                revision: bigint;
+                current_term_id: string | null;
+                plan_entity_version: bigint;
+            };
+            options.failpoint?.('read.after-revision');
+
+            const termsStatement = this.database.prepare(`
+                SELECT term_id, name, start_date, end_date, time_zone, entity_version
+                FROM terms
+                ORDER BY start_date, term_id
+            `);
+            termsStatement.setReadBigInts(true);
+            const termRows = termsStatement.all() as Array<{
+                term_id: string;
+                name: string;
+                start_date: string;
+                end_date: string;
+                time_zone: string;
+                entity_version: bigint;
+            }>;
+            const terms = Object.freeze(termRows.map((row) => Object.freeze({
+                termId: row.term_id,
+                name: row.name,
+                startDate: row.start_date,
+                endDate: row.end_date,
+                timeZone: row.time_zone,
+                entityVersion: row.entity_version.toString(),
+            })));
+            const currentTerm = stateRow.current_term_id === null
+                ? null
+                : terms.find((term) => term.termId === stateRow.current_term_id) ?? null;
+            if (stateRow.current_term_id !== null && currentTerm === null) {
+                throw new Error('Current Term is missing');
+            }
+            this.database.exec('COMMIT');
+
+            return Object.freeze({
+                workspaceRevision: stateRow.revision.toString(),
+                planEntityVersion: stateRow.plan_entity_version.toString(),
+                currentTerm,
+                terms,
+            });
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
     public commit(
-        candidate: RecordSetupDecisionCommand,
+        candidate: RecordSetupDecisionCommand | CreateTermCommand,
         options: CommitOptions = {},
     ): Promise<DataCommitResult> {
         if (this.terminalError) {
@@ -524,7 +622,9 @@ class SqliteDataStoreImplementation {
                 return Promise.reject(error);
             }
         }
-        const command = normalizeRecordSetupDecisionCommand(candidate);
+        const command = candidate.intent.kind === 'plan.create-term'
+            ? normalizeCreateTermCommand(candidate)
+            : normalizeRecordSetupDecisionCommand(candidate);
         if (!this.accepting) {
             return Promise.reject(new Error('Workspace data store is closing'));
         }
@@ -625,19 +725,23 @@ class SqliteDataStoreImplementation {
         const statement = this.database.prepare(`
             SELECT
                 workspace_state.revision,
-                setup_state.setup_decision_version
+                setup_state.setup_decision_version,
+                plan_state.plan_entity_version
             FROM workspace_state
             JOIN setup_state ON setup_state.singleton = workspace_state.singleton
+            JOIN plan_state ON plan_state.singleton = workspace_state.singleton
             WHERE workspace_state.singleton = 1
         `);
         statement.setReadBigInts(true);
         const row = statement.get() as {
             revision: bigint;
             setup_decision_version: bigint;
+            plan_entity_version: bigint;
         };
         return {
             revision: row.revision,
             setupVersion: row.setup_decision_version,
+            planVersion: row.plan_entity_version,
         };
     }
 
@@ -654,12 +758,14 @@ class SqliteDataStoreImplementation {
         }
 
         const effect = this.database.prepare(`
-            SELECT entity_id, entity_version
+            SELECT effect_code, entity_kind, entity_id, entity_version
             FROM receipt_effects
             WHERE command_id = ? AND effect_order = 0
         `);
         effect.setReadBigInts(true);
         const effectRow = effect.get(commandId) as {
+            effect_code: 'workspace.setup-decision-recorded' | 'plan.term-created-current';
+            entity_kind: 'workspace-setup' | 'term';
             entity_id: string;
             entity_version: bigint;
         };
@@ -671,6 +777,8 @@ class SqliteDataStoreImplementation {
         `).get(commandId) as { follow_up_id: string };
         return committedOutcome(
             receiptRow.committed_revision,
+            effectRow.effect_code,
+            effectRow.entity_kind,
             effectRow.entity_id,
             effectRow.entity_version,
             followUp.follow_up_id,
@@ -678,6 +786,15 @@ class SqliteDataStoreImplementation {
     }
 
     private commitSynchronously(
+        command: RecordSetupDecisionCommand | CreateTermCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        return 'expectedPlanVersion' in command
+            ? this.commitTermSynchronously(command, options)
+            : this.commitSetupSynchronously(command, options);
+    }
+
+    private commitSetupSynchronously(
         command: RecordSetupDecisionCommand,
         options: CommitOptions,
     ): DataCommitResult {
@@ -803,6 +920,165 @@ class SqliteDataStoreImplementation {
             }
             return successfulCommit(outcome);
         } catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState();
+            }
+            this.rollbackOrRequireReopen();
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
+    private commitTermSynchronously(
+        command: CreateTermCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = digestCreateTerm(command);
+        const termId = randomUUID();
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            if (versions.revision === SQLITE_INTEGER_MAX || versions.planVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const payload = command.intent.payload;
+            this.database.prepare(`
+                INSERT INTO terms (
+                    term_id,
+                    name,
+                    start_date,
+                    end_date,
+                    time_zone,
+                    archived,
+                    entity_version
+                ) VALUES (?, ?, ?, ?, ?, 0, 1)
+            `).run(termId, payload.name, payload.startDate, payload.endDate, payload.timeZone);
+            this.database.prepare(`
+                UPDATE plan_state
+                SET current_term_id = ?, plan_entity_version = ?
+                WHERE singleton = 1
+            `).run(termId, newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, 'plan.create-term', 1,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, 'plan.term-created-current', 'term', ?, 1)
+            `).run(command.commandId, termId);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
             if (this.terminalError) {
                 throw this.terminalError;
             }
@@ -1022,7 +1298,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        migrateLevel0To1(stagingDatabase);
+        createSchemaLevel2(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -1039,6 +1315,11 @@ export function initializeWorkspaceData(
                 backup_needed_through,
                 backup_succeeded_through
             ) VALUES (1, 0, 0);
+            INSERT INTO plan_state (
+                singleton,
+                current_term_id,
+                plan_entity_version
+            ) VALUES (1, NULL, 0);
         `);
         throwFailpoint(options.failpoint, 'initialize.after-bootstrap');
         stagingDatabase.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_LEVEL}`);
@@ -1049,7 +1330,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel1(validationDatabase);
+            validateSchemaLevel2(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -1058,7 +1339,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel1(activeDatabase);
+        const facts = validateSchemaLevel2(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -1131,7 +1412,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel1(validationDatabase);
+        const facts = validateSchemaLevel2(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -1181,7 +1462,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel1(activeDatabase);
+        const facts = validateSchemaLevel2(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -1198,4 +1479,95 @@ export function openWorkspaceData(
         closeBestEffort(validationDatabase);
         return recoveryResult(validationProblem(error));
     }
+}
+
+export async function openWorkspaceDataWithMigrations(
+    dataSlotsRoot: string,
+    options: OpenWorkspaceDataOptions = {},
+): Promise<DataOpenResult> {
+    const opened = openWorkspaceData(dataSlotsRoot, options);
+    if (opened.kind !== 'recovery'
+        || opened.problem.code !== 'integrity'
+        || opened.problem.details.reason !== 'schema-mismatch') {
+        return opened;
+    }
+
+    const path = databasePath(dataSlotsRoot);
+    let source: DatabaseSync | undefined;
+    try {
+        source = openDatabase(path, true);
+        const identity = readDatabaseIdentity(source);
+        if (identity.applicationId !== COURSEFLOW_APPLICATION_ID || identity.schemaLevel !== 1) {
+            closeBestEffort(source);
+            return opened;
+        }
+        if (options.readOnly) {
+            closeBestEffort(source);
+            return recoveryResult(incompatibleVersionProblem(identity.schemaLevel));
+        }
+
+        validateSchemaLevel1(source);
+        const safetyDirectory = join(
+            dataSlotsRoot,
+            `migration-safety-level-1-${randomUUID()}`,
+        );
+        mkdirSync(safetyDirectory);
+        const safetyPath = join(safetyDirectory, DATABASE_FILE_NAME);
+        await backup(source, safetyPath);
+        const safetyDatabase = openDatabase(safetyPath, true);
+        try {
+            validateSchemaLevel1(safetyDatabase);
+        }
+        finally {
+            safetyDatabase.close();
+        }
+        options.migrationFailpoint?.('migration.after-safety-copy');
+        source.close();
+        source = undefined;
+
+        const maintenance = openDatabase(path, false);
+        try {
+            maintenance.exec('PRAGMA foreign_keys = OFF');
+            const foreignKeys = maintenance.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number };
+            if (foreignKeys.foreign_keys !== 0) {
+                throw new Error('Migration could not disable foreign keys');
+            }
+
+            maintenance.exec('BEGIN IMMEDIATE');
+            try {
+                validateSchemaLevel1(maintenance);
+                migrateLevel1To2(maintenance);
+                if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
+                    throw new SchemaValidationError('database-corrupt');
+                }
+                validateSchemaLevel2(maintenance);
+                options.migrationFailpoint?.('migration.before-level-commit');
+                maintenance.exec('COMMIT');
+            }
+            catch (error) {
+                if (maintenance.isTransaction) {
+                    maintenance.exec('ROLLBACK');
+                }
+                throw error;
+            }
+
+            maintenance.exec('PRAGMA foreign_keys = ON');
+            const enabledForeignKeys = maintenance.prepare('PRAGMA foreign_keys').get() as {
+                foreign_keys: number;
+            };
+            if (enabledForeignKeys.foreign_keys !== 1) {
+                throw new Error('Migration could not restore foreign keys');
+            }
+            validateSchemaLevel2(maintenance);
+        }
+        finally {
+            closeBestEffort(maintenance);
+        }
+    }
+    catch (error) {
+        closeBestEffort(source);
+        return recoveryResult(validationProblem(error));
+    }
+
+    return openWorkspaceData(dataSlotsRoot);
 }

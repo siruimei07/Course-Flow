@@ -5,6 +5,11 @@ import {
   type BootstrapRequest,
   type WorkspaceProbeRequest,
 } from '../shared/bootstrap-contract';
+import {
+  isWorkspaceSetupOutcome,
+  type WorkspaceSetupOutcome,
+  type WorkspaceSetupRequest,
+} from '../shared/workspace-setup-contract';
 
 const responseTimeoutMilliseconds = 5_000;
 const gracefulShutdownTimeoutMilliseconds = 5_000;
@@ -12,7 +17,9 @@ const unavailableMessage = 'Workspace is unavailable. Please try again.';
 const lifecycleCloseRequest = Object.freeze({ kind: 'workspace.lifecycle.close' as const });
 
 type PendingQuery = {
-  resolve: (outcome: BootstrapOutcome) => void;
+  kind: 'bootstrap' | 'setup';
+  workspaceEpoch?: string;
+  resolve: (outcome: BootstrapOutcome | WorkspaceSetupOutcome) => void;
   timeout: ReturnType<typeof setTimeout>;
 };
 
@@ -51,12 +58,47 @@ export class WorkspaceSupervisor {
 
     return new Promise((resolve) => {
       const timeout = setTimeout(() => this.settle(request.requestId, this.unavailableOutcome(request.requestId)), responseTimeoutMilliseconds);
-      this.pending.set(request.requestId, { resolve, timeout });
+      this.pending.set(request.requestId, {
+        kind: 'bootstrap',
+        resolve: (outcome) => resolve(outcome as BootstrapOutcome),
+        timeout,
+      });
 
       try {
         this.child.postMessage({ ...request, dataRootClass } satisfies WorkspaceProbeRequest);
       } catch {
         this.settle(request.requestId, this.unavailableOutcome(request.requestId));
+      }
+    });
+  }
+
+  request(request: WorkspaceSetupRequest): Promise<WorkspaceSetupOutcome> {
+    if (this.unavailable) {
+      return Promise.resolve(this.unavailableSetupOutcome(request.requestId, request.workspaceEpoch));
+    }
+
+    return new Promise((resolve) => {
+      const timeout = setTimeout(
+        () => this.settle(
+          request.requestId,
+          this.unavailableSetupOutcome(request.requestId, request.workspaceEpoch),
+        ),
+        responseTimeoutMilliseconds,
+      );
+      this.pending.set(request.requestId, {
+        kind: 'setup',
+        workspaceEpoch: request.workspaceEpoch,
+        resolve: (outcome) => resolve(outcome as WorkspaceSetupOutcome),
+        timeout,
+      });
+
+      try {
+        this.child.postMessage(request);
+      } catch {
+        this.settle(
+          request.requestId,
+          this.unavailableSetupOutcome(request.requestId, request.workspaceEpoch),
+        );
       }
     });
   }
@@ -109,12 +151,24 @@ export class WorkspaceSupervisor {
       return;
     }
 
-    if (isBootstrapOutcome(message, this.appBuildId, requestId)) {
+    const pending = this.pending.get(requestId);
+    if (pending?.kind === 'bootstrap' && isBootstrapOutcome(message, this.appBuildId, requestId)) {
+      this.settle(requestId, message);
+      return;
+    }
+    if (
+      pending?.kind === 'setup'
+      && pending.workspaceEpoch
+      && isWorkspaceSetupOutcome(message, this.appBuildId, requestId, pending.workspaceEpoch)
+    ) {
       this.settle(requestId, message);
       return;
     }
 
-    this.settle(requestId, this.unavailableOutcome(requestId));
+    const unavailable = pending?.kind === 'setup' && pending.workspaceEpoch
+      ? this.unavailableSetupOutcome(requestId, pending.workspaceEpoch)
+      : this.unavailableOutcome(requestId);
+    this.settle(requestId, unavailable);
   };
 
   private readonly handleExit = (): void => {
@@ -157,7 +211,21 @@ export class WorkspaceSupervisor {
     return makeBootstrapProblem('workspace-unavailable', unavailableMessage, this.appBuildId, requestId);
   }
 
-  private settle(requestId: string, outcome: BootstrapOutcome): void {
+  private unavailableSetupOutcome(requestId: string, workspaceEpoch: string): WorkspaceSetupOutcome {
+    return {
+      ok: false,
+      problem: {
+        code: 'workspace-unavailable',
+        message: unavailableMessage,
+        requestId,
+        appBuildId: this.appBuildId,
+        workspaceEpoch,
+        dataEffect: 'unchanged',
+      },
+    };
+  }
+
+  private settle(requestId: string, outcome: BootstrapOutcome | WorkspaceSetupOutcome): void {
     const pending = this.pending.get(requestId);
     if (!pending) {
       return;
@@ -171,7 +239,11 @@ export class WorkspaceSupervisor {
   private settleAll(): void {
     for (const [requestId, pending] of this.pending) {
       clearTimeout(pending.timeout);
-      pending.resolve(this.unavailableOutcome(requestId));
+      pending.resolve(
+        pending.kind === 'setup' && pending.workspaceEpoch
+          ? this.unavailableSetupOutcome(requestId, pending.workspaceEpoch)
+          : this.unavailableOutcome(requestId),
+      );
     }
     this.pending.clear();
   }

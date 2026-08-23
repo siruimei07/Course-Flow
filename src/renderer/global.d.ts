@@ -1,9 +1,14 @@
 import type { BootstrapOutcome } from '../shared/bootstrap-contract';
+import type { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
+import type { CreateTermCommand } from '../shared/workspace-term-contract';
 
 declare global {
   interface Window {
     courseFlow: Readonly<{
       query(): Promise<BootstrapOutcome>;
+      initialize(): Promise<WorkspaceSetupOutcome>;
+      querySetup(): Promise<WorkspaceSetupOutcome>;
+      createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
     }>;
   }
 }

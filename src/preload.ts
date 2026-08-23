@@ -6,21 +6,37 @@ import {
   WORKSPACE_QUERY_CHANNEL,
   type BootstrapOutcome,
 } from './shared/bootstrap-contract';
+import {
+  isWorkspaceSetupOutcome,
+  makeCreateTermRequest,
+  makeInitializeWorkspaceRequest,
+  makeSetupQueryRequest,
+  WORKSPACE_SETUP_CHANNEL,
+  type WorkspaceSetupOutcome,
+  type WorkspaceSetupRequest,
+} from './shared/workspace-setup-contract';
+import type { CreateTermCommand } from './shared/workspace-term-contract';
+
+let workspaceEpoch: string | undefined;
 
 async function queryWorkspaceStatus(): Promise<BootstrapOutcome> {
   const request = makeBootstrapRequest(globalThis.crypto.randomUUID(), __COURSEFLOW_APP_BUILD_ID__);
 
   try {
     const outcome = await ipcRenderer.invoke(WORKSPACE_QUERY_CHANNEL, request);
-    return isBootstrapOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, request.requestId)
-      ? outcome
-      : makeBootstrapProblem(
+    if (isBootstrapOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, request.requestId)) {
+      workspaceEpoch = outcome.ok ? outcome.value.workspaceEpoch : undefined;
+      return outcome;
+    }
+    workspaceEpoch = undefined;
+    return makeBootstrapProblem(
           'workspace-unavailable',
           'Workspace is unavailable. Please try again.',
           __COURSEFLOW_APP_BUILD_ID__,
           request.requestId,
         );
   } catch {
+    workspaceEpoch = undefined;
     return makeBootstrapProblem(
       'workspace-unavailable',
       'Workspace is unavailable. Please try again.',
@@ -30,9 +46,64 @@ async function queryWorkspaceStatus(): Promise<BootstrapOutcome> {
   }
 }
 
+async function invokeSetup(
+  makeRequest: (requestId: string, workspaceEpoch: string) => WorkspaceSetupRequest,
+): Promise<WorkspaceSetupOutcome> {
+  const requestId = globalThis.crypto.randomUUID();
+  const epoch = workspaceEpoch ?? '';
+  if (!workspaceEpoch) {
+    return unavailableSetupOutcome(requestId, epoch);
+  }
+
+  try {
+    const request = makeRequest(requestId, workspaceEpoch);
+    const outcome = await ipcRenderer.invoke(WORKSPACE_SETUP_CHANNEL, request);
+    return isWorkspaceSetupOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, requestId, workspaceEpoch)
+      ? outcome
+      : unavailableSetupOutcome(requestId, workspaceEpoch);
+  } catch {
+    return unavailableSetupOutcome(requestId, workspaceEpoch);
+  }
+}
+
+function unavailableSetupOutcome(requestId: string, epoch: string): WorkspaceSetupOutcome {
+  return {
+    ok: false,
+    problem: {
+      code: 'workspace-unavailable',
+      message: 'Workspace is unavailable. Please try again.',
+      requestId,
+      appBuildId: __COURSEFLOW_APP_BUILD_ID__,
+      workspaceEpoch: epoch,
+      dataEffect: 'unchanged',
+    },
+  };
+}
+
+function initializeWorkspace(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeInitializeWorkspaceRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+function querySetup(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeSetupQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+function createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateTermRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 contextBridge.exposeInMainWorld(
   'courseFlow',
   Object.freeze({
     query: queryWorkspaceStatus,
+    initialize: initializeWorkspace,
+    querySetup,
+    createTerm,
   }),
 );

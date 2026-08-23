@@ -542,7 +542,7 @@ test('Main awaits graceful Workspace shutdown for smoke exit and ordinary quit',
   );
 });
 
-test('preload exposes only the zero-argument courseFlow.query capability on a fixed IPC channel', async () => {
+test('preload exposes only the bounded CourseFlow setup capabilities on fixed IPC channels', async () => {
   const state = await compilerState();
   const preload = sourceFor(state, preloadPath);
   const exposeCalls: TypeScriptAst.CallExpression[] = [];
@@ -583,18 +583,21 @@ test('preload exposes only the zero-argument courseFlow.query capability on a fi
   assert.equal(stringLiteralText(state, exposeCall.arguments[0]), 'courseFlow');
   const exposedObject = publicObject(state, exposeCall.arguments[1]);
   assert.ok(exposedObject, 'courseFlow must expose an object literal, optionally frozen');
-  assert.deepEqual(exposedObject.properties.map((property) => objectElementName(state, property)), ['query']);
-
-  const queryProperty = exposedObject.properties[0];
-  assert.ok(queryProperty);
-  const query = publicMethod(state, preload, queryProperty);
-  assert.ok(query, 'courseFlow.query must resolve to a function body');
-  assert.equal(query.parameters.length, 0);
-  assert.ok(query.body, 'courseFlow.query must have an implementation body');
+  assert.deepEqual(
+    exposedObject.properties.map((property) => objectElementName(state, property)),
+    ['query', 'initialize', 'querySetup', 'createTerm'],
+  );
+  const expectedParameterCounts = [0, 0, 0, 1];
+  exposedObject.properties.forEach((property, index) => {
+    const method = publicMethod(state, preload, property);
+    assert.ok(method, 'each exposed setup capability must resolve to a function body');
+    assert.equal(method.parameters.length, expectedParameterCounts[index]);
+    assert.ok(method.body);
+  });
 
   const queryInvokes: TypeScriptAst.CallExpression[] = [];
   const allowedIpcReferences = new Set<TypeScriptAst.Node>();
-  visitExecutedBody(state, query.body, (node) => {
+  visit(preload, (node) => {
     if (
       state.is.isCallExpression(node) &&
       state.is.isPropertyAccessExpression(node.expression) &&
@@ -609,11 +612,16 @@ test('preload exposes only the zero-argument courseFlow.query capability on a fi
 
   assert.equal(
     queryInvokes.length,
-    1,
-    'the exposed courseFlow.query implementation must invoke Workspace IPC exactly once',
+    2,
+    'preload must use exactly one bootstrap invoke and one bounded setup invoke',
   );
-  const channel = queryInvokes[0]?.arguments[0];
-  assert.equal(state.is.isIdentifier(channel) && channel.text === 'WORKSPACE_QUERY_CHANNEL', true);
+  assert.deepEqual(
+    queryInvokes.map((invoke) => {
+      const channel = invoke.arguments[0];
+      return state.is.isIdentifier(channel) ? channel.text : undefined;
+    }).sort(),
+    ['WORKSPACE_QUERY_CHANNEL', 'WORKSPACE_SETUP_CHANNEL'],
+  );
 
   const ipcReferenceViolations: number[] = [];
   visit(preload, (node) => {
@@ -628,7 +636,7 @@ test('preload exposes only the zero-argument courseFlow.query capability on a fi
   assert.deepEqual(
     ipcReferenceViolations,
     [],
-    'preload must not alias IPC or use it outside the exposed fixed-channel query',
+    'preload must not alias IPC or use it outside the two fixed-channel invocations',
   );
 });
 

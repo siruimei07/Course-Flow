@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { WorkspaceSupervisor } from '../../src/main/workspace-supervisor';
 import { makeBootstrapRequest } from '../../src/shared/bootstrap-contract';
+import { makeSetupQueryRequest } from '../../src/shared/workspace-setup-contract';
 
 const repositoryRoot = process.cwd();
 const appBuildId = '0.0.0-dev';
@@ -104,6 +105,50 @@ test('WorkspaceSupervisor resolves a matching ready response and clears its time
     },
   });
   assert.equal(timers[0]!.cleared, true);
+});
+
+test('WorkspaceSupervisor forwards and validates a setup response for the active Workspace epoch', async () => {
+  const child = new FakeUtilityProcess();
+  const supervisor = new WorkspaceSupervisor(appBuildId, child);
+  const request = makeSetupQueryRequest('request-setup', appBuildId, workspaceEpoch);
+  const outcomePromise = supervisor.request(request);
+
+  assert.deepEqual(child.messages, [request]);
+  child.emit('message', {
+    ok: true,
+    value: {
+      kind: 'workspace.setup-projection',
+      protocolVersion: 2,
+      appBuildId,
+      requestId: request.requestId,
+      workspaceEpoch,
+      dataMode: 'ready',
+      projection: {
+        workspaceRevision: '0',
+        planEntityVersion: '0',
+        currentTerm: null,
+        terms: [],
+      },
+    },
+  });
+
+  assert.deepEqual(await outcomePromise, {
+    ok: true,
+    value: {
+      kind: 'workspace.setup-projection',
+      protocolVersion: 2,
+      appBuildId,
+      requestId: request.requestId,
+      workspaceEpoch,
+      dataMode: 'ready',
+      projection: {
+        workspaceRevision: '0',
+        planEntityVersion: '0',
+        currentTerm: null,
+        terms: [],
+      },
+    },
+  });
 });
 
 test('WorkspaceSupervisor maps malformed response data to an unavailable problem', async () => {
@@ -259,8 +304,11 @@ test('Workspace entry keeps the trusted process boundary and shared channel cons
   assert.equal((main.match(/utilityProcess\.fork/g) ?? []).length, 1);
   assert.match(main, /path\.join\(__dirname, 'workspace\.js'\)/);
   assert.match(main, /WORKSPACE_QUERY_CHANNEL/);
+  assert.match(main, /WORKSPACE_SETUP_CHANNEL/);
   assert.match(preload, /WORKSPACE_QUERY_CHANNEL/);
+  assert.match(preload, /WORKSPACE_SETUP_CHANNEL/);
   assert.match(workspace, /process\.parentPort/);
   assert.doesNotMatch(workspace, /BrowserWindow|from ['"](?:node:fs|node:path|electron)['"]/);
   assert.doesNotMatch(renderer, /courseflow:workspace-query/);
+  assert.doesNotMatch(renderer, /courseflow:workspace-setup/);
 });

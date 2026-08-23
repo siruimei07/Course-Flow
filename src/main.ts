@@ -7,6 +7,11 @@ import {
   makeBootstrapProblem,
   WORKSPACE_QUERY_CHANNEL,
 } from './shared/bootstrap-contract';
+import {
+  isWorkspaceSetupRequest,
+  WORKSPACE_SETUP_CHANNEL,
+  type WorkspaceSetupOutcome,
+} from './shared/workspace-setup-contract';
 import { isSupportedSqliteVersion } from './shared/sqlite-version';
 import { resolveDevelopmentRoots, type DevelopmentRoots } from './main/runtime-paths';
 import { createSmokeOutput, writeSmokeLine } from './main/smoke-output';
@@ -43,6 +48,35 @@ function invalidRequestOutcome(value: unknown) {
     __COURSEFLOW_APP_BUILD_ID__,
     requestIdFrom(value),
   );
+}
+
+function workspaceEpochFrom(value: unknown): string {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return '';
+  }
+  const workspaceEpoch = (value as { workspaceEpoch?: unknown }).workspaceEpoch;
+  return typeof workspaceEpoch === 'string' ? workspaceEpoch : '';
+}
+
+function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
+  const kind = typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as { kind?: unknown }).kind
+    : undefined;
+  return {
+    ok: false,
+    problem: {
+      code: isBuildMismatch(value)
+        ? 'build-mismatch'
+        : kind === 'workspace.term.create'
+          ? 'validation'
+          : 'invalid-request',
+      message: 'Workspace request is unavailable.',
+      requestId: requestIdFrom(value),
+      appBuildId: __COURSEFLOW_APP_BUILD_ID__,
+      workspaceEpoch: workspaceEpochFrom(value),
+      dataEffect: 'unchanged',
+    },
+  };
 }
 
 export async function createWindow(options?: { show?: boolean }): Promise<BrowserWindow> {
@@ -178,6 +212,32 @@ async function startApplication(roots: DevelopmentRoots): Promise<void> {
         __COURSEFLOW_APP_BUILD_ID__,
         value.requestId,
       );
+    }
+  });
+
+  ipcMain.handle(WORKSPACE_SETUP_CHANNEL, async (event, value) => {
+    const workspaceEpoch = workspaceEpochFrom(value);
+    if (
+      event.sender !== mainWindow?.webContents
+      || !isWorkspaceSetupRequest(value, __COURSEFLOW_APP_BUILD_ID__, workspaceEpoch)
+    ) {
+      return invalidSetupRequestOutcome(value);
+    }
+
+    try {
+      return await workspaceSupervisor!.request(value);
+    } catch {
+      return {
+        ok: false,
+        problem: {
+          code: 'workspace-unavailable',
+          message: 'Workspace is unavailable. Please try again.',
+          requestId: value.requestId,
+          appBuildId: __COURSEFLOW_APP_BUILD_ID__,
+          workspaceEpoch: value.workspaceEpoch,
+          dataEffect: 'unchanged',
+        },
+      } satisfies WorkspaceSetupOutcome;
     }
   });
 

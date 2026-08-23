@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 1;
+export const CURRENT_SCHEMA_LEVEL = 2;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -20,6 +20,8 @@ const commandIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'command_id');
 const effectEntityIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'entity_id');
 const followUpIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'follow_up_id');
 const originatingCommandIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'originating_command_id');
+const termIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'term_id');
+const currentTermIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_term_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -83,6 +85,75 @@ const LEVEL_1_DDL = `
     ) STRICT;
 `;
 
+const LEVEL_2_RECEIPT_DDL = `
+    CREATE TABLE command_receipts (
+        command_id TEXT PRIMARY KEY CHECK (${commandIdCheck}),
+        intent_kind TEXT NOT NULL CHECK (
+            intent_kind IN ('workspace.record-setup-decision', 'plan.create-term')
+        ),
+        intent_schema_version INTEGER NOT NULL CHECK (intent_schema_version = 1),
+        canonical_encoding TEXT NOT NULL CHECK (canonical_encoding = 'courseflow-canonical-json-v1'),
+        digest_algorithm TEXT NOT NULL CHECK (digest_algorithm = 'sha256'),
+        payload_digest BLOB NOT NULL CHECK (length(payload_digest) = 32),
+        committed_revision INTEGER NOT NULL CHECK (committed_revision > 0),
+        result_kind TEXT NOT NULL CHECK (result_kind = 'committed')
+    ) STRICT;
+
+    CREATE TABLE receipt_effects (
+        command_id TEXT NOT NULL CHECK (${commandIdCheck}),
+        effect_order INTEGER NOT NULL CHECK (effect_order >= 0),
+        effect_code TEXT NOT NULL CHECK (
+            effect_code IN ('workspace.setup-decision-recorded', 'plan.term-created-current')
+        ),
+        entity_kind TEXT NOT NULL CHECK (entity_kind IN ('workspace-setup', 'term')),
+        entity_id TEXT NOT NULL CHECK (${effectEntityIdCheck}),
+        entity_version INTEGER NOT NULL CHECK (entity_version >= 0),
+        PRIMARY KEY (command_id, effect_order),
+        FOREIGN KEY (command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_2_PLAN_DDL = `
+    CREATE TABLE terms (
+        term_id TEXT PRIMARY KEY CHECK (${termIdCheck}),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120 AND name = trim(name)),
+        start_date TEXT NOT NULL CHECK (
+            length(start_date) = 10
+            AND substr(start_date, 5, 1) = '-'
+            AND substr(start_date, 8, 1) = '-'
+            AND start_date NOT GLOB '*[^0-9-]*'
+        ),
+        end_date TEXT NOT NULL CHECK (
+            length(end_date) = 10
+            AND substr(end_date, 5, 1) = '-'
+            AND substr(end_date, 8, 1) = '-'
+            AND end_date NOT GLOB '*[^0-9-]*'
+            AND end_date >= start_date
+        ),
+        time_zone TEXT NOT NULL CHECK (length(time_zone) BETWEEN 1 AND 255),
+        archived INTEGER NOT NULL CHECK (archived IN (0, 1)),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0)
+    ) STRICT;
+
+    CREATE TABLE plan_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        current_term_id TEXT CHECK (current_term_id IS NULL OR (${currentTermIdCheck})),
+        plan_entity_version INTEGER NOT NULL CHECK (plan_entity_version >= 0),
+        FOREIGN KEY (singleton) REFERENCES workspace_state(singleton) ON DELETE RESTRICT,
+        FOREIGN KEY (current_term_id) REFERENCES terms(term_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_2_DDL = LEVEL_1_DDL
+    .replace(
+        LEVEL_1_DDL.slice(
+            LEVEL_1_DDL.indexOf('    CREATE TABLE command_receipts'),
+            LEVEL_1_DDL.indexOf('    CREATE TABLE durable_followups'),
+        ),
+        LEVEL_2_RECEIPT_DDL,
+    )
+    + LEVEL_2_PLAN_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -127,6 +198,20 @@ const TABLE_COLUMNS = {
         ['backup_needed_through', 'INTEGER', 1, 0],
         ['backup_succeeded_through', 'INTEGER', 1, 0],
     ],
+    terms: [
+        ['term_id', 'TEXT', 1, 1],
+        ['name', 'TEXT', 1, 0],
+        ['start_date', 'TEXT', 1, 0],
+        ['end_date', 'TEXT', 1, 0],
+        ['time_zone', 'TEXT', 1, 0],
+        ['archived', 'INTEGER', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
+    plan_state: [
+        ['singleton', 'INTEGER', 0, 1],
+        ['current_term_id', 'TEXT', 0, 0],
+        ['plan_entity_version', 'INTEGER', 1, 0],
+    ],
 } as const;
 
 const FOREIGN_KEYS = {
@@ -136,11 +221,25 @@ const FOREIGN_KEYS = {
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
     protection_watermarks: [['singleton', 'workspace_state', 'singleton']],
+    terms: [],
+    plan_state: [
+        ['current_term_id', 'terms', 'term_id'],
+        ['singleton', 'workspace_state', 'singleton'],
+    ],
 } as const;
+
+const LEVEL_1_TABLES = [
+    'workspace_state',
+    'setup_state',
+    'command_receipts',
+    'receipt_effects',
+    'durable_followups',
+    'protection_watermarks',
+] as const;
 
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
-export type SchemaLevel1Facts = Readonly<{
+export type SchemaFacts = Readonly<{
     workspaceId: string;
     revision: bigint;
 }>;
@@ -158,8 +257,10 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-function tableNames(): readonly CurrentTable[] {
-    return Object.keys(TABLE_COLUMNS) as CurrentTable[];
+function tableNames(level: 1 | 2): readonly CurrentTable[] {
+    return level === 1
+        ? LEVEL_1_TABLES
+        : Object.keys(TABLE_COLUMNS) as CurrentTable[];
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -179,8 +280,9 @@ function normalizeTableSql(sql: string): string {
         .toLowerCase();
 }
 
-function expectedTableSql(table: CurrentTable): string {
-    const statement = LEVEL_1_DDL
+function expectedTableSql(table: CurrentTable, level: 1 | 2): string {
+    const ddl = level === 1 ? LEVEL_1_DDL : LEVEL_2_DDL;
+    const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
     if (!statement) {
@@ -189,7 +291,8 @@ function expectedTableSql(table: CurrentTable): string {
     return normalizeTableSql(statement);
 }
 
-function validateTables(database: DatabaseSync): void {
+function validateTables(database: DatabaseSync, level: 1 | 2): void {
+    const expectedNames = Array.from(tableNames(level)).sort();
     const rows = database.prepare('PRAGMA table_list').all() as Array<{
         name: string;
         type: string;
@@ -199,7 +302,6 @@ function validateTables(database: DatabaseSync): void {
         .filter((row) => row.type === 'table' && !row.name.startsWith('sqlite_'))
         .map((row) => row.name)
         .sort();
-    const expectedNames = Array.from(tableNames()).sort();
     if (!equalRows(actualNames, expectedNames)
         || !rows.filter((row) => actualNames.includes(row.name)).every((row) => row.strict === 1)) {
         rejectSchema();
@@ -210,7 +312,7 @@ function validateTables(database: DatabaseSync): void {
     ).all() as Array<{ name: CurrentTable; sql: string | null }>;
     if (definitions.length !== expectedNames.length
         || definitions.some((definition) => definition.sql === null
-            || normalizeTableSql(definition.sql) !== expectedTableSql(definition.name))) {
+            || normalizeTableSql(definition.sql) !== expectedTableSql(definition.name, level))) {
         rejectSchema();
     }
 }
@@ -298,7 +400,7 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
     }
 }
 
-function validateBootstrapFacts(database: DatabaseSync): SchemaLevel1Facts {
+function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2): SchemaFacts {
     const workspace = database.prepare(
         'SELECT workspace_id, revision FROM workspace_state WHERE singleton = 1',
     );
@@ -309,7 +411,7 @@ function validateBootstrapFacts(database: DatabaseSync): SchemaLevel1Facts {
     );
     setup.setReadBigInts(true);
     const setupRow = setup.get() as {
-        last_decision: null;
+        last_decision: 'later' | 'skip' | null;
         setup_decision_version: bigint;
         ever_reached_minimum: bigint;
     } | undefined;
@@ -350,8 +452,28 @@ function validateBootstrapFacts(database: DatabaseSync): SchemaLevel1Facts {
         || (setupRow.ever_reached_minimum !== 0n && setupRow.ever_reached_minimum !== 1n)
         || watermarkRow.backup_needed_through < 0n
         || watermarkRow.backup_succeeded_through < 0n
-        || watermarkRow.backup_succeeded_through > watermarkRow.backup_needed_through) {
+        || watermarkRow.backup_succeeded_through > watermarkRow.backup_needed_through
+        || watermarkRow.backup_needed_through > workspaceRow.revision) {
         rejectSchema();
+    }
+
+    if (level === 2) {
+        const plan = database.prepare(
+            'SELECT current_term_id, plan_entity_version FROM plan_state WHERE singleton = 1',
+        );
+        plan.setReadBigInts(true);
+        const planRow = plan.get() as {
+            current_term_id: string | null;
+            plan_entity_version: bigint;
+        } | undefined;
+        const count = database.prepare('SELECT count(*) AS count FROM plan_state');
+        count.setReadBigInts(true);
+        if (!planRow
+            || (count.get() as { count: bigint }).count !== 1n
+            || planRow.plan_entity_version < 0n
+            || (planRow.current_term_id !== null && !isCanonicalUuid(planRow.current_term_id))) {
+            rejectSchema();
+        }
     }
 
     return {
@@ -360,18 +482,14 @@ function validateBootstrapFacts(database: DatabaseSync): SchemaLevel1Facts {
     };
 }
 
-export function migrateLevel0To1(database: DatabaseSync): void {
-    database.exec(LEVEL_1_DDL);
-}
-
-export function validateSchemaLevel1(database: DatabaseSync): SchemaLevel1Facts {
+function validateSchema(database: DatabaseSync, level: 1 | 2): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
-        || pragmaValue(database, 'user_version', 'user_version') !== CURRENT_SCHEMA_LEVEL) {
+        || pragmaValue(database, 'user_version', 'user_version') !== level) {
         rejectSchema();
     }
 
-    validateTables(database);
-    for (const table of tableNames()) {
+    validateTables(database, level);
+    for (const table of tableNames(level)) {
         validateColumnsAndForeignKeys(database, table);
         validateIndexes(database, table);
     }
@@ -387,5 +505,64 @@ export function validateSchemaLevel1(database: DatabaseSync): SchemaLevel1Facts 
         rejectSchema('database-corrupt');
     }
 
-    return validateBootstrapFacts(database);
+    return validateBootstrapFacts(database, level);
+}
+
+export function migrateLevel0To1(database: DatabaseSync): void {
+    database.exec(LEVEL_1_DDL);
+}
+
+export function migrateLevel1To2(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_1;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_1;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_1;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_2_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_1;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_1;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_1;
+
+        DROP TABLE receipt_effects_level_1;
+        DROP TABLE durable_followups_level_1;
+        DROP TABLE command_receipts_level_1;
+
+        ${LEVEL_2_PLAN_DDL}
+        INSERT INTO plan_state (singleton, current_term_id, plan_entity_version)
+            VALUES (1, NULL, 0);
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 2;
+    `);
+}
+
+export function createSchemaLevel2(database: DatabaseSync): void {
+    database.exec(LEVEL_2_DDL);
+}
+
+export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 1);
+}
+
+export function validateSchemaLevel2(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 2);
 }
