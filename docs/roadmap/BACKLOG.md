@@ -66,8 +66,8 @@
 | `WP-R4-02` | 重复任务、适用范围、假期规则与实例展开闭环 | `WP-R4-01` | — | `A-TASK-004`, `A-TASK-007`, `A-TASK-010` | `TEST-PLAN-003` | `Done` |
 | `WP-R4-03` | 实例状态、单次/后续范围、跳过与撤销按事实提交边界工作 | `WP-R4-02` | — | `A-TASK-005`, `A-TASK-006`, `A-TASK-008`, `A-TASK-009` | `TEST-SHELL-003`, `TEST-FLOW-01-COMMIT` | `Done` |
 | `WP-R4-04` | Today、Week 与临近截止投影遵循统一计划和已批准日期边界 | `WP-R4-03` | — | `A-VIEW-001`–`A-VIEW-006` | `TEST-WORKSPACE-001`, `TEST-PLAN-006`, `TEST-PLAN-007` | `Done` |
-| `WP-R4-05` | Calendar 与 Agenda 共享稳定事件身份并正确呈现冲突/TBA | `WP-R4-04` | — | `A-CALENDAR-001`–`A-CALENDAR-003` | `TEST-PLAN-008` | `Verification` |
-| `WP-R4-06` | 首次设置与五项主导航的键盘、焦点、非颜色状态和基础可用性通过 | `WP-R4-05` | Windows/macOS 输入环境 | — | `TEST-USABILITY-001` | — |
+| `WP-R4-05` | Calendar 与 Agenda 共享稳定事件身份并正确呈现冲突/TBA | `WP-R4-04` | — | `A-CALENDAR-001`–`A-CALENDAR-003` | `TEST-PLAN-008` | `Done` |
+| `WP-R4-06` | 首次设置与五项主导航的键盘、焦点、非颜色状态和基础可用性通过 | `WP-R4-05` | Windows/macOS 输入环境 | — | `TEST-USABILITY-001` | `Ready` |
 
 ### R5 — 结构化备份内核
 
@@ -256,6 +256,8 @@
 | 2026-08-24 | `WP-R4-04` | `Verification → Done` | clean source `6ae07ad1d8cca588c0dace00f96b9251894bfab1`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:6ae07ad1d8cca588c0dace00f96b9251894bfab1 SQLite 3.53.1 verified-local` | `A-VIEW-001–006`、`TEST-WORKSPACE-001`、`TEST-PLAN-006/007` 的 Today、Week、倒计时、临近分类、计数与学期日期进度切片关闭；Week 不显示 holiday-suppressed 周期课节，根投影仍保留其稳定身份和文字分类供排除明细。Calendar/Agenda、广泛 UI 与 ATTEND overlay 仍由后续工作包拥有；macOS 未在本提交上重新 package/smoke，packaged 交互 E2E、签名、安装和公开发布不从本证据推断通过。 |
 | 2026-08-24 | `WP-R4-05` | `— → Ready` | `WP-R4-04` clean implementation source `6ae07ad1d8cca588c0dace00f96b9251894bfab1` 与本次证据提交 | `WP-R4-04` 注册表为 `Done`，目标测试、Windows package/smoke 与文档追溯均通过；`WP-R4-05` 硬依赖满足且无额外证据依赖 | `WP-R4-05` 成为唯一 `Ready` 主链工作包；只推进 Calendar/Agenda 对现有统一 PLAN occurrence identity、冲突、TBA 和 HolidayRange 的消费，不重写 WP-R4-04 分类或 Today/Week 计数公式。 |
 | 2026-08-24 | `WP-R4-05` | `Ready → Verification` | clean implementation source 为本行所在本地提交 | TDD RED 先精确失败于尚无 Calendar/Agenda/TBA 字段，后续分别以 6/7、6/7、7/8、7/8 失败锁定 terminal TBA 分组、exact array、4096 warning 上限和 nested DTO descriptor；GREEN 后 PLAN/DATA/Workspace exact validator 聚焦回归 20/20 PASS，`pnpm test` 294/294 PASS，`pnpm typecheck`、`git diff --check` PASS；6 个改动 TypeScript 路径的 FECS `@file`、120 字符、tab 与新增单参数箭头门禁 PASS；独立只读复审最终 Critical/Important/Minor 均为 0、Ready Yes | 同一 PLAN evaluator 在同一 revision/EvaluationContext 上复用 WP-R4-04 分类后的 Meeting 与 once/weekly Task；Calendar 将 timed 事项、date-only 全天事项和每可见周最多一个 HolidayRange 连续片段分层，Agenda 按日期/语义层/精确时间/稳定身份确定性排序，每个假期范围仅一项。重叠 warning 携带双方分类对象与 Instant 交集，排除 cancelled/holiday-suppressed、不修改事实并复用既有 4096 有界 DTO 上限。TBA 按 Deadline union 独立分组，completed/skipped 仍保留终态分类。无 schema、迁移、依赖或 Renderer 页面改动；clean package/smoke 待本源码提交后执行，广泛 UI 仍属 `WP-R4-06`。 |
+| 2026-08-24 | `WP-R4-05` | `Verification → Done` | clean source `a52688bd95e69e95e17917d8ff2d116380cc2b4f`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200` / AMD64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`、SQLite `3.53.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:a52688bd95e69e95e17917d8ff2d116380cc2b4f SQLite 3.53.1 verified-local` | `A-CALENDAR-001–003` 与 `TEST-PLAN-008` 的 Calendar/Agenda/TBA 投影切片关闭；package 仅有现有 Vite 配置加载和 `inlineDynamicImports` 弃用 warning。macOS 未在本提交上重新 package/smoke，packaged 交互 E2E、签名、安装和公开发布不从本证据推断通过；广泛 UI 仍归 `WP-R4-06`。 |
+| 2026-08-24 | `WP-R4-06` | `— → Ready` | `WP-R4-05` clean implementation source `a52688bd95e69e95e17917d8ff2d116380cc2b4f` 与本次证据提交 | `WP-R4-05` 注册表为 `Done`，目标测试、Windows package/smoke、文档追溯和独立复审均通过；`WP-R4-06` 硬依赖满足，Windows/macOS 输入环境证据依赖保持开放 | `WP-R4-06` 成为唯一 `Ready` 主链工作包；本次状态推进不实现首次设置、五项主导航、键盘/焦点、非颜色状态或广泛 UI。 |
 
 ## 7. 拆包与变更规则
 
