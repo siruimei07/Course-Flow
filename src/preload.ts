@@ -148,7 +148,7 @@ function querySetup(): Promise<WorkspaceSetupOutcome> {
 }
 
 /**
- * Queries the unified Today and Week PLAN projection.
+ * Queries the unified PLAN view projection.
  * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
  */
 function queryPlan(): Promise<WorkspaceSetupOutcome> {

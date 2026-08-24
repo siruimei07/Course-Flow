@@ -277,7 +277,7 @@ test('TEST-WORKSPACE-001: PLAN source composes one revision and EvaluationContex
         assert.equal(projection.next.small.task.occurrence.occurrenceId.taskSeriesId, smallTaskSeriesId);
         assert.equal(projection.next.large.task.occurrence.occurrenceId.taskSeriesId, largeTaskSeriesId);
     }
-    assert.deepEqual(projection.tbaTasks.map(task => task.occurrence.occurrenceId.taskSeriesId), [
+    assert.deepEqual(projection.tba.tasks.map(task => task.occurrence.occurrenceId.taskSeriesId), [
         tbaTaskSeriesId,
     ]);
     assert.deepEqual(projection.termProgress, { elapsedDays: 10, totalDays: 30, ratio: 1 / 3 });

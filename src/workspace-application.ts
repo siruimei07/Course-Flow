@@ -331,7 +331,7 @@ export class WorkspaceApplication {
     }
 
     /**
-     * Produces all current Today and Week facts from one revision and one Clock evaluation.
+     * Produces all current PLAN view facts from one revision and one Clock evaluation.
      * @param {string} requestId - Request correlation identity.
      * @return {WorkspaceSetupOutcome} Unified PLAN projection or structured problem.
      */
@@ -362,7 +362,7 @@ export class WorkspaceApplication {
         }
         catch (error) {
             const code = error instanceof TypeError ? 'workspace-unavailable' : 'recovery-required';
-            return this.problem(code, '无法读取一致的 Today 与 Week 计划数据。', requestId);
+            return this.problem(code, '无法读取一致的统一计划数据。', requestId);
         }
     }
 

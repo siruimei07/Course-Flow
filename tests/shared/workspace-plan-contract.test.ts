@@ -11,10 +11,15 @@ import {
     classifyMeetingOccurrence,
     classifyTaskOccurrence,
     createPlanEvaluationContext,
+    isPlanProjection,
     selectNextTaskOccurrence,
     type PlanEvaluationContext,
+    type PlanProjection,
 } from '../../src/shared/workspace-plan-contract';
-import type { MeetingOccurrenceProjection } from '../../src/shared/workspace-course-contract';
+import {
+    MAX_MEETING_OVERLAP_WARNINGS,
+    type MeetingOccurrenceProjection,
+} from '../../src/shared/workspace-course-contract';
 import type { HolidayRangeProjection } from '../../src/shared/workspace-holiday-contract';
 import type {
     TaskDeadline,
@@ -63,6 +68,44 @@ function taskOccurrence(
         reportedProgress: null,
         displayProgress: status === 'completed' ? 100 : null,
         overrideKind: 'none',
+    };
+}
+
+/**
+ * Builds one real Meeting occurrence fixture for projection ordering and overlap checks.
+ * @param {Object} value - Complete stable identity, time, type, and status facts.
+ * @return {MeetingOccurrenceProjection} Complete Meeting occurrence DTO.
+ */
+function meetingOccurrence(value: Readonly<{
+    meetingSeriesId: string;
+    segmentId: string;
+    date: string;
+    type: MeetingOccurrenceProjection['type'];
+    weekday: MeetingOccurrenceProjection['weekday'];
+    localStart: string;
+    localEnd: string;
+    startInstant: string;
+    endInstant: string;
+    status?: MeetingOccurrenceProjection['status'];
+}>): MeetingOccurrenceProjection {
+    const status = value.status ?? 'scheduled';
+    return {
+        occurrenceId: {
+            meetingSeriesId: value.meetingSeriesId,
+            originalLogicalAnchor: value.date,
+        },
+        segmentId: value.segmentId,
+        date: value.date,
+        status,
+        overrideKind: status === 'cancelled' ? 'cancelled' : null,
+        type: value.type,
+        weekday: value.weekday,
+        localStart: value.localStart,
+        localEnd: value.localEnd,
+        endDayOffset: 0,
+        startInstant: value.startInstant,
+        endInstant: value.endInstant,
+        location: { kind: 'tba' },
     };
 }
 
@@ -394,7 +437,7 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: one PLAN context builds Today and Wee
     assert.equal(projection.week.tasks.length, 5);
     assert.equal(projection.week.meetings.length, 3);
     assert.deepEqual(projection.week.holidayRanges, [holiday]);
-    assert.deepEqual(projection.tbaTasks.map(task => task.occurrence.occurrenceId), [tba.occurrenceId]);
+    assert.deepEqual(projection.tba.tasks.map(task => task.occurrence.occurrenceId), [tba.occurrenceId]);
     assert.deepEqual(
         projection.today.meetings
             .filter(meeting => meeting.classification !== 'holiday-suppressed')
@@ -416,4 +459,363 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: one PLAN context builds Today and Wee
         totalDays: 14,
         ratio: 2 / 7,
     });
+});
+
+test('A-CALENDAR-001–003/TEST-PLAN-008: Calendar, Agenda, and TBA reuse one classified occurrence set', () => {
+    const evaluationContext: PlanEvaluationContext = {
+        ...EVALUATION_CONTEXT,
+        evaluatedAt: '2026-09-10T14:25:00.000Z',
+    };
+    const term: TermProjection = {
+        termId: '55555555-5555-4555-8555-555555555555',
+        name: 'Fall 2026',
+        startDate: '2026-09-01',
+        endDate: '2026-09-30',
+        timeZone: EVALUATION_CONTEXT.termZone,
+        archived: false,
+        entityVersion: '3',
+    };
+    const weeklyTimed = taskOccurrence(
+        '2026-09-10',
+        {
+            kind: 'timed',
+            instant: '2026-09-10T14:20:00.000Z',
+            timeZone: 'America/Toronto',
+        },
+        'pending',
+        'small',
+        '77777777-7777-4777-8777-777777777777',
+    );
+    const onceDateOnly = taskOccurrence(
+        'once',
+        { kind: 'date-only', date: '2026-09-10' },
+        'pending',
+        'large',
+        '88888888-8888-4888-8888-888888888888',
+    );
+    const tba = taskOccurrence(
+        'once',
+        { kind: 'tba' },
+        'pending',
+        'small',
+        '99999999-9999-4999-8999-999999999999',
+    );
+    const completedTba = taskOccurrence(
+        'once',
+        { kind: 'tba' },
+        'completed',
+        'large',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    );
+    const skippedTba = taskOccurrence(
+        'once',
+        { kind: 'tba' },
+        'skipped',
+        'small',
+        'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    );
+    const firstMeeting = meetingOccurrence({
+        meetingSeriesId: '11111111-1111-4111-8111-111111111111',
+        segmentId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        date: '2026-09-10',
+        type: 'LEC',
+        weekday: 'THU',
+        localStart: '10:00',
+        localEnd: '11:00',
+        startInstant: '2026-09-10T14:00:00.000Z',
+        endInstant: '2026-09-10T15:00:00.000Z',
+    });
+    const cancelledMeeting = meetingOccurrence({
+        meetingSeriesId: '22222222-2222-4222-8222-222222222222',
+        segmentId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+        date: '2026-09-10',
+        type: 'PRA',
+        weekday: 'THU',
+        localStart: '10:10',
+        localEnd: '10:40',
+        startInstant: '2026-09-10T14:10:00.000Z',
+        endInstant: '2026-09-10T14:40:00.000Z',
+        status: 'cancelled',
+    });
+    const secondMeeting = meetingOccurrence({
+        meetingSeriesId: '33333333-3333-4333-8333-333333333333',
+        segmentId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        date: '2026-09-10',
+        type: 'TUT',
+        weekday: 'THU',
+        localStart: '10:30',
+        localEnd: '11:30',
+        startInstant: '2026-09-10T14:30:00.000Z',
+        endInstant: '2026-09-10T15:30:00.000Z',
+    });
+    const suppressedMeeting = meetingOccurrence({
+        meetingSeriesId: '44444444-4444-4444-8444-444444444444',
+        segmentId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        date: '2026-09-12',
+        type: 'LEC',
+        weekday: 'SAT',
+        localStart: '10:00',
+        localEnd: '11:00',
+        startInstant: '2026-09-12T14:00:00.000Z',
+        endInstant: '2026-09-12T15:00:00.000Z',
+        status: 'holiday-suppressed',
+    });
+    const holiday: HolidayRangeProjection = {
+        holidayRangeId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        termId: term.termId,
+        name: 'Reading Week',
+        startDate: '2026-09-12',
+        endDate: '2026-09-20',
+        entityVersion: '2',
+    };
+    const courseId = '66666666-6666-4666-8666-666666666666';
+    const projection = buildPlanProjection({
+        workspaceRevision: '12',
+        planEntityVersion: '8',
+        term,
+        taskSources: [skippedTba, completedTba, tba, onceDateOnly, weeklyTimed].map(occurrence => ({
+            courseId,
+            courseCode: 'CSC301',
+            occurrence,
+        })),
+        meetingSources: [secondMeeting, suppressedMeeting, cancelledMeeting, firstMeeting]
+            .map(occurrence => ({
+                courseId,
+                courseCode: 'CSC301',
+                occurrence,
+            })),
+        holidayRanges: [holiday],
+    }, evaluationContext, 'disabled');
+
+    assert.equal(projection.workspaceRevision, '12');
+    assert.deepEqual(projection.evaluationContext, evaluationContext);
+    assert.deepEqual(projection.today.tasks.map(task => task.occurrence.occurrenceId), [
+        weeklyTimed.occurrenceId,
+        onceDateOnly.occurrenceId,
+    ]);
+    assert.deepEqual(projection.week.tasks.map(task => task.occurrence.occurrenceId), [
+        weeklyTimed.occurrenceId,
+        onceDateOnly.occurrenceId,
+    ]);
+    assert.deepEqual(projection.today.meetings.map(meeting => meeting.occurrence.occurrenceId), [
+        firstMeeting.occurrenceId,
+        cancelledMeeting.occurrenceId,
+        secondMeeting.occurrenceId,
+    ]);
+    assert.deepEqual(projection.week.meetings.map(meeting => meeting.occurrence.occurrenceId), [
+        firstMeeting.occurrenceId,
+        cancelledMeeting.occurrenceId,
+        secondMeeting.occurrenceId,
+    ]);
+    assert.deepEqual(projection.today.summary, {
+        completed: 0,
+        pending: 4,
+        contributions: {
+            tasks: { completed: 0, pending: 2 },
+            meetings: { completed: 0, pending: 2 },
+        },
+        excluded: {
+            skippedTasks: 0,
+            priorOverdueTasks: 0,
+            tbaTasks: 1,
+            cancelledMeetings: 1,
+            holidaySuppressedMeetings: 0,
+            missedMeetings: 0,
+            unmarkedMeetings: 0,
+        },
+    });
+    assert.deepEqual(projection.termProgress, {
+        elapsedDays: 10,
+        totalDays: 30,
+        ratio: 1 / 3,
+    });
+    assert.deepEqual(projection.calendar.window, evaluationContext.requestedWindow);
+    assert.deepEqual(projection.calendar.timedItems.map(item => [
+        item.kind,
+        item.typeLabel,
+        item.occurrence.occurrenceId,
+        item.classification,
+    ]), [
+        ['meeting', 'Lecture', firstMeeting.occurrenceId, 'in-progress'],
+        ['meeting', 'Practical', cancelledMeeting.occurrenceId, 'cancelled'],
+        ['task', 'Task', weeklyTimed.occurrenceId, 'overdue'],
+        ['meeting', 'Tutorial', secondMeeting.occurrenceId, 'upcoming'],
+    ]);
+    assert.deepEqual(projection.calendar.allDayItems.map(item => item.occurrence.occurrenceId), [
+        onceDateOnly.occurrenceId,
+    ]);
+    assert.deepEqual(projection.calendar.holidaySegments.map(segment => ({
+        holidayRangeId: segment.holidayRange.holidayRangeId,
+        typeLabel: segment.typeLabel,
+        visibleStartDate: segment.visibleStartDate,
+        visibleEndDate: segment.visibleEndDate,
+    })), [{
+        holidayRangeId: holiday.holidayRangeId,
+        typeLabel: 'Holiday',
+        visibleStartDate: '2026-09-12',
+        visibleEndDate: '2026-09-13',
+    }]);
+    assert.deepEqual(projection.agenda.items.map(item => {
+        if (item.kind === 'holiday-range') {
+            return ['holiday-range', item.typeLabel, item.holidayRange.holidayRangeId];
+        }
+        return [item.kind, item.typeLabel, item.occurrence.occurrenceId];
+    }), [
+        ['meeting', 'Lecture', firstMeeting.occurrenceId],
+        ['meeting', 'Practical', cancelledMeeting.occurrenceId],
+        ['task', 'Task', weeklyTimed.occurrenceId],
+        ['meeting', 'Tutorial', secondMeeting.occurrenceId],
+        ['task', 'Task', onceDateOnly.occurrenceId],
+        ['holiday-range', 'Holiday', holiday.holidayRangeId],
+    ]);
+    assert.deepEqual(projection.agenda.warnings.map(warning => ({
+        code: warning.code,
+        first: warning.first.occurrence.occurrenceId,
+        second: warning.second.occurrence.occurrenceId,
+        overlap: warning.overlap,
+    })), [{
+        code: 'meeting-time-overlap',
+        first: firstMeeting.occurrenceId,
+        second: secondMeeting.occurrenceId,
+        overlap: {
+            startInstant: '2026-09-10T14:30:00.000Z',
+            endInstant: '2026-09-10T15:00:00.000Z',
+        },
+    }]);
+    assert.deepEqual(projection.tba.tasks.map(task => [
+        task.typeLabel,
+        task.classification,
+        task.occurrence.occurrenceId,
+    ]), [
+        ['Task', 'TBA', tba.occurrenceId],
+        ['Task', 'completed', completedTba.occurrenceId],
+        ['Task', 'skipped', skippedTba.occurrenceId],
+    ]);
+    assert.equal(projection.calendar.timedItems.some(item => (
+        item.kind === 'meeting'
+        && item.occurrence.occurrenceId.meetingSeriesId
+            === suppressedMeeting.occurrenceId.meetingSeriesId
+    )), false);
+    assert.equal(projection.agenda.items.some(item => (
+        item.kind === 'meeting'
+        && item.occurrence.occurrenceId.meetingSeriesId
+            === suppressedMeeting.occurrenceId.meetingSeriesId
+    )), false);
+    const twoWeekProjection = buildPlanProjection({
+        workspaceRevision: '12',
+        planEntityVersion: '8',
+        term,
+        taskSources: [],
+        meetingSources: [],
+        holidayRanges: [holiday],
+    }, {
+        ...evaluationContext,
+        requestedWindow: { startDate: '2026-09-07', endDate: '2026-09-20' },
+    }, 'disabled');
+    assert.deepEqual(twoWeekProjection.calendar.holidaySegments.map(segment => ({
+        holidayRangeId: segment.holidayRange.holidayRangeId,
+        visibleStartDate: segment.visibleStartDate,
+        visibleEndDate: segment.visibleEndDate,
+    })), [
+        {
+            holidayRangeId: holiday.holidayRangeId,
+            visibleStartDate: '2026-09-12',
+            visibleEndDate: '2026-09-13',
+        },
+        {
+            holidayRangeId: holiday.holidayRangeId,
+            visibleStartDate: '2026-09-14',
+            visibleEndDate: '2026-09-20',
+        },
+    ]);
+    assert.equal(twoWeekProjection.agenda.items.filter(item => item.kind === 'holiday-range').length, 1);
+    assert.equal(isPlanProjection(projection), true);
+    assert.equal(isPlanProjection({
+        ...projection,
+        agenda: {
+            ...projection.agenda,
+            items: Array.from(projection.agenda.items).reverse(),
+        },
+    }), false);
+    const timedItemsWithUnknownProperty = Array.from(projection.calendar.timedItems);
+    Object.defineProperty(timedItemsWithUnknownProperty, 'unknown', {
+        value: true,
+        enumerable: true,
+    });
+    assert.equal(isPlanProjection({
+        ...projection,
+        calendar: {
+            ...projection.calendar,
+            timedItems: timedItemsWithUnknownProperty,
+        },
+    }), false);
+    const holidaySegmentWithUnknownProperty = {
+        ...projection.calendar.holidaySegments[0]!,
+    };
+    Object.defineProperty(holidaySegmentWithUnknownProperty, Symbol('unknown'), {
+        value: true,
+        enumerable: true,
+    });
+    assert.equal(isPlanProjection({
+        ...projection,
+        calendar: {
+            ...projection.calendar,
+            holidaySegments: [holidaySegmentWithUnknownProperty],
+        },
+    }), false);
+});
+
+test('ADR-04/A-CALENDAR-002/TEST-PLAN-008: Agenda conflict warnings are bounded and deterministic', () => {
+    const term: TermProjection = {
+        termId: '11111111-1111-4111-8111-111111111111',
+        name: 'Fall 2026',
+        startDate: '2026-09-01',
+        endDate: '2026-09-30',
+        timeZone: EVALUATION_CONTEXT.termZone,
+        archived: false,
+        entityVersion: '1',
+    };
+    const occurrences = Array.from({ length: 92 }, (_unused, index) => {
+        const suffix = String(index + 1).padStart(12, '0');
+        return meetingOccurrence({
+            meetingSeriesId: `10000000-0000-4000-8000-${suffix}`,
+            segmentId: `20000000-0000-4000-8000-${suffix}`,
+            date: EVALUATION_CONTEXT.applicableDate,
+            type: 'LEC',
+            weekday: 'THU',
+            localStart: '10:00',
+            localEnd: '11:00',
+            startInstant: '2026-09-10T14:00:00.000Z',
+            endInstant: '2026-09-10T15:00:00.000Z',
+        });
+    });
+    /**
+     * Builds the same dense schedule from any source ordering.
+     * @param {readonly MeetingOccurrenceProjection[]} meetingOccurrences - Candidate source order.
+     * @return {PlanProjection} Unified projection under comparison.
+     */
+    function buildProjection(
+        meetingOccurrences: readonly MeetingOccurrenceProjection[],
+    ): PlanProjection {
+        return buildPlanProjection({
+            workspaceRevision: '1',
+            planEntityVersion: '1',
+            term,
+            taskSources: [],
+            meetingSources: meetingOccurrences.map(occurrence => ({
+                courseId: '30000000-0000-4000-8000-000000000001',
+                courseCode: 'CSC301',
+                occurrence,
+            })),
+            holidayRanges: [],
+        }, EVALUATION_CONTEXT, 'disabled');
+    }
+    const projection = buildProjection(occurrences);
+
+    assert.equal(projection.agenda.warnings.length, MAX_MEETING_OVERLAP_WARNINGS);
+    assert.deepEqual(
+        projection.agenda.warnings,
+        buildProjection(Array.from(occurrences).reverse()).agenda.warnings,
+    );
+    assert.equal(isPlanProjection(projection), true);
 });

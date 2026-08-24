@@ -2,9 +2,11 @@
  * @file Defines unified PLAN evaluation context and derived occurrence classifications.
  */
 
-import { INTL_ZONE_RULES } from './meeting-time';
+import { findMeetingTimeOverlap, INTL_ZONE_RULES } from './meeting-time';
 import {
     isMeetingOccurrenceProjection,
+    isMeetingOccurrenceWindow,
+    MAX_MEETING_OVERLAP_WARNINGS,
     type MeetingOccurrenceProjection,
     type MeetingOccurrenceWindow,
 } from './workspace-course-contract';
@@ -92,6 +94,51 @@ export type PlanMeetingProjection = PlanMeetingSource & Readonly<{
     classification: MeetingTimeClassification;
 }>;
 
+export type CalendarHolidaySegmentProjection = Readonly<{
+    kind: 'holiday-range';
+    typeLabel: 'Holiday';
+    holidayRange: HolidayRangeProjection;
+    visibleStartDate: string;
+    visibleEndDate: string;
+}>;
+
+export type CalendarWindowProjection = Readonly<{
+    window: MeetingOccurrenceWindow;
+    timedItems: readonly (PlanMeetingProjection | PlanTaskProjection)[];
+    allDayItems: readonly PlanTaskProjection[];
+    holidaySegments: readonly CalendarHolidaySegmentProjection[];
+}>;
+
+export type AgendaHolidayRangeProjection = Readonly<{
+    kind: 'holiday-range';
+    typeLabel: 'Holiday';
+    holidayRange: HolidayRangeProjection;
+}>;
+
+export type AgendaItemProjection =
+    | PlanMeetingProjection
+    | PlanTaskProjection
+    | AgendaHolidayRangeProjection;
+
+export type AgendaConflictWarning = Readonly<{
+    code: 'meeting-time-overlap';
+    first: PlanMeetingProjection;
+    second: PlanMeetingProjection;
+    overlap: Readonly<{
+        startInstant: string;
+        endInstant: string;
+    }>;
+}>;
+
+export type AgendaProjection = Readonly<{
+    items: readonly AgendaItemProjection[];
+    warnings: readonly AgendaConflictWarning[];
+}>;
+
+export type TbaProjection = Readonly<{
+    tasks: readonly PlanTaskProjection[];
+}>;
+
 export type TodaySummaryProjection = Readonly<{
     completed: number;
     pending: number;
@@ -157,7 +204,9 @@ export type PlanProjection = Readonly<{
         meetings: readonly PlanMeetingProjection[];
         holidayRanges: readonly HolidayRangeProjection[];
     }>;
-    tbaTasks: readonly PlanTaskProjection[];
+    calendar: CalendarWindowProjection;
+    agenda: AgendaProjection;
+    tba: TbaProjection;
     next: Readonly<{
         small: PlanNextTaskProjection;
         large: PlanNextTaskProjection;
@@ -190,23 +239,31 @@ function addLocalDateDays(value: string, days: number): string {
  * Creates the one PLAN evaluation context shared by all composite projections.
  * @param {string} evaluatedAt - Workspace-owned canonical Clock Instant.
  * @param {string} termZone - Current Term IANA time-zone identity.
+ * @param {MeetingOccurrenceWindow=} requestedWindow - Optional Calendar/Agenda query window.
  * @return {PlanEvaluationContext} Frozen Today and Monday-through-Sunday window facts.
  */
 export function createPlanEvaluationContext(
     evaluatedAt: string,
     termZone: string,
+    requestedWindow?: MeetingOccurrenceWindow,
 ): PlanEvaluationContext {
     const applicableDate = localDateInTermZone(evaluatedAt, termZone);
     const weekday = new Date(`${applicableDate}T00:00:00.000Z`).getUTCDay();
     const weekStart = addLocalDateDays(applicableDate, -((weekday + 6) % 7));
+    if (requestedWindow !== undefined && !isMeetingOccurrenceWindow(requestedWindow)) {
+        throw new TypeError('PLAN requested window must be a canonical LocalDate range');
+    }
+    const contextWindow = requestedWindow === undefined
+        ? Object.freeze({
+            startDate: weekStart,
+            endDate: addLocalDateDays(weekStart, 6),
+        })
+        : Object.freeze({ ...requestedWindow });
     return Object.freeze({
         evaluatedAt,
         termZone,
         applicableDate,
-        requestedWindow: Object.freeze({
-            startDate: weekStart,
-            endDate: addLocalDateDays(weekStart, 6),
-        }),
+        requestedWindow: contextWindow,
     });
 }
 
@@ -492,11 +549,314 @@ function buildTodaySummary(
 }
 
 /**
- * Builds all WP-R4-04 PLAN projections from one revision-bound fact collection.
+ * Produces one cross-kind stable occurrence ordering key.
+ * @param {PlanTaskProjection | PlanMeetingProjection} item - Classified PLAN occurrence.
+ * @return {string} Kind-prefixed stable identity key.
+ */
+function planOccurrenceIdentityKey(item: PlanTaskProjection | PlanMeetingProjection): string {
+    return item.kind === 'task'
+        ? `task\u0000${taskOccurrenceIdentityKey(item.occurrence)}`
+        : `meeting\u0000${meetingOccurrenceIdentityKey(item.occurrence)}`;
+}
+
+/**
+ * Tests whether one LocalDate belongs to an inclusive projection window.
+ * @param {string} date - Canonical LocalDate under evaluation.
+ * @param {MeetingOccurrenceWindow} window - Inclusive visible window.
+ * @return {boolean} Whether the date is visible.
+ */
+function isDateInWindow(date: string, window: MeetingOccurrenceWindow): boolean {
+    return date >= window.startDate && date <= window.endDate;
+}
+
+/**
+ * Resolves the exact Instant used to order a timed Calendar item.
+ * @param {PlanTaskProjection | PlanMeetingProjection} item - Timed Task or Meeting.
+ * @return {string} Canonical start or deadline Instant.
+ */
+function calendarTimedItemInstant(item: PlanTaskProjection | PlanMeetingProjection): string {
+    if (item.kind === 'meeting') {
+        return item.occurrence.startInstant;
+    }
+    if (item.occurrence.deadline.kind !== 'timed') {
+        throw new TypeError('Calendar timed Task must have a timed deadline');
+    }
+    return item.occurrence.deadline.instant;
+}
+
+/**
+ * Compares two visible timed Calendar items deterministically.
+ * @param {PlanTaskProjection | PlanMeetingProjection} first - First visible item.
+ * @param {PlanTaskProjection | PlanMeetingProjection} second - Second visible item.
+ * @return {number} Exact time then stable identity ordering.
+ */
+function compareCalendarTimedItems(
+    first: PlanTaskProjection | PlanMeetingProjection,
+    second: PlanTaskProjection | PlanMeetingProjection,
+): number {
+    return compareCanonicalText(calendarTimedItemInstant(first), calendarTimedItemInstant(second))
+        || compareCanonicalText(planOccurrenceIdentityKey(first), planOccurrenceIdentityKey(second));
+}
+
+/**
+ * Finds the Sunday or requested-window boundary ending one visible week fragment.
+ * @param {string} startDate - First visible date in the fragment.
+ * @param {string} windowEndDate - Final requested LocalDate.
+ * @return {string} Inclusive fragment end date.
+ */
+function visibleWeekEnd(startDate: string, windowEndDate: string): string {
+    const weekday = new Date(`${startDate}T00:00:00.000Z`).getUTCDay();
+    const daysUntilSunday = (7 - weekday) % 7;
+    const sunday = addLocalDateDays(startDate, daysUntilSunday);
+    return sunday < windowEndDate ? sunday : windowEndDate;
+}
+
+/**
+ * Clips each HolidayRange to at most one continuous segment per visible week.
+ * @param {readonly HolidayRangeProjection[]} holidayRanges - Current Term named ranges.
+ * @param {MeetingOccurrenceWindow} window - Inclusive Calendar window.
+ * @return {readonly CalendarHolidaySegmentProjection[]} Stable continuous all-day segments.
+ */
+function buildCalendarHolidaySegments(
+    holidayRanges: readonly HolidayRangeProjection[],
+    window: MeetingOccurrenceWindow,
+): readonly CalendarHolidaySegmentProjection[] {
+    const segments: CalendarHolidaySegmentProjection[] = [];
+    let weekStart = window.startDate;
+    while (weekStart <= window.endDate) {
+        const weekEnd = visibleWeekEnd(weekStart, window.endDate);
+        for (const holidayRange of holidayRanges) {
+            if (holidayRange.endDate < weekStart || holidayRange.startDate > weekEnd) {
+                continue;
+            }
+            segments.push(Object.freeze({
+                kind: 'holiday-range' as const,
+                typeLabel: 'Holiday' as const,
+                holidayRange,
+                visibleStartDate: holidayRange.startDate > weekStart ? holidayRange.startDate : weekStart,
+                visibleEndDate: holidayRange.endDate < weekEnd ? holidayRange.endDate : weekEnd,
+            }));
+        }
+        if (weekEnd === window.endDate) {
+            break;
+        }
+        weekStart = addLocalDateDays(weekEnd, 1);
+    }
+    return Object.freeze(segments.sort((first, second) => (
+        compareCanonicalText(first.visibleStartDate, second.visibleStartDate)
+        || compareCanonicalText(first.visibleEndDate, second.visibleEndDate)
+        || compareCanonicalText(first.holidayRange.holidayRangeId, second.holidayRange.holidayRangeId)
+    )));
+}
+
+/**
+ * Builds one Calendar window from already classified PLAN occurrences.
+ * @param {readonly PlanTaskProjection[]} tasks - Classified Current Term Tasks.
+ * @param {readonly PlanMeetingProjection[]} meetings - Classified Current Term Meetings.
+ * @param {readonly HolidayRangeProjection[]} holidayRanges - Current Term named ranges.
+ * @param {PlanEvaluationContext} context - Shared projection evaluation context.
+ * @return {CalendarWindowProjection} Timed, all-day, and continuous Holiday layers.
+ */
+function buildCalendarWindowProjection(
+    tasks: readonly PlanTaskProjection[],
+    meetings: readonly PlanMeetingProjection[],
+    holidayRanges: readonly HolidayRangeProjection[],
+    context: PlanEvaluationContext,
+): CalendarWindowProjection {
+    const visibleMeetings = meetings.filter(meeting => (
+        meeting.classification !== 'holiday-suppressed'
+        && isDateInWindow(meeting.occurrence.date, context.requestedWindow)
+    ));
+    const timedTasks = tasks.filter(task => (
+        task.occurrence.deadline.kind === 'timed'
+        && isDateInWindow(taskDeadlineDate(task.occurrence, context)!, context.requestedWindow)
+    ));
+    const allDayItems = Object.freeze(tasks.filter(task => (
+        task.occurrence.deadline.kind === 'date-only'
+        && isDateInWindow(task.occurrence.deadline.date, context.requestedWindow)
+    )).sort((first, second) => (
+        compareCanonicalText(
+            first.occurrence.deadline.kind === 'date-only' ? first.occurrence.deadline.date : '',
+            second.occurrence.deadline.kind === 'date-only' ? second.occurrence.deadline.date : '',
+        ) || compareCanonicalText(
+            taskOccurrenceIdentityKey(first.occurrence),
+            taskOccurrenceIdentityKey(second.occurrence),
+        )
+    )));
+    return Object.freeze({
+        window: context.requestedWindow,
+        timedItems: Object.freeze([...visibleMeetings, ...timedTasks].sort(compareCalendarTimedItems)),
+        allDayItems,
+        holidaySegments: buildCalendarHolidaySegments(holidayRanges, context.requestedWindow),
+    });
+}
+
+/**
+ * Resolves the visible LocalDate used to group one Agenda item.
+ * @param {AgendaItemProjection} item - Meeting, Task, or Holiday range item.
+ * @param {PlanEvaluationContext} context - Shared projection evaluation context.
+ * @return {string} Canonical Agenda grouping LocalDate.
+ */
+function agendaItemDate(item: AgendaItemProjection, context: PlanEvaluationContext): string {
+    if (item.kind === 'holiday-range') {
+        return item.holidayRange.startDate > context.requestedWindow.startDate
+            ? item.holidayRange.startDate
+            : context.requestedWindow.startDate;
+    }
+    if (item.kind === 'meeting') {
+        return item.occurrence.date;
+    }
+    return taskDeadlineDate(item.occurrence, context)!;
+}
+
+/**
+ * Ranks range headers, exact-time items, and date-only Tasks within one Agenda date.
+ * @param {AgendaItemProjection} item - Agenda item under comparison.
+ * @return {number} Stable within-date category rank.
+ */
+function agendaItemRank(item: AgendaItemProjection): number {
+    if (item.kind === 'holiday-range') {
+        return 0;
+    }
+    if (item.kind === 'meeting' || item.occurrence.deadline.kind === 'timed') {
+        return 1;
+    }
+    return 2;
+}
+
+/**
+ * Resolves an exact Agenda ordering Instant when one exists.
+ * @param {AgendaItemProjection} item - Agenda item under comparison.
+ * @return {string} Canonical Instant or empty text for all-day items.
+ */
+function agendaItemInstant(item: AgendaItemProjection): string {
+    if (item.kind === 'meeting') {
+        return item.occurrence.startInstant;
+    }
+    if (item.kind === 'task' && item.occurrence.deadline.kind === 'timed') {
+        return item.occurrence.deadline.instant;
+    }
+    return '';
+}
+
+/**
+ * Produces a cross-kind stable Agenda ordering key.
+ * @param {AgendaItemProjection} item - Agenda item under comparison.
+ * @return {string} Kind-prefixed range or occurrence identity.
+ */
+function agendaItemIdentityKey(item: AgendaItemProjection): string {
+    return item.kind === 'holiday-range'
+        ? `holiday-range\u0000${item.holidayRange.holidayRangeId}`
+        : planOccurrenceIdentityKey(item);
+}
+
+/**
+ * Compares Agenda items by date, semantic layer, exact time, then stable identity.
+ * @param {AgendaItemProjection} first - First Agenda item.
+ * @param {AgendaItemProjection} second - Second Agenda item.
+ * @param {PlanEvaluationContext} context - Shared projection evaluation context.
+ * @return {number} Deterministic Agenda order.
+ */
+function compareAgendaItems(
+    first: AgendaItemProjection,
+    second: AgendaItemProjection,
+    context: PlanEvaluationContext,
+): number {
+    return compareCanonicalText(agendaItemDate(first, context), agendaItemDate(second, context))
+        || agendaItemRank(first) - agendaItemRank(second)
+        || compareCanonicalText(agendaItemInstant(first), agendaItemInstant(second))
+        || compareCanonicalText(agendaItemIdentityKey(first), agendaItemIdentityKey(second));
+}
+
+/**
+ * Derives bounded non-mutating warnings for positive overlaps among effective Meetings.
+ * @param {readonly PlanMeetingProjection[]} meetings - Visible Meeting items in start-time order.
+ * @return {readonly AgendaConflictWarning[]} Stable pairwise warnings capped by the shared DTO limit.
+ */
+function buildAgendaConflictWarnings(
+    meetings: readonly PlanMeetingProjection[],
+): readonly AgendaConflictWarning[] {
+    const activeMeetings = meetings.filter(meeting => meeting.classification !== 'cancelled');
+    const warnings: AgendaConflictWarning[] = [];
+    for (
+        let firstIndex = 0;
+        firstIndex < activeMeetings.length && warnings.length < MAX_MEETING_OVERLAP_WARNINGS;
+        firstIndex += 1
+    ) {
+        const first = activeMeetings[firstIndex]!;
+        for (
+            let secondIndex = firstIndex + 1;
+            secondIndex < activeMeetings.length && warnings.length < MAX_MEETING_OVERLAP_WARNINGS;
+            secondIndex += 1
+        ) {
+            const second = activeMeetings[secondIndex]!;
+            if (second.occurrence.startInstant >= first.occurrence.endInstant) {
+                break;
+            }
+            const overlap = findMeetingTimeOverlap(first.occurrence, second.occurrence);
+            if (overlap !== null) {
+                warnings.push(Object.freeze({
+                    code: 'meeting-time-overlap' as const,
+                    first,
+                    second,
+                    overlap,
+                }));
+            }
+        }
+    }
+    return Object.freeze(warnings.sort((first, second) => (
+        compareCanonicalText(first.overlap.startInstant, second.overlap.startInstant)
+        || compareCanonicalText(
+            meetingOccurrenceIdentityKey(first.first.occurrence),
+            meetingOccurrenceIdentityKey(second.first.occurrence),
+        )
+        || compareCanonicalText(
+            meetingOccurrenceIdentityKey(first.second.occurrence),
+            meetingOccurrenceIdentityKey(second.second.occurrence),
+        )
+    )));
+}
+
+/**
+ * Builds a deterministic Agenda from the same Calendar occurrences and Holiday facts.
+ * @param {CalendarWindowProjection} calendar - Shared visible Calendar occurrence set.
+ * @param {readonly HolidayRangeProjection[]} holidayRanges - Current Term named ranges.
+ * @param {PlanEvaluationContext} context - Shared projection evaluation context.
+ * @return {AgendaProjection} Ordered items and non-mutating conflict warnings.
+ */
+function buildAgendaProjection(
+    calendar: CalendarWindowProjection,
+    holidayRanges: readonly HolidayRangeProjection[],
+    context: PlanEvaluationContext,
+): AgendaProjection {
+    const holidayItems = holidayRanges.filter(holidayRange => (
+        holidayRange.endDate >= context.requestedWindow.startDate
+        && holidayRange.startDate <= context.requestedWindow.endDate
+    )).map(holidayRange => Object.freeze({
+        kind: 'holiday-range' as const,
+        typeLabel: 'Holiday' as const,
+        holidayRange,
+    }));
+    const items = Object.freeze([
+        ...calendar.timedItems,
+        ...calendar.allDayItems,
+        ...holidayItems,
+    ].sort((first, second) => compareAgendaItems(first, second, context)));
+    const meetings = calendar.timedItems.filter(
+        (item): item is PlanMeetingProjection => item.kind === 'meeting',
+    );
+    return Object.freeze({
+        items,
+        warnings: buildAgendaConflictWarnings(meetings),
+    });
+}
+
+/**
+ * Builds all unified PLAN projections from one revision-bound fact collection.
  * @param {PlanProjectionSource} source - Current-Term facts read from one DATA snapshot.
  * @param {PlanEvaluationContext} context - Single Workspace-owned evaluation context.
  * @param {PlanAttendanceAvailability} attendanceAvailability - Current ATTEND capability state.
- * @return {PlanProjection} Unified Today, Week, next-Task, and progress projection.
+ * @return {PlanProjection} Unified Calendar, Agenda, Today, Week, TBA, next-Task, and progress projection.
  */
 export function buildPlanProjection(
     source: PlanProjectionSource,
@@ -569,7 +929,18 @@ export function buildPlanProjection(
     const weekHolidayRanges = Object.freeze(source.holidayRanges.filter(range => (
         range.endDate >= evaluationContext.requestedWindow.startDate
         && range.startDate <= evaluationContext.requestedWindow.endDate
+    )).sort((first, second) => (
+        compareCanonicalText(first.startDate, second.startDate)
+        || compareCanonicalText(first.endDate, second.endDate)
+        || compareCanonicalText(first.holidayRangeId, second.holidayRangeId)
     )));
+    const calendar = buildCalendarWindowProjection(
+        tasks,
+        meetings,
+        weekHolidayRanges,
+        evaluationContext,
+    );
+    const agenda = buildAgendaProjection(calendar, weekHolidayRanges, evaluationContext);
     return Object.freeze({
         workspaceRevision: source.workspaceRevision,
         planEntityVersion: source.planEntityVersion,
@@ -592,7 +963,11 @@ export function buildPlanProjection(
             meetings: weekMeetings,
             holidayRanges: weekHolidayRanges,
         }),
-        tbaTasks: Object.freeze(tasks.filter(task => task.classification === 'TBA')),
+        calendar,
+        agenda,
+        tba: Object.freeze({
+            tasks: Object.freeze(tasks.filter(task => task.occurrence.deadline.kind === 'tba')),
+        }),
         next: Object.freeze({
             small: buildNextTask(tasks, 'small', evaluationContext),
             large: buildNextTask(tasks, 'large', evaluationContext),
@@ -621,6 +996,43 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
             const descriptor = descriptors[key];
             return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
         });
+}
+
+/**
+ * Checks that an array is dense and carries no unknown own properties.
+ * @param {unknown} value - Candidate DTO array.
+ * @return {boolean} Whether only length and enumerable data indices are present.
+ */
+function isExactDataArray(value: unknown): value is unknown[] {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+        return false;
+    }
+    const ownKeys = Reflect.ownKeys(value);
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+    if (lengthDescriptor === undefined
+        || !('value' in lengthDescriptor)
+        || lengthDescriptor.value !== value.length
+        || lengthDescriptor.enumerable
+        || ownKeys.length !== value.length + 1) {
+        return false;
+    }
+    return ownKeys.every(key => {
+        if (key === 'length') {
+            return true;
+        }
+        if (typeof key !== 'string') {
+            return false;
+        }
+        const index = Number(key);
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        return Number.isSafeInteger(index)
+            && index >= 0
+            && index < value.length
+            && String(index) === key
+            && descriptor !== undefined
+            && 'value' in descriptor
+            && descriptor.enumerable;
+    });
 }
 
 function isTermProjection(value: unknown): value is TermProjection {
@@ -715,7 +1127,10 @@ function sameDataValue(
     activeFirst.add(first);
     activeSecond.add(second);
     try {
-        if (Array.isArray(first) && Array.isArray(second)) {
+        if (Array.isArray(first) || Array.isArray(second)) {
+            if (!isExactDataArray(first) || !isExactDataArray(second)) {
+                return false;
+            }
             return first.length === second.length
                 && first.every((value, index) => (
                     sameDataValue(value, second[index], activeFirst, activeSecond)
@@ -724,11 +1139,25 @@ function sameDataValue(
         if (!isPlainObject(first) || !isPlainObject(second)) {
             return false;
         }
-        const firstKeys = Object.keys(first).sort();
-        const secondKeys = Object.keys(second).sort();
+        const firstKeys = Reflect.ownKeys(first);
+        const secondKeys = Reflect.ownKeys(second);
         return firstKeys.length === secondKeys.length
-            && firstKeys.every((key, index) => key === secondKeys[index]
-                && sameDataValue(first[key], second[key], activeFirst, activeSecond));
+            && firstKeys.every(key => {
+                const firstDescriptor = Object.getOwnPropertyDescriptor(first, key);
+                const secondDescriptor = Object.getOwnPropertyDescriptor(second, key);
+                return firstDescriptor !== undefined
+                    && secondDescriptor !== undefined
+                    && 'value' in firstDescriptor
+                    && 'value' in secondDescriptor
+                    && firstDescriptor.enumerable
+                    && secondDescriptor.enumerable
+                    && sameDataValue(
+                        firstDescriptor.value,
+                        secondDescriptor.value,
+                        activeFirst,
+                        activeSecond,
+                    );
+            });
     }
     finally {
         activeFirst.delete(first);
@@ -752,7 +1181,9 @@ export function isPlanProjection(value: unknown): value is PlanProjection {
         'meetings',
         'today',
         'week',
-        'tbaTasks',
+        'calendar',
+        'agenda',
+        'tba',
         'next',
         'termProgress',
     ])
@@ -769,24 +1200,43 @@ export function isPlanProjection(value: unknown): value is PlanProjection {
             && value.attendance.availability !== 'unavailable')
         || value.attendance.todayMeetingCountBasis !== 'meeting-end-state'
         || !isTermProjection(value.term)
-        || !Array.isArray(value.tasks)
+        || !isExactDataArray(value.tasks)
         || !value.tasks.every(isPlanTaskProjection)
-        || !Array.isArray(value.meetings)
+        || !isExactDataArray(value.meetings)
         || !value.meetings.every(isPlanMeetingProjection)
         || !hasExactDataKeys(value.today, ['tasks', 'meetings', 'summary'])
-        || !Array.isArray(value.today.tasks)
+        || !isExactDataArray(value.today.tasks)
         || !value.today.tasks.every(isPlanTaskProjection)
-        || !Array.isArray(value.today.meetings)
+        || !isExactDataArray(value.today.meetings)
         || !value.today.meetings.every(isPlanMeetingProjection)
         || !hasExactDataKeys(value.week, ['window', 'tasks', 'meetings', 'holidayRanges'])
-        || !Array.isArray(value.week.tasks)
+        || !isExactDataArray(value.week.tasks)
         || !value.week.tasks.every(isPlanTaskProjection)
-        || !Array.isArray(value.week.meetings)
+        || !isExactDataArray(value.week.meetings)
         || !value.week.meetings.every(isPlanMeetingProjection)
-        || !Array.isArray(value.week.holidayRanges)
+        || !isExactDataArray(value.week.holidayRanges)
         || !value.week.holidayRanges.every(isHolidayRangeProjection)
-        || !Array.isArray(value.tbaTasks)
-        || !value.tbaTasks.every(isPlanTaskProjection)) {
+        || !hasExactDataKeys(value.calendar, [
+            'window',
+            'timedItems',
+            'allDayItems',
+            'holidaySegments',
+        ])
+        || !isMeetingOccurrenceWindow(value.calendar.window)
+        || !isExactDataArray(value.calendar.timedItems)
+        || !value.calendar.timedItems.every(item => (
+            isPlanTaskProjection(item) || isPlanMeetingProjection(item)
+        ))
+        || !isExactDataArray(value.calendar.allDayItems)
+        || !value.calendar.allDayItems.every(isPlanTaskProjection)
+        || !isExactDataArray(value.calendar.holidaySegments)
+        || !hasExactDataKeys(value.agenda, ['items', 'warnings'])
+        || !isExactDataArray(value.agenda.items)
+        || !isExactDataArray(value.agenda.warnings)
+        || value.agenda.warnings.length > MAX_MEETING_OVERLAP_WARNINGS
+        || !hasExactDataKeys(value.tba, ['tasks'])
+        || !isExactDataArray(value.tba.tasks)
+        || !value.tba.tasks.every(isPlanTaskProjection)) {
         return false;
     }
 
@@ -795,6 +1245,7 @@ export function isPlanProjection(value: unknown): value is PlanProjection {
         const expectedContext = createPlanEvaluationContext(
             candidate.evaluationContext.evaluatedAt,
             candidate.term.timeZone,
+            candidate.evaluationContext.requestedWindow,
         );
         const rebuilt = buildPlanProjection({
             workspaceRevision: candidate.workspaceRevision,

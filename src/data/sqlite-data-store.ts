@@ -2326,7 +2326,7 @@ class SqliteDataStoreImplementation {
     }
 
     /**
-     * Reads all facts required for Today, Week, TBA, next-Task, and Term progress from one snapshot.
+     * Reads all facts required for unified PLAN projections from one snapshot.
      * @param {ReadSnapshotOptions} options - Optional deterministic snapshot seam.
      * @return {PlanProjectionSource} Current-Term facts bound to one revision.
      */
