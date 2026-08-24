@@ -47,6 +47,15 @@ import {
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
 import {
+    normalizeCreateHolidayRangeCommand,
+    normalizeDeleteHolidayRangeCommand,
+    normalizeUpdateHolidayRangeCommand,
+    type CreateHolidayRangeCommand,
+    type DeleteHolidayRangeCommand,
+    type HolidayRangeCommand,
+    type UpdateHolidayRangeCommand,
+} from '../shared/workspace-holiday-contract';
+import {
     localDateInTermZone,
     normalizeCreateTermCommand,
     normalizeReconcileWorkspaceLifecycleCommand,
@@ -62,21 +71,25 @@ import {
     digestCancelMeetingOccurrence,
     digestChangeMeetingOccurrence,
     digestCreateCourseWithMeeting,
+    digestCreateHolidayRange,
     digestCreateTerm,
+    digestDeleteHolidayRange,
     digestReconcileWorkspaceLifecycle,
     digestRecordSetupDecision,
     digestRestoreTermAsCurrent,
     digestUpdateTermEndDate,
+    digestUpdateHolidayRange,
 } from './command-digest';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel6,
+    createSchemaLevel7,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
     migrateLevel4To5,
     migrateLevel5To6,
+    migrateLevel6To7,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -84,6 +97,7 @@ import {
     validateSchemaLevel4,
     validateSchemaLevel5,
     validateSchemaLevel6,
+    validateSchemaLevel7,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -133,7 +147,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 6 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 7 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -166,13 +180,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 6;
+        schemaLevel: 7;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 6;
+        schemaLevel: 7;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -223,9 +237,12 @@ type ReceiptEffect = Readonly<{
         | 'plan.course-created'
         | 'plan.meeting-series-created'
         | 'plan.meeting-occurrence-changed'
-        | 'plan.meeting-occurrence-cancelled';
+        | 'plan.meeting-occurrence-cancelled'
+        | 'plan.holiday-range-created'
+        | 'plan.holiday-range-updated'
+        | 'plan.holiday-range-deleted';
     entity: Readonly<{
-        kind: 'workspace-setup' | 'term' | 'course' | 'meeting-series';
+        kind: 'workspace-setup' | 'term' | 'course' | 'meeting-series' | 'holiday-range';
         id: string;
         version: string;
     }>;
@@ -259,7 +276,7 @@ type ConflictProblem = Readonly<{
     context: Readonly<{
         revision: string;
         entityVersions: readonly [Readonly<{
-            kind: 'workspace-setup' | 'plan-state' | 'meeting-series';
+            kind: 'workspace-setup' | 'plan-state' | 'meeting-series' | 'holiday-range';
             id: string;
             version: string;
         }>];
@@ -338,6 +355,7 @@ type WorkspaceDataCommand =
     | CreateTermCommand
     | AcceptedCreateCourseWithMeetingCommand
     | MeetingOccurrenceMutationCommand
+    | HolidayRangeCommand
     | TermMutationCommand;
 
 type CurrentVersions = Readonly<{
@@ -562,6 +580,12 @@ type StoredConflictMeetingOverride = StoredMeetingOverride & Readonly<{
     meeting_series_id: string;
 }>;
 
+type StoredHolidayRange = Readonly<{
+    holiday_range_id: string;
+    start_date: string;
+    end_date: string;
+}>;
+
 type ConflictMeetingObject = Readonly<{
     courseId: string | null;
     courseCode: string;
@@ -582,6 +606,7 @@ type ConflictMeetingOccurrence = Readonly<{
  * @param {string} termZone - Explicit TermZone owning every local time in the series.
  * @param {readonly StoredMeetingSegment[]} segments - Ordered effective rule segments.
  * @param {readonly StoredMeetingOverride[]} overrides - Replacements and cancellations by anchor.
+ * @param {readonly StoredHolidayRange[]} holidayRanges - Active inclusive suppression ranges.
  * @param {MeetingOccurrenceWindow} requestedWindow - Bounded physical start-date window.
  * @return {readonly ConflictMeetingOccurrence[]} Effective scheduled occurrences only.
  */
@@ -590,6 +615,7 @@ function expandConflictMeetingOccurrences(
     termZone: string,
     segments: readonly StoredMeetingSegment[],
     overrides: readonly StoredMeetingOverride[],
+    holidayRanges: readonly StoredHolidayRange[],
     requestedWindow: MeetingOccurrenceWindow,
 ): readonly ConflictMeetingOccurrence[] {
     validateMeetingSegmentSequence(segments);
@@ -606,10 +632,11 @@ function expandConflictMeetingOccurrences(
             }
             seenAnchors.add(anchor);
             const override = overrideByAnchor.get(anchor);
+            const baseDate = occurrenceDate(anchor, segment.weekday);
             const weekday = override?.override_kind === 'replaced'
                 ? override.weekday!
                 : segment.weekday;
-            if (!isActiveLogicalAnchor(segment, anchor, weekday)
+            if (!isActiveLogicalAnchor(segment, anchor, segment.weekday)
                 || override?.override_kind === 'cancelled') {
                 continue;
             }
@@ -626,9 +653,14 @@ function expandConflictMeetingOccurrences(
                 ? override.end_day_offset!
                 : segment.end_day_offset;
             const date = occurrenceDate(anchor, weekday);
-            if (date === null
+            if (baseDate === null
+                || date === null
                 || date < requestedWindow.startDate
-                || date > requestedWindow.endDate) {
+                || date > requestedWindow.endDate
+                || (override?.override_kind !== 'replaced'
+                    && holidayRanges.some(range => (
+                        baseDate >= range.start_date && baseDate <= range.end_date
+                    )))) {
                 continue;
             }
             occurrences.push(Object.freeze({
@@ -713,6 +745,42 @@ function meetingOverlapWarnings(
         || first.existing.occurrenceId.meetingSeriesId.localeCompare(
             second.existing.occurrenceId.meetingSeriesId,
         )
+    )));
+}
+
+/**
+ * Returns an order-independent identity for one derived Meeting conflict pair.
+ * @param {MeetingOverlapWarning} warning - Derived overlap warning.
+ * @return {string} Stable pair identity independent of proposed/existing ordering.
+ */
+function meetingOverlapWarningKey(warning: MeetingOverlapWarning): string {
+    return [
+        `${warning.proposed.occurrenceId.meetingSeriesId}:${warning.proposed.occurrenceId.originalLogicalAnchor}`,
+        `${warning.existing.occurrenceId.meetingSeriesId}:${warning.existing.occurrenceId.originalLogicalAnchor}`,
+    ].sort().join('|');
+}
+
+/**
+ * Derives all pairwise warnings in one bounded effective schedule.
+ * @param {string} commandId - Holiday mutation command identity used by warning DTOs.
+ * @param {readonly ConflictMeetingOccurrence[]} occurrences - Effective scheduled occurrences.
+ * @return {readonly MeetingOverlapWarning[]} Deterministically ordered positive overlaps.
+ */
+function meetingScheduleOverlapWarnings(
+    commandId: string,
+    occurrences: readonly ConflictMeetingOccurrence[],
+): readonly MeetingOverlapWarning[] {
+    const warnings: MeetingOverlapWarning[] = [];
+    for (let index = 0; index < occurrences.length; index += 1) {
+        warnings.push(...meetingOverlapWarnings(
+            commandId,
+            [occurrences[index]!],
+            occurrences.slice(index + 1),
+        ));
+    }
+    return Object.freeze(warnings.sort((first, second) => (
+        first.overlap.startInstant.localeCompare(second.overlap.startInstant)
+        || meetingOverlapWarningKey(first).localeCompare(meetingOverlapWarningKey(second))
     )));
 }
 
@@ -1045,6 +1113,12 @@ function isTermMutationCommand(command: WorkspaceDataCommand): command is TermMu
         || command.intent.kind === 'plan.restore-term-as-current';
 }
 
+function isHolidayRangeCommand(command: WorkspaceDataCommand): command is HolidayRangeCommand {
+    return command.intent.kind === 'plan.create-holiday-range'
+        || command.intent.kind === 'plan.update-holiday-range'
+        || command.intent.kind === 'plan.delete-holiday-range';
+}
+
 function freezeTuple<T>(value: [T]): readonly [T] {
     return Object.freeze(value);
 }
@@ -1178,6 +1252,38 @@ function meetingSeriesConflictResult(
             entityVersions: freezeTuple([entityVersion]),
         }),
         details: Object.freeze({ reason }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+/**
+ * Builds a stale-version conflict carrying the authoritative HolidayRange revision.
+ * @param {CurrentVersions} versions - Current Workspace and PLAN versions.
+ * @param {string} holidayRangeId - Conflicted HolidayRange identity.
+ * @param {bigint} holidayRangeVersion - Current HolidayRange entity version.
+ * @return {DataCommitResult} Unchanged conflict result.
+ */
+function holidayRangeConflictResult(
+    versions: CurrentVersions,
+    holidayRangeId: string,
+    holidayRangeVersion: bigint,
+): DataCommitResult {
+    const entityVersion = Object.freeze({
+        kind: 'holiday-range' as const,
+        id: holidayRangeId,
+        version: holidayRangeVersion.toString(),
+    });
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context: Object.freeze({
+            revision: versions.revision.toString(),
+            entityVersions: freezeTuple([entityVersion]),
+        }),
+        details: Object.freeze({ reason: 'expected-entity-version' as const }),
     });
     return Object.freeze({ ok: false as const, problem });
 }
@@ -1434,6 +1540,30 @@ class SqliteDataStoreImplementation {
                 throw new Error('Current Term is missing');
             }
 
+            const holidayStatement = this.database.prepare(`
+                SELECT holiday_range_id, term_id, name, start_date, end_date, entity_version
+                FROM holiday_ranges
+                WHERE tombstoned = 0
+                ORDER BY term_id, start_date, holiday_range_id
+            `);
+            holidayStatement.setReadBigInts(true);
+            const holidayRows = holidayStatement.all() as Array<{
+                holiday_range_id: string;
+                term_id: string;
+                name: string;
+                start_date: string;
+                end_date: string;
+                entity_version: bigint;
+            }>;
+            const holidayRanges = Object.freeze(holidayRows.map(row => Object.freeze({
+                holidayRangeId: row.holiday_range_id,
+                termId: row.term_id,
+                name: row.name,
+                startDate: row.start_date,
+                endDate: row.end_date,
+                entityVersion: row.entity_version.toString(),
+            })));
+
             const courseStatement = this.database.prepare(`
                 SELECT
                     courses.course_id,
@@ -1587,6 +1717,7 @@ class SqliteDataStoreImplementation {
                 currentTerm,
                 terms,
                 courses,
+                holidayRanges,
             });
         }
         catch (error) {
@@ -1596,15 +1727,32 @@ class SqliteDataStoreImplementation {
     }
 
     /**
+     * Reads active named ranges for deterministic Meeting suppression inside the current snapshot.
+     * @param {string} termId - Owning Term identity.
+     * @return {readonly StoredHolidayRange[]} Inclusive active ranges in deterministic order.
+     */
+    private readActiveHolidayRanges(termId: string): readonly StoredHolidayRange[] {
+        return this.database.prepare(`
+            SELECT holiday_range_id, start_date, end_date
+            FROM holiday_ranges
+            WHERE term_id = ? AND tombstoned = 0
+            ORDER BY start_date, holiday_range_id
+        `).all(termId) as StoredHolidayRange[];
+    }
+
+    /**
      * Reads and expands all retained Meeting occurrences from the caller's active snapshot.
      * @param {MeetingOccurrenceWindow} requestedWindow - Bounded physical start-date window.
      * @param {string} termId - Owning Term whose occurrences can share one schedule.
+     * @param {readonly StoredHolidayRange[]} candidateHolidayRanges - Optional proposed active ranges.
      * @return {readonly ConflictMeetingOccurrence[]} Effective scheduled occurrences across PLAN.
      */
     private readConflictMeetingOccurrences(
         requestedWindow: MeetingOccurrenceWindow,
         termId: string,
+        candidateHolidayRanges?: readonly StoredHolidayRange[],
     ): readonly ConflictMeetingOccurrence[] {
+        const holidayRanges = candidateHolidayRanges ?? this.readActiveHolidayRanges(termId);
         const segmentRows = this.database.prepare(`
             SELECT
                 meeting_series.meeting_series_id,
@@ -1686,6 +1834,7 @@ class SqliteDataStoreImplementation {
                 first.term_zone,
                 rows,
                 overrideRows.filter(override => override.meeting_series_id === meetingSeriesId),
+                holidayRanges,
                 requestedWindow,
             ));
         }
@@ -1731,6 +1880,7 @@ class SqliteDataStoreImplementation {
                 SELECT
                     meeting_series.course_id,
                     meeting_series.entity_version,
+                    terms.term_id,
                     terms.time_zone,
                     workspace_state.revision,
                     plan_state.plan_entity_version
@@ -1745,6 +1895,7 @@ class SqliteDataStoreImplementation {
             const series = seriesStatement.get(meetingSeriesId) as {
                 course_id: string;
                 entity_version: bigint;
+                term_id: string;
                 time_zone: string;
                 revision: bigint;
                 plan_entity_version: bigint;
@@ -1752,6 +1903,7 @@ class SqliteDataStoreImplementation {
             if (!series) {
                 throw new TypeError('Meeting series does not exist');
             }
+            const holidayRanges = this.readActiveHolidayRanges(series.term_id);
 
             const segmentRows = this.database.prepare(`
                 SELECT
@@ -1839,7 +1991,7 @@ class SqliteDataStoreImplementation {
                 occurrenceId: MeetingOccurrenceId;
                 segmentId: string;
                 date: string;
-                status: 'scheduled' | 'cancelled';
+                status: 'scheduled' | 'cancelled' | 'holiday-suppressed';
                 overrideKind: 'replaced' | 'cancelled' | null;
                 type: MeetingTypeCode;
                 weekday: MeetingWeekday;
@@ -1860,17 +2012,23 @@ class SqliteDataStoreImplementation {
                     const override = overrides.get(anchor);
                     const futureChangeApplies = futureChange !== null
                         && anchor >= futureChange.originalLogicalAnchor;
-                    if (!isActiveLogicalAnchor(
-                        storedSegment,
-                        anchor,
-                        futureChangeApplies ? futureChange.replacement.weekday : storedSegment.weekday,
-                    )) {
-                        continue;
-                    }
                     const retainedOverride = futureChangeApplies
                         && anchor === futureChange.originalLogicalAnchor
                         ? undefined
                         : override;
+                    const baseRule: MeetingRuleReplacement = futureChangeApplies
+                        ? futureChange.replacement
+                        : {
+                            type: segment.type,
+                            weekday: segment.weekday,
+                            localStart: segment.localStart,
+                            localEnd: segment.localEnd,
+                            endDayOffset: segment.endDayOffset,
+                            location: segment.location,
+                        };
+                    if (!isActiveLogicalAnchor(storedSegment, anchor, baseRule.weekday)) {
+                        continue;
+                    }
                     const replacement: MeetingRuleReplacement = retainedOverride?.override_kind === 'replaced'
                         ? {
                             type: retainedOverride.meeting_type!,
@@ -1883,18 +2041,11 @@ class SqliteDataStoreImplementation {
                                 retainedOverride.location_value,
                             ),
                         }
-                        : futureChangeApplies
-                            ? futureChange.replacement
-                            : {
-                                type: segment.type,
-                                weekday: segment.weekday,
-                                localStart: segment.localStart,
-                                localEnd: segment.localEnd,
-                                endDayOffset: segment.endDayOffset,
-                                location: segment.location,
-                            };
+                        : baseRule;
+                    const baseDate = occurrenceDate(anchor, baseRule.weekday);
                     const date = occurrenceDate(anchor, replacement.weekday);
-                    if (date === null
+                    if (baseDate === null
+                        || date === null
                         || date < requestedWindow.startDate
                         || date > requestedWindow.endDate) {
                         continue;
@@ -1910,7 +2061,15 @@ class SqliteDataStoreImplementation {
                         occurrenceId: deriveMeetingOccurrenceId(meetingSeriesId, anchor),
                         segmentId: segment.segmentId,
                         date,
-                        status: retainedOverride?.override_kind === 'cancelled' ? 'cancelled' : 'scheduled',
+                        status: retainedOverride?.override_kind === 'cancelled'
+                            ? 'cancelled'
+                            : retainedOverride?.override_kind === 'replaced'
+                                ? 'scheduled'
+                                : holidayRanges.some(range => (
+                                    baseDate >= range.start_date && baseDate <= range.end_date
+                                ))
+                                    ? 'holiday-suppressed'
+                                    : 'scheduled',
                         overrideKind: retainedOverride?.override_kind ?? null,
                         type: replacement.type,
                         weekday: replacement.weekday,
@@ -2259,6 +2418,15 @@ class SqliteDataStoreImplementation {
             case 'plan.restore-term-as-current':
                 command = normalizeRestoreTermAsCurrentCommand(candidate);
                 break;
+            case 'plan.create-holiday-range':
+                command = normalizeCreateHolidayRangeCommand(candidate);
+                break;
+            case 'plan.update-holiday-range':
+                command = normalizeUpdateHolidayRangeCommand(candidate);
+                break;
+            case 'plan.delete-holiday-range':
+                command = normalizeDeleteHolidayRangeCommand(candidate);
+                break;
             default:
                 command = normalizeRecordSetupDecisionCommand(candidate);
         }
@@ -2458,6 +2626,9 @@ class SqliteDataStoreImplementation {
         }
         if (isTermMutationCommand(command)) {
             return this.commitTermMutationSynchronously(command, options);
+        }
+        if (isHolidayRangeCommand(command)) {
+            return this.commitHolidayRangeSynchronously(command, options);
         }
         return this.commitTermSynchronously(command, options);
     }
@@ -2889,6 +3060,7 @@ class SqliteDataStoreImplementation {
                         : null,
                 })],
                 [],
+                this.readActiveHolidayRanges(term.term_id),
                 Object.freeze({ startDate: effectiveStartDate, endDate: effectiveEndDate }),
             );
             const overlapWindow = Object.freeze({
@@ -3337,6 +3509,7 @@ class SqliteDataStoreImplementation {
                                 : null,
                         })],
                         retainedOverrides,
+                        this.readActiveHolidayRanges(series.term_id),
                         Object.freeze({
                             startDate: segment.resolved_start_date,
                             endDate: segment.resolved_end_date,
@@ -3626,6 +3799,332 @@ class SqliteDataStoreImplementation {
         }
     }
 
+    /**
+     * Commits one named HolidayRange lifecycle transition and its durable receipt atomically.
+     * @param {HolidayRangeCommand} command - Normalized create, update, or delete command.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {DataCommitResult} Committed receipt or unchanged structured problem.
+     */
+    private commitHolidayRangeSynchronously(
+        command: HolidayRangeCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = command.intent.kind === 'plan.create-holiday-range'
+            ? digestCreateHolidayRange(command as CreateHolidayRangeCommand)
+            : command.intent.kind === 'plan.update-holiday-range'
+                ? digestUpdateHolidayRange(command as UpdateHolidayRangeCommand)
+                : digestDeleteHolidayRange(command as DeleteHolidayRangeCommand);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+
+            const existing = command.intent.kind === 'plan.create-holiday-range'
+                ? undefined
+                : (() => {
+                    const statement = this.database.prepare(`
+                        SELECT
+                            term_id,
+                            name,
+                            start_date,
+                            end_date,
+                            tombstoned,
+                            entity_version
+                        FROM holiday_ranges
+                        WHERE holiday_range_id = ?
+                    `);
+                    statement.setReadBigInts(true);
+                    return statement.get(command.intent.payload.holidayRangeId) as {
+                        term_id: string;
+                        name: string;
+                        start_date: string;
+                        end_date: string;
+                        tombstoned: bigint;
+                        entity_version: bigint;
+                    } | undefined;
+                })();
+            if (command.intent.kind !== 'plan.create-holiday-range') {
+                if (!existing || existing.tombstoned !== 0n) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('HolidayRange is not editable');
+                }
+                const expectedHolidayRangeVersion = (command as (
+                    UpdateHolidayRangeCommand | DeleteHolidayRangeCommand
+                )).expectedHolidayRangeVersion;
+                if (existing.entity_version !== BigInt(expectedHolidayRangeVersion)) {
+                    this.rollbackOrRequireReopen();
+                    return holidayRangeConflictResult(
+                        versions,
+                        command.intent.payload.holidayRangeId,
+                        existing.entity_version,
+                    );
+                }
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const termId = command.intent.kind === 'plan.create-holiday-range'
+                ? command.intent.payload.termId
+                : existing!.term_id;
+            const term = this.database.prepare(`
+                SELECT start_date, end_date
+                FROM terms
+                WHERE term_id = ?
+            `).get(termId) as { start_date: string; end_date: string } | undefined;
+            if (!term) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('HolidayRange owning Term does not exist');
+            }
+            if (command.intent.kind !== 'plan.delete-holiday-range'
+                && (command.intent.payload.startDate < term.start_date
+                    || command.intent.payload.endDate > term.end_date)) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('HolidayRange falls outside its Term');
+            }
+            if (command.intent.kind !== 'plan.create-holiday-range') {
+                const mutation = command as UpdateHolidayRangeCommand | DeleteHolidayRangeCommand;
+                if (mutation.overlapDecision === 'review') {
+                    const activeHolidayRanges = this.readActiveHolidayRanges(termId);
+                    const holidayRangeId = mutation.intent.payload.holidayRangeId;
+                    let candidateHolidayRanges: readonly StoredHolidayRange[];
+                    let changedStartDate = existing!.start_date;
+                    let changedEndDate = existing!.end_date;
+                    if (mutation.intent.kind === 'plan.update-holiday-range') {
+                        const update = mutation as UpdateHolidayRangeCommand;
+                        candidateHolidayRanges = activeHolidayRanges.map(range => (
+                            range.holiday_range_id === holidayRangeId
+                                ? Object.freeze({
+                                    holiday_range_id: range.holiday_range_id,
+                                    start_date: update.intent.payload.startDate,
+                                    end_date: update.intent.payload.endDate,
+                                })
+                                : range
+                        ));
+                        changedStartDate = update.intent.payload.startDate < changedStartDate
+                            ? update.intent.payload.startDate
+                            : changedStartDate;
+                        changedEndDate = update.intent.payload.endDate > changedEndDate
+                            ? update.intent.payload.endDate
+                            : changedEndDate;
+                    }
+                    else {
+                        candidateHolidayRanges = activeHolidayRanges.filter(range => (
+                            range.holiday_range_id !== holidayRangeId
+                        ));
+                    }
+                    const conflictWindow = Object.freeze({
+                        startDate: addClampedLocalDateDays(changedStartDate, -3),
+                        endDate: addClampedLocalDateDays(changedEndDate, 3),
+                    });
+                    const beforeWarnings = meetingScheduleOverlapWarnings(
+                        command.commandId,
+                        this.readConflictMeetingOccurrences(
+                            conflictWindow,
+                            termId,
+                            activeHolidayRanges,
+                        ),
+                    );
+                    const existingWarningKeys = new Set(beforeWarnings.map(meetingOverlapWarningKey));
+                    const introducedWarnings = meetingScheduleOverlapWarnings(
+                        command.commandId,
+                        this.readConflictMeetingOccurrences(
+                            conflictWindow,
+                            termId,
+                            candidateHolidayRanges,
+                        ),
+                    ).filter(warning => !existingWarningKeys.has(meetingOverlapWarningKey(warning)))
+                        .slice(0, MAX_MEETING_OVERLAP_WARNINGS);
+                    if (introducedWarnings.length > 0) {
+                        this.rollbackOrRequireReopen();
+                        return meetingOverlapDecisionRequiredResult(
+                            versions.revision,
+                            Object.freeze(introducedWarnings),
+                        );
+                    }
+                }
+            }
+            const existingVersion = existing?.entity_version ?? 0n;
+            if (versions.revision === SQLITE_INTEGER_MAX
+                || versions.planVersion === SQLITE_INTEGER_MAX
+                || existingVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const holidayRangeId = command.intent.kind === 'plan.create-holiday-range'
+                ? randomUUID()
+                : command.intent.payload.holidayRangeId;
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const newHolidayRangeVersion = existingVersion + 1n;
+            if (command.intent.kind === 'plan.create-holiday-range') {
+                this.database.prepare(`
+                    INSERT INTO holiday_ranges (
+                        holiday_range_id,
+                        term_id,
+                        name,
+                        start_date,
+                        end_date,
+                        tombstoned,
+                        entity_version
+                    ) VALUES (?, ?, ?, ?, ?, 0, 1)
+                `).run(
+                    holidayRangeId,
+                    termId,
+                    command.intent.payload.name,
+                    command.intent.payload.startDate,
+                    command.intent.payload.endDate,
+                );
+            }
+            else if (command.intent.kind === 'plan.update-holiday-range') {
+                this.database.prepare(`
+                    UPDATE holiday_ranges
+                    SET name = ?, start_date = ?, end_date = ?, entity_version = ?
+                    WHERE holiday_range_id = ? AND tombstoned = 0
+                `).run(
+                    command.intent.payload.name,
+                    command.intent.payload.startDate,
+                    command.intent.payload.endDate,
+                    newHolidayRangeVersion,
+                    holidayRangeId,
+                );
+            }
+            else {
+                this.database.prepare(`
+                    UPDATE holiday_ranges
+                    SET tombstoned = 1, entity_version = ?
+                    WHERE holiday_range_id = ? AND tombstoned = 0
+                `).run(newHolidayRangeVersion, holidayRangeId);
+            }
+            this.database.prepare(`
+                UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
+            `).run(newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (?, ?, 1, 'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed')
+            `).run(command.commandId, command.intent.kind, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            const effectCode: ReceiptEffect['code'] = command.intent.kind === 'plan.create-holiday-range'
+                ? 'plan.holiday-range-created'
+                : command.intent.kind === 'plan.update-holiday-range'
+                    ? 'plan.holiday-range-updated'
+                    : 'plan.holiday-range-deleted';
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, ?, 'holiday-range', ?, ?)
+            `).run(command.commandId, effectCode, holidayRangeId, newHolidayRangeVersion);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
     private commitTermMutationSynchronously(
         command: TermMutationCommand,
         options: CommitOptions,
@@ -3732,6 +4231,17 @@ class SqliteDataStoreImplementation {
                 if (newEndDate < termRow.start_date) {
                     this.rollbackOrRequireReopen();
                     throw new TypeError('Term end date must not precede its start date');
+                }
+
+                const strandedHolidayRange = this.database.prepare(`
+                    SELECT holiday_range_id
+                    FROM holiday_ranges
+                    WHERE term_id = ? AND tombstoned = 0 AND end_date > ?
+                    LIMIT 1
+                `).get(termRow.term_id, newEndDate) as { holiday_range_id: string } | undefined;
+                if (strandedHolidayRange) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Corrected Term range would exclude a HolidayRange');
                 }
 
                 const courseStatement = this.database.prepare(`
@@ -4129,7 +4639,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel6(stagingDatabase);
+        createSchemaLevel7(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -4161,7 +4671,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel6(validationDatabase);
+            validateSchemaLevel7(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -4170,7 +4680,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel6(activeDatabase);
+        const facts = validateSchemaLevel7(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -4243,7 +4753,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel6(validationDatabase);
+        const facts = validateSchemaLevel7(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -4293,7 +4803,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel6(activeDatabase);
+        const facts = validateSchemaLevel7(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -4333,7 +4843,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 2
                 && identity.schemaLevel !== 3
                 && identity.schemaLevel !== 4
-                && identity.schemaLevel !== 5)) {
+                && identity.schemaLevel !== 5
+                && identity.schemaLevel !== 6)) {
             closeBestEffort(source);
             return opened;
         }
@@ -4354,8 +4865,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 4) {
             validateSchemaLevel4(source);
         }
-        else {
+        else if (identity.schemaLevel === 5) {
             validateSchemaLevel5(source);
+        }
+        else {
+            validateSchemaLevel6(source);
         }
         const safetyDirectory = join(
             dataSlotsRoot,
@@ -4378,8 +4892,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 4) {
                 validateSchemaLevel4(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 5) {
                 validateSchemaLevel5(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel6(safetyDatabase);
             }
         }
         finally {
@@ -4421,10 +4938,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel4To5(maintenance);
                         validateSchemaLevel5(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 5) {
                         validateSchemaLevel5(maintenance);
                         migrateLevel5To6(maintenance);
                         validateSchemaLevel6(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel6(maintenance);
+                        migrateLevel6To7(maintenance);
+                        validateSchemaLevel7(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -4448,7 +4970,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel6(maintenance);
+            validateSchemaLevel7(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

@@ -55,6 +55,14 @@ const COURSE = {
         entityVersion: '1',
     }],
 } as const;
+const HOLIDAY_RANGE = {
+    holidayRangeId: '55555555-5555-4555-8555-555555555555',
+    termId: TERM.termId,
+    name: 'Reading Week',
+    startDate: '2026-10-12',
+    endDate: '2026-10-16',
+    entityVersion: '1',
+} as const;
 
 function outcomeWithCourse(course: unknown): unknown {
     return {
@@ -72,6 +80,7 @@ function outcomeWithCourse(course: unknown): unknown {
                 currentTerm: TERM,
                 terms: [TERM],
                 courses: [course],
+                holidayRanges: [HOLIDAY_RANGE],
             },
         },
     };
@@ -88,6 +97,27 @@ function accepts(course: unknown): boolean {
 
 test('A-COURSE-007: Workspace projection accepts exact inherited owner boundaries', () => {
     assert.equal(accepts(COURSE), true);
+});
+
+test('A-TERM-004: Workspace projection validates active HolidayRange ownership and bounds', () => {
+    assert.equal(accepts(COURSE), true);
+    const base = outcomeWithCourse(COURSE) as {
+        value: { projection: { holidayRanges: unknown[] } };
+    };
+    for (const holidayRange of [
+        { ...HOLIDAY_RANGE, termId: '66666666-6666-4666-8666-666666666666' },
+        { ...HOLIDAY_RANGE, startDate: '2026-08-31' },
+        { ...HOLIDAY_RANGE, endDate: '2026-12-21' },
+        { ...HOLIDAY_RANGE, tombstoned: false },
+    ]) {
+        assert.equal(isWorkspaceSetupOutcome({
+            ...base,
+            value: {
+                ...base.value,
+                projection: { ...base.value.projection, holidayRanges: [holidayRange] },
+            },
+        }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+    }
 });
 
 test('A-COURSE-007: Workspace projection rejects dangling and out-of-owner ranges', () => {

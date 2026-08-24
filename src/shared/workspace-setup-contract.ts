@@ -32,6 +32,16 @@ import {
     isCanonicalUuid,
 } from './workspace-data-contract';
 import {
+    isHolidayRangeProjection,
+    normalizeCreateHolidayRangeCommand,
+    normalizeDeleteHolidayRangeCommand,
+    normalizeUpdateHolidayRangeCommand,
+    type CreateHolidayRangeCommand,
+    type DeleteHolidayRangeCommand,
+    type HolidayRangeProjection,
+    type UpdateHolidayRangeCommand,
+} from './workspace-holiday-contract';
+import {
     normalizeCreateTermCommand,
     normalizeUpdateTermEndDateCommand,
     type CreateTermCommand,
@@ -65,6 +75,21 @@ export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
 export type UpdateTermEndDateRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.term.update-end-date';
     command: UpdateTermEndDateCommand;
+}>;
+
+export type CreateHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.holiday-range.create';
+    command: CreateHolidayRangeCommand;
+}>;
+
+export type UpdateHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.holiday-range.update';
+    command: UpdateHolidayRangeCommand;
+}>;
+
+export type DeleteHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.holiday-range.delete';
+    command: DeleteHolidayRangeCommand;
 }>;
 
 export type RestoreTermAsCurrentRequestCommand = Readonly<{
@@ -116,6 +141,9 @@ export type WorkspaceSetupRequest =
     | SetupQueryRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
+    | CreateHolidayRangeRequest
+    | UpdateHolidayRangeRequest
+    | DeleteHolidayRangeRequest
     | RestoreTermAsCurrentRequest
     | CreateCourseWithMeetingRequest
     | MeetingSeriesQueryRequest
@@ -131,9 +159,12 @@ type WorkspaceCommandEffect = Readonly<{
         | 'plan.course-created'
         | 'plan.meeting-series-created'
         | 'plan.meeting-occurrence-changed'
-        | 'plan.meeting-occurrence-cancelled';
+        | 'plan.meeting-occurrence-cancelled'
+        | 'plan.holiday-range-created'
+        | 'plan.holiday-range-updated'
+        | 'plan.holiday-range-deleted';
     entity: Readonly<{
-        kind: 'term' | 'course' | 'meeting-series';
+        kind: 'term' | 'course' | 'meeting-series' | 'holiday-range';
         id: string;
         version: string;
     }>;
@@ -360,6 +391,78 @@ export function makeUpdateTermEndDateRequest(
     };
 }
 
+/**
+ * Builds an exact named HolidayRange creation request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CreateHolidayRangeCommand} command - Candidate creation command.
+ * @return {CreateHolidayRangeRequest} Normalized Workspace request.
+ */
+export function makeCreateHolidayRangeRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CreateHolidayRangeCommand,
+): CreateHolidayRangeRequest {
+    return {
+        kind: 'workspace.holiday-range.create',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCreateHolidayRangeCommand(command),
+    };
+}
+
+/**
+ * Builds an exact named HolidayRange update request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {UpdateHolidayRangeCommand} command - Candidate update command.
+ * @return {UpdateHolidayRangeRequest} Normalized Workspace request.
+ */
+export function makeUpdateHolidayRangeRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: UpdateHolidayRangeCommand,
+): UpdateHolidayRangeRequest {
+    return {
+        kind: 'workspace.holiday-range.update',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeUpdateHolidayRangeCommand(command),
+    };
+}
+
+/**
+ * Builds an exact named HolidayRange deletion request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {DeleteHolidayRangeCommand} command - Candidate deletion command.
+ * @return {DeleteHolidayRangeRequest} Normalized Workspace request.
+ */
+export function makeDeleteHolidayRangeRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: DeleteHolidayRangeCommand,
+): DeleteHolidayRangeRequest {
+    return {
+        kind: 'workspace.holiday-range.delete',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeDeleteHolidayRangeCommand(command),
+    };
+}
+
 export function makeRestoreTermAsCurrentRequest(
     requestId: string,
     appBuildId: string,
@@ -550,6 +653,9 @@ export function isWorkspaceSetupRequest(
     if ((value.kind !== 'workspace.term.create'
             && value.kind !== 'workspace.term.update-end-date'
             && value.kind !== 'workspace.term.restore-as-current'
+            && value.kind !== 'workspace.holiday-range.create'
+            && value.kind !== 'workspace.holiday-range.update'
+            && value.kind !== 'workspace.holiday-range.delete'
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
             && value.kind !== 'workspace.meeting-occurrence.cancel')
@@ -573,6 +679,15 @@ export function isWorkspaceSetupRequest(
         }
         else if (value.kind === 'workspace.term.restore-as-current') {
             normalizeRestoreTermAsCurrentRequestCommand(value.command);
+        }
+        else if (value.kind === 'workspace.holiday-range.create') {
+            normalizeCreateHolidayRangeCommand(value.command);
+        }
+        else if (value.kind === 'workspace.holiday-range.update') {
+            normalizeUpdateHolidayRangeCommand(value.command);
+        }
+        else if (value.kind === 'workspace.holiday-range.delete') {
+            normalizeDeleteHolidayRangeCommand(value.command);
         }
         else if (value.kind === 'workspace.course.create-with-first-meeting') {
             normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
@@ -626,6 +741,7 @@ function isSetupProjection(value: unknown): boolean {
         'currentTerm',
         'terms',
         'courses',
+        'holidayRanges',
     ])
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
@@ -633,12 +749,15 @@ function isSetupProjection(value: unknown): boolean {
         || !Array.isArray(value.terms)
         || !value.terms.every(isTermProjection)
         || !Array.isArray(value.courses)
-        || !value.courses.every(isCourseProjection)) {
+        || !value.courses.every(isCourseProjection)
+        || !Array.isArray(value.holidayRanges)
+        || !value.holidayRanges.every(isHolidayRangeProjection)) {
         return false;
     }
 
     const terms = value.terms as TermProjection[];
     const courses = value.courses as CourseProjection[];
+    const holidayRanges = value.holidayRanges as HolidayRangeProjection[];
     if (value.currentTerm !== null) {
         const currentTerm = value.currentTerm as TermProjection;
         const storedTerm = terms.find(term => term.termId === currentTerm.termId);
@@ -654,6 +773,11 @@ function isSetupProjection(value: unknown): boolean {
             && (course.teachingRange.kind !== 'inherit-term'
                 || (course.teachingRange.startDate === term.startDate
                     && course.teachingRange.endDate === term.endDate));
+    }) && holidayRanges.every(holidayRange => {
+        const term = terms.find(candidate => candidate.termId === holidayRange.termId);
+        return term !== undefined
+            && holidayRange.startDate >= term.startDate
+            && holidayRange.endDate <= term.endDate;
     });
 }
 
@@ -684,7 +808,10 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
             || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
             || isEffect(value.effects[0], 'plan.term-restored-current', 'term')
             || isEffect(value.effects[0], 'plan.meeting-occurrence-changed', 'meeting-series')
-            || isEffect(value.effects[0], 'plan.meeting-occurrence-cancelled', 'meeting-series');
+            || isEffect(value.effects[0], 'plan.meeting-occurrence-cancelled', 'meeting-series')
+            || isEffect(value.effects[0], 'plan.holiday-range-created', 'holiday-range')
+            || isEffect(value.effects[0], 'plan.holiday-range-updated', 'holiday-range')
+            || isEffect(value.effects[0], 'plan.holiday-range-deleted', 'holiday-range');
     }
     return isEffect(value.effects[0], 'plan.course-created', 'course')
         && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');

@@ -79,7 +79,7 @@ export type MeetingOccurrenceProjection = Readonly<{
     occurrenceId: MeetingOccurrenceId;
     segmentId: string;
     date: string;
-    status: 'scheduled' | 'cancelled';
+    status: 'scheduled' | 'cancelled' | 'holiday-suppressed';
     overrideKind: 'replaced' | 'cancelled' | null;
     type: MeetingTypeCode;
     weekday: MeetingWeekday;
@@ -1190,7 +1190,8 @@ function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurren
     }
     return (value.status === 'scheduled'
         && (value.overrideKind === null || value.overrideKind === 'replaced'))
-        || (value.status === 'cancelled' && value.overrideKind === 'cancelled');
+        || (value.status === 'cancelled' && value.overrideKind === 'cancelled')
+        || (value.status === 'holiday-suppressed' && value.overrideKind === null);
 }
 
 /**
@@ -1231,7 +1232,8 @@ function isMeetingOccurrenceImpactOccurrenceProjection(
     }
     return (value.status === 'scheduled'
         && (value.overrideKind === null || value.overrideKind === 'replaced'))
-        || (value.status === 'cancelled' && value.overrideKind === 'cancelled');
+        || (value.status === 'cancelled' && value.overrideKind === 'cancelled')
+        || (value.status === 'holiday-suppressed' && value.overrideKind === null);
 }
 
 /**

@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 6;
+export const CURRENT_SCHEMA_LEVEL = 7;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -29,6 +29,7 @@ const currentTermIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_term_id');
 const courseIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'course_id');
 const meetingSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_series_id');
 const meetingSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_segment_id');
+const holidayRangeIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'holiday_range_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -658,6 +659,51 @@ const LEVEL_6_DDL = LEVEL_5_DDL
     .replace(LEVEL_5_RECEIPT_DDL, LEVEL_6_RECEIPT_DDL)
     .replace(LEVEL_5_PLAN_DDL, LEVEL_6_PLAN_DDL);
 
+const LEVEL_7_RECEIPT_DDL = LEVEL_6_RECEIPT_DDL
+    .replace(
+        "                'plan.cancel-meeting-occurrence'",
+        `                'plan.cancel-meeting-occurrence',
+                'plan.create-holiday-range',
+                'plan.update-holiday-range',
+                'plan.delete-holiday-range'`,
+    )
+    .replace(
+        `            OR (effect_code = 'plan.meeting-occurrence-cancelled' AND entity_kind = 'meeting-series')`,
+        `            OR (effect_code = 'plan.meeting-occurrence-cancelled' AND entity_kind = 'meeting-series')
+            OR (effect_code = 'plan.holiday-range-created' AND entity_kind = 'holiday-range')
+            OR (effect_code = 'plan.holiday-range-updated' AND entity_kind = 'holiday-range')
+            OR (effect_code = 'plan.holiday-range-deleted' AND entity_kind = 'holiday-range')`,
+    );
+
+const LEVEL_7_HOLIDAY_DDL = `
+    CREATE TABLE holiday_ranges (
+        holiday_range_id TEXT PRIMARY KEY CHECK (${holidayRangeIdCheck}),
+        term_id TEXT NOT NULL CHECK (${termIdCheck}),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 120 AND name = trim(name)),
+        start_date TEXT NOT NULL CHECK (
+            length(start_date) = 10
+            AND substr(start_date, 5, 1) = '-'
+            AND substr(start_date, 8, 1) = '-'
+            AND start_date NOT GLOB '*[^0-9-]*'
+        ),
+        end_date TEXT NOT NULL CHECK (
+            length(end_date) = 10
+            AND substr(end_date, 5, 1) = '-'
+            AND substr(end_date, 8, 1) = '-'
+            AND end_date NOT GLOB '*[^0-9-]*'
+            AND end_date >= start_date
+        ),
+        tombstoned INTEGER NOT NULL CHECK (tombstoned IN (0, 1)),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        FOREIGN KEY (term_id) REFERENCES terms(term_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX holiday_ranges_by_term ON holiday_ranges(term_id);
+`;
+
+const LEVEL_7_DDL = LEVEL_6_DDL.replace(LEVEL_6_RECEIPT_DDL, LEVEL_7_RECEIPT_DDL)
+    + LEVEL_7_HOLIDAY_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -709,6 +755,15 @@ const TABLE_COLUMNS = {
         ['end_date', 'TEXT', 1, 0],
         ['time_zone', 'TEXT', 1, 0],
         ['archived', 'INTEGER', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
+    holiday_ranges: [
+        ['holiday_range_id', 'TEXT', 1, 1],
+        ['term_id', 'TEXT', 1, 0],
+        ['name', 'TEXT', 1, 0],
+        ['start_date', 'TEXT', 1, 0],
+        ['end_date', 'TEXT', 1, 0],
+        ['tombstoned', 'INTEGER', 1, 0],
         ['entity_version', 'INTEGER', 1, 0],
     ],
     plan_state: [
@@ -829,6 +884,7 @@ const FOREIGN_KEYS = {
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
     protection_watermarks: [['singleton', 'workspace_state', 'singleton']],
     terms: [],
+    holiday_ranges: [['term_id', 'terms', 'term_id']],
     plan_state: [
         ['current_term_id', 'terms', 'term_id'],
         ['singleton', 'workspace_state', 'singleton'],
@@ -861,6 +917,11 @@ const LEVEL_3_AND_4_TABLES = [
     'meeting_segments',
 ] as const;
 
+const LEVEL_5_AND_6_TABLES = [
+    ...LEVEL_3_AND_4_TABLES,
+    'meeting_occurrence_overrides',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -881,7 +942,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -892,6 +953,9 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     }
     if (level === 3 || level === 4) {
         return LEVEL_3_AND_4_TABLES;
+    }
+    if (level === 5 || level === 6) {
+        return LEVEL_5_AND_6_TABLES;
     }
     return Object.keys(TABLE_COLUMNS) as CurrentTable[];
 }
@@ -924,7 +988,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                     ? LEVEL_4_DDL
                     : level === 5
                         ? LEVEL_5_DDL
-                        : LEVEL_6_DDL;
+                        : level === 6
+                            ? LEVEL_6_DDL
+                            : LEVEL_7_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -1027,6 +1093,7 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
         courses: ['courses_by_term', 'term_id'],
         meeting_series: ['meeting_series_by_course', 'course_id'],
         meeting_segments: ['meeting_segments_by_series', 'meeting_series_id'],
+        holiday_ranges: ['holiday_ranges_by_term', 'term_id'],
     };
     const expectedIndex = indexByTable[table];
     const expectedIndexes = expectedIndex ? [[expectedIndex[0], 0, 'c', 0]] : [];
@@ -1723,6 +1790,53 @@ export function migrateLevel5To6(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Migrates level 6 to named inclusive HolidayRange storage while preserving receipts.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel6To7(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_6;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_6;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_6;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_7_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_6;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_6;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_6;
+
+        DROP TABLE receipt_effects_level_6;
+        DROP TABLE durable_followups_level_6;
+        DROP TABLE command_receipts_level_6;
+
+        ${LEVEL_7_HOLIDAY_DDL}
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 7;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -1745,12 +1859,21 @@ export function createSchemaLevel5(database: DatabaseSync): void {
 }
 
 /**
- * Creates the complete current level 6 schema in an empty database.
+ * Creates the retained level 6 schema in an empty database.
  * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
  * @return {void}
  */
 export function createSchemaLevel6(database: DatabaseSync): void {
     database.exec(LEVEL_6_DDL);
+}
+
+/**
+ * Creates the complete current level 7 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel7(database: DatabaseSync): void {
+    database.exec(LEVEL_7_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -1785,4 +1908,13 @@ export function validateSchemaLevel5(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel6(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 6);
+}
+
+/**
+ * Validates exact level 7 HolidayRange and Meeting facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel7(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 7);
 }

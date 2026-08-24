@@ -127,26 +127,27 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
     }
 }
 
-test('TEST-DATA-001/005: level 6 initializes explicit Meeting day offsets', async (t) => {
+test('TEST-DATA-001/005: level 7 initializes Meeting offsets and HolidayRanges', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 6);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 7);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 6,
+        schemaLevel: 7,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 6,
+        userVersion: 7,
         tables: [
             'command_receipts',
             'courses',
             'durable_followups',
+            'holiday_ranges',
             'meeting_occurrence_overrides',
             'meeting_segments',
             'meeting_series',
@@ -168,7 +169,7 @@ test('TEST-DATA-001/005: level 6 initializes explicit Meeting day offsets', asyn
     }
 });
 
-test('level 6 rejects representative constraint violations without changing bootstrap facts', (t) => {
+test('level 7 rejects representative constraint violations without changing bootstrap facts', (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const activeDatabase = join(dataSlotsRoot, 'active', 'workspace.sqlite');
@@ -204,7 +205,7 @@ test('level 6 rejects representative constraint violations without changing boot
     });
 });
 
-test('level 6 rejects a same-name index whose required properties drift', async (t) => {
+test('level 7 rejects a same-name index whose required properties drift', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     await store.close();
@@ -254,7 +255,7 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 6,
+            schemaLevel: 7,
             revision: '0',
         });
         await store.close();
@@ -384,8 +385,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 6,
-        revision: '5',
+        schemaLevel: 7,
+        revision: '6',
     });
     await opened.store.close();
 
@@ -424,7 +425,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '6');
+    assert.equal(opened.store.status().revision, '7');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -491,7 +492,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 6,
+        requiredSchemaLevel: 7,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -770,7 +771,7 @@ function createLevel4WorkspaceWithCourse(dataSlotsRoot: string): void {
 }
 
 /**
- * Builds a supported level 5 segment and override fixture for level 6 migration tests.
+ * Builds a supported level 5 segment and override fixture for current migration tests.
  * @param {string} dataSlotsRoot - Target data-slots root.
  * @return {void}
  */
@@ -861,7 +862,7 @@ test('Q-TIME-01/TEST-DATA-006: level 5 offsets migrate atomically and restart at
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 5 offset migration to continue');
     }
-    assert.equal(continued.store.status().revision, '6');
+    assert.equal(continued.store.status().revision, '7');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-09-30' },
@@ -926,7 +927,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 4 migration to continue');
     }
-    assert.equal(continued.store.status().revision, '6');
+    assert.equal(continued.store.status().revision, '7');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-12-31' },
@@ -946,7 +947,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
         'plan.course-created',
         'plan.meeting-series-created',
     ]);
-    assert.equal(continued.store.readProtectionWatermark(), '6');
+    assert.equal(continued.store.readProtectionWatermark(), '7');
     await continued.store.close();
 });
 
@@ -989,7 +990,7 @@ test('ADR-04/TEST-DATA-006: level 4 migration preserves an empty rule at the Loc
     await opened.store.close();
 });
 
-test('ADR-04: level 6 validation rejects overlapping Meeting segments as corrupt', async (t) => {
+test('ADR-04: current validation rejects overlapping Meeting segments as corrupt', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel4WorkspaceWithCourse(dataSlotsRoot);
     const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
@@ -1049,7 +1050,7 @@ test('ADR-04: level 6 validation rejects overlapping Meeting segments as corrupt
     }
 });
 
-test('ADR-04: level 6 validation rejects overrides detached from weekly anchors', async (t) => {
+test('ADR-04: current validation rejects overrides detached from weekly anchors', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel4WorkspaceWithCourse(dataSlotsRoot);
     const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
@@ -1099,7 +1100,7 @@ test('ADR-04: level 6 validation rejects overrides detached from weekly anchors'
     }
 });
 
-test('ADR-04: level 6 validation rejects a Meeting series without a rule segment', async (t) => {
+test('ADR-04: current validation rejects a Meeting series without a rule segment', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel4WorkspaceWithCourse(dataSlotsRoot);
     const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
@@ -1168,7 +1169,7 @@ test('ADR-04: level 4 migration rejects unsupported multi-segment legacy facts',
     assert.equal(opened.kind, 'recovery');
 });
 
-test('TEST-DATA-002/006: level 2 Term facts migrate to level 6 without identity loss', async (t) => {
+test('TEST-DATA-002/006: level 2 Term facts migrate to level 7 without identity loss', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel2WorkspaceWithTerm(dataSlotsRoot);
 
@@ -1181,8 +1182,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 6 without identity 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 6,
-        revision: '5',
+        schemaLevel: 7,
+        revision: '6',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -1208,7 +1209,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 6 without identity 
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '5');
+    assert.equal(opened.store.readProtectionWatermark(), '6');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -1233,7 +1234,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 6 without identity 
     }
 });
 
-test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to level 6', async (t) => {
+test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to level 7', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel3WorkspaceWithCourse(dataSlotsRoot);
 
@@ -1245,8 +1246,8 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to l
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 6,
-        revision: '6',
+        schemaLevel: 7,
+        revision: '7',
     });
     const projection = opened.store.readSetupProjection();
     assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
@@ -1330,7 +1331,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to l
         commandId: '88888888-8888-4888-8888-888888888888',
         followUpId: '99999999-9999-4999-8999-999999999999',
     }), TypeError);
-    assert.equal(opened.store.status().revision, '6');
+    assert.equal(opened.store.status().revision, '7');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)

@@ -8,7 +8,10 @@ import test from 'node:test';
 import {
     digestCancelMeetingOccurrence,
     digestChangeMeetingOccurrence,
+    digestCreateHolidayRange,
+    digestDeleteHolidayRange,
     digestRecordSetupDecision,
+    digestUpdateHolidayRange,
 } from '../../src/data/command-digest';
 import {
     cancelMeetingOccurrenceDigestProjection,
@@ -20,6 +23,11 @@ import {
     normalizeRecordSetupDecisionCommand,
     recordSetupDecisionDigestProjection,
 } from '../../src/shared/workspace-data-contract';
+import {
+    normalizeCreateHolidayRangeCommand,
+    normalizeDeleteHolidayRangeCommand,
+    normalizeUpdateHolidayRangeCommand,
+} from '../../src/shared/workspace-holiday-contract';
 import { canonicalJson } from '../../src/shared/canonical-json';
 
 const GOLDEN_CANONICAL_TEXT = '{"durableFollowUps":[{"followUpId":"22222222-2222-4222-8222-222222222222",'
@@ -54,6 +62,12 @@ const CANCEL_OCCURRENCE_GOLDEN_CANONICAL_TEXT = '{"durableFollowUps":'
     + '{"meetingSeriesId":"44444444-4444-4444-8444-444444444444",'
     + '"originalLogicalAnchor":"2026-10-05"}}}';
 const CANCEL_OCCURRENCE_GOLDEN_SHA256 = 'bf9d443ecc67f4ce2572cf36d73118aad1c7b5b4e4bb1fb979d5bc0e876da34c';
+const CREATE_HOLIDAY_RANGE_GOLDEN_SHA256 =
+    '36f6fcc2bcc8302b76add1e1be17343f5261e45578a903cabfe4d7a4513f74ea';
+const UPDATE_HOLIDAY_RANGE_GOLDEN_SHA256 =
+    'd628451426e507c84d93d1a878a813c10e9f450b5e080ce0915e9b7bdbb6f755';
+const DELETE_HOLIDAY_RANGE_GOLDEN_SHA256 =
+    '191f081dbc67480cca88dfeecde864732d9ef57181a149b2aedfe09b5bdc3636';
 
 const CHANGE_OCCURRENCE_COMMAND = normalizeAcceptedChangeMeetingOccurrenceCommand({
     commandId: '77777777-7777-4777-8777-777777777777',
@@ -94,6 +108,54 @@ const CANCEL_OCCURRENCE_COMMAND = normalizeCancelMeetingOccurrenceCommand({
             meetingSeriesId: '44444444-4444-4444-8444-444444444444',
             originalLogicalAnchor: '2026-10-05',
         },
+    },
+});
+
+const HOLIDAY_COMMAND_BASE = {
+    commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    followUpId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    expectedRevision: '4',
+    expectedPlanVersion: '4',
+} as const;
+
+const CREATE_HOLIDAY_RANGE_COMMAND = normalizeCreateHolidayRangeCommand({
+    ...HOLIDAY_COMMAND_BASE,
+    intent: {
+        kind: 'plan.create-holiday-range',
+        intentSchemaVersion: 1,
+        payload: {
+            termId: '22222222-2222-4222-8222-222222222222',
+            name: 'Reading Week',
+            startDate: '2026-10-12',
+            endDate: '2026-10-16',
+        },
+    },
+});
+
+const UPDATE_HOLIDAY_RANGE_COMMAND = normalizeUpdateHolidayRangeCommand({
+    ...HOLIDAY_COMMAND_BASE,
+    expectedHolidayRangeVersion: '1',
+    overlapDecision: 'review',
+    intent: {
+        kind: 'plan.update-holiday-range',
+        intentSchemaVersion: 1,
+        payload: {
+            holidayRangeId: '33333333-3333-4333-8333-333333333333',
+            name: 'Fall Break',
+            startDate: '2026-10-13',
+            endDate: '2026-10-15',
+        },
+    },
+});
+
+const DELETE_HOLIDAY_RANGE_COMMAND = normalizeDeleteHolidayRangeCommand({
+    ...HOLIDAY_COMMAND_BASE,
+    expectedHolidayRangeVersion: '2',
+    overlapDecision: 'continue',
+    intent: {
+        kind: 'plan.delete-holiday-range',
+        intentSchemaVersion: 1,
+        payload: { holidayRangeId: '33333333-3333-4333-8333-333333333333' },
     },
 });
 
@@ -234,4 +296,19 @@ test('ADR-04: future-change digest binds confirmation window and versions, not c
             })),
         );
     }
+});
+
+test('ADR-04/TEST-DATA-002: HolidayRange command digests match permanent golden vectors', () => {
+    assert.equal(
+        Buffer.from(digestCreateHolidayRange(CREATE_HOLIDAY_RANGE_COMMAND)).toString('hex'),
+        CREATE_HOLIDAY_RANGE_GOLDEN_SHA256,
+    );
+    assert.equal(
+        Buffer.from(digestUpdateHolidayRange(UPDATE_HOLIDAY_RANGE_COMMAND)).toString('hex'),
+        UPDATE_HOLIDAY_RANGE_GOLDEN_SHA256,
+    );
+    assert.equal(
+        Buffer.from(digestDeleteHolidayRange(DELETE_HOLIDAY_RANGE_COMMAND)).toString('hex'),
+        DELETE_HOLIDAY_RANGE_GOLDEN_SHA256,
+    );
 });

@@ -595,6 +595,9 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
       'querySetup',
       'createTerm',
       'updateTermEndDate',
+      'createHolidayRange',
+      'updateHolidayRange',
+      'deleteHolidayRange',
       'restoreTermAsCurrent',
       'createCourseWithMeeting',
       'queryMeetingSeries',
@@ -603,7 +606,7 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
       'cancelMeetingOccurrence',
     ],
   );
-  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1, 2, 1, 1, 1];
+  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 2, 1, 1, 1];
   exposedObject.properties.forEach((property, index) => {
     const method = publicMethod(state, preload, property);
     assert.ok(method, 'each exposed setup capability must resolve to a function body');

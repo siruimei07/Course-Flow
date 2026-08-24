@@ -18,6 +18,14 @@ import {
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
 import {
+    createHolidayRangeDigestProjection,
+    deleteHolidayRangeDigestProjection,
+    updateHolidayRangeDigestProjection,
+    type CreateHolidayRangeCommand,
+    type DeleteHolidayRangeCommand,
+    type UpdateHolidayRangeCommand,
+} from '../shared/workspace-holiday-contract';
+import {
     createTermDigestProjection,
     reconcileWorkspaceLifecycleDigestProjection,
     restoreTermAsCurrentDigestProjection,
@@ -77,5 +85,35 @@ export function digestUpdateTermEndDate(command: UpdateTermEndDateCommand): Uint
 
 export function digestRestoreTermAsCurrent(command: RestoreTermAsCurrentCommand): Uint8Array {
     const canonicalText = canonicalJson(restoreTermAsCurrentDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical HolidayRange creation receipt payload.
+ * @param {CreateHolidayRangeCommand} command - Normalized HolidayRange creation command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestCreateHolidayRange(command: CreateHolidayRangeCommand): Uint8Array {
+    const canonicalText = canonicalJson(createHolidayRangeDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical HolidayRange update receipt payload.
+ * @param {UpdateHolidayRangeCommand} command - Normalized HolidayRange update command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestUpdateHolidayRange(command: UpdateHolidayRangeCommand): Uint8Array {
+    const canonicalText = canonicalJson(updateHolidayRangeDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical HolidayRange deletion receipt payload.
+ * @param {DeleteHolidayRangeCommand} command - Normalized HolidayRange deletion command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestDeleteHolidayRange(command: DeleteHolidayRangeCommand): Uint8Array {
+    const canonicalText = canonicalJson(deleteHolidayRangeDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }

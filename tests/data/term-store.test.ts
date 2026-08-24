@@ -94,6 +94,7 @@ test('A-TERM-001/002: a valid Term is atomically created as the unique Current T
             entityVersion: '1',
         }],
         courses: [],
+        holidayRanges: [],
     });
     await store.close();
 });
@@ -194,6 +195,7 @@ test('TEST-DATA-001: a pre-COMMIT failure leaves no Term, Current Term, receipt,
         currentTerm: null,
         terms: [],
         courses: [],
+        holidayRanges: [],
     });
     assert.equal(store.receipt(COMMAND_ID), null);
     assert.equal(store.readProtectionWatermark(), '0');
@@ -218,6 +220,7 @@ test('TEST-PLAN-001/007: invalid Term input never enters a DATA transaction or c
         currentTerm: null,
         terms: [],
         courses: [],
+        holidayRanges: [],
     });
     assert.equal(store.receipt(COMMAND_ID), null);
     await store.close();
@@ -285,6 +288,7 @@ test('Q-CONSIST-01: setup and Current Term come from one revision snapshot', asy
         currentTerm: null,
         terms: [],
         courses: [],
+        holidayRanges: [],
     });
     assert.equal((await pending).ok, true);
     const afterCommit = store.readSetupProjection();

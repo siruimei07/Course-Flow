@@ -1,3 +1,7 @@
+/**
+ * @file Verifies that the Workspace entry remains behind the trusted process boundary.
+ */
+
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
@@ -129,6 +133,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         currentTerm: null,
         terms: [],
         courses: [],
+        holidayRanges: [],
       },
     },
   });
@@ -148,6 +153,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         currentTerm: null,
         terms: [],
         courses: [],
+        holidayRanges: [],
       },
     },
   });

@@ -25,12 +25,15 @@ import {
     isWorkspaceSetupRequest,
     type CancelMeetingOccurrenceRequest,
     type ChangeMeetingOccurrenceRequest,
+    type CreateHolidayRangeRequest,
     type CreateCourseWithMeetingRequest,
     type CreateTermRequest,
+    type DeleteHolidayRangeRequest,
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type RestoreTermAsCurrentRequest,
     type UpdateTermEndDateRequest,
+    type UpdateHolidayRangeRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblem,
@@ -135,6 +138,9 @@ export class WorkspaceApplication {
                     : (requestKind === 'workspace.term.create'
                         || requestKind === 'workspace.term.update-end-date'
                         || requestKind === 'workspace.term.restore-as-current'
+                        || requestKind === 'workspace.holiday-range.create'
+                        || requestKind === 'workspace.holiday-range.update'
+                        || requestKind === 'workspace.holiday-range.delete'
                         || requestKind === 'workspace.course.create-with-first-meeting'
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
@@ -156,6 +162,12 @@ export class WorkspaceApplication {
                 return this.updateTermEndDate(request.requestId, request.command);
             case 'workspace.term.restore-as-current':
                 return this.restoreTermAsCurrent(request.requestId, request.command);
+            case 'workspace.holiday-range.create':
+                return this.commitHolidayRange(request.requestId, request.command);
+            case 'workspace.holiday-range.update':
+                return this.commitHolidayRange(request.requestId, request.command);
+            case 'workspace.holiday-range.delete':
+                return this.commitHolidayRange(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
             case 'workspace.meeting-series.query':
@@ -507,6 +519,77 @@ export class WorkspaceApplication {
         }
     }
 
+    /**
+     * Commits one HolidayRange transition through DATA and preserves receipt recovery.
+     * @param {string} requestId - Workspace request correlation identity.
+     * @param {CreateHolidayRangeCommand | UpdateHolidayRangeCommand | DeleteHolidayRangeCommand} command
+     *     - Normalized HolidayRange command.
+     * @return {Promise<WorkspaceSetupOutcome>} Committed result, warning, or structured problem.
+     */
+    private async commitHolidayRange(
+        requestId: string,
+        command:
+            | CreateHolidayRangeRequest['command']
+            | UpdateHolidayRangeRequest['command']
+            | DeleteHolidayRangeRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        const expectedEffect = command.intent.kind === 'plan.create-holiday-range'
+            ? 'plan.holiday-range-created' as const
+            : command.intent.kind === 'plan.update-holiday-range'
+                ? 'plan.holiday-range-updated' as const
+                : 'plan.holiday-range-deleted' as const;
+
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = {
+                ...this.dataState,
+                status: this.dataState.store.status(),
+            };
+            if (!committed.ok) {
+                if (committed.problem.code === 'decision-required'
+                    && committed.problem.details.reason === 'meeting-time-overlap') {
+                    return this.problem(
+                        'decision-required',
+                        '假期变更会恢复有时间冲突的课节；确认继续后可保存。',
+                        requestId,
+                        'unchanged',
+                        committed.problem.details,
+                    );
+                }
+                const code = committed.problem.code === 'permission'
+                    ? 'permission'
+                    : committed.problem.code === 'conflict'
+                        ? 'conflict'
+                        : 'workspace-unavailable';
+                return this.problem(code, '假期范围未更改，正式数据没有改变。', requestId);
+            }
+            return this.holidayRangeCommandOutcome(requestId, committed.value, expectedEffect);
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.holidayRangeCommandOutcome(requestId, receipt, expectedEffect);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '假期范围未更改，正式数据没有改变。', requestId);
+        }
+    }
+
     private async createCourseWithMeeting(
         requestId: string,
         command: CreateCourseWithMeetingRequest['command'],
@@ -665,6 +748,58 @@ export class WorkspaceApplication {
                 code: effect.code,
                 entity: {
                     kind: effect.entity.kind,
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
+    }
+
+    /**
+     * Maps one exact durable HolidayRange effect into the Workspace command outcome.
+     * @param {string} requestId - Workspace request correlation identity.
+     * @param {CommandReceiptOutcome} committed - Durable DATA receipt outcome.
+     * @param {string} expectedEffect - Exact lifecycle effect required by the request.
+     * @return {WorkspaceSetupOutcome} Validated command outcome or recovery problem.
+     */
+    private holidayRangeCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+        expectedEffect:
+            | 'plan.holiday-range-created'
+            | 'plan.holiday-range-updated'
+            | 'plan.holiday-range-deleted',
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== expectedEffect
+            || effect.entity.kind !== 'holiday-range') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与假期范围事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: effect.code,
+                entity: {
+                    kind: 'holiday-range',
                     id: effect.entity.id,
                     version: effect.entity.version,
                 },

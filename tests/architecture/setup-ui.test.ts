@@ -125,6 +125,7 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
                 entityVersion: '1',
             }],
         }],
+        holidayRanges: [],
     } as const;
 
     /** Builds the same successful setup outcome under each supported DATA mode. */

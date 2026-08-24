@@ -12,6 +12,11 @@ import type {
   UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import type {
+  CreateHolidayRangeCommand,
+  DeleteHolidayRangeCommand,
+  UpdateHolidayRangeCommand,
+} from '../shared/workspace-holiday-contract';
+import type {
   AcceptedCreateCourseWithMeetingCommand,
   CancelMeetingOccurrenceCommand,
   ChangeMeetingOccurrenceCommand,
@@ -27,6 +32,9 @@ declare global {
       querySetup(): Promise<WorkspaceSetupOutcome>;
       createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
+      createHolidayRange(command: CreateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
+      updateHolidayRange(command: UpdateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
+      deleteHolidayRange(command: DeleteHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
       restoreTermAsCurrent(command: RestoreTermAsCurrentRequestCommand): Promise<WorkspaceSetupOutcome>;
       createCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Promise<WorkspaceSetupOutcome>;
       queryMeetingSeries(

@@ -13,6 +13,7 @@ import {
 import {
   isWorkspaceSetupOutcome,
   makeCreateCourseWithMeetingRequest,
+  makeCreateHolidayRangeRequest,
   makeCreateTermRequest,
   makeCancelMeetingOccurrenceRequest,
   makeChangeMeetingOccurrenceRequest,
@@ -20,8 +21,10 @@ import {
   makeMeetingOccurrenceImpactRequest,
   makeMeetingSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
+  makeDeleteHolidayRangeRequest,
   makeSetupQueryRequest,
   makeUpdateTermEndDateRequest,
+  makeUpdateHolidayRangeRequest,
   WORKSPACE_SETUP_CHANNEL,
   type RestoreTermAsCurrentRequestCommand,
   type WorkspaceSetupOutcome,
@@ -31,6 +34,11 @@ import type {
   CreateTermCommand,
   UpdateTermEndDateCommand,
 } from './shared/workspace-term-contract';
+import type {
+  CreateHolidayRangeCommand,
+  DeleteHolidayRangeCommand,
+  UpdateHolidayRangeCommand,
+} from './shared/workspace-holiday-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
   CancelMeetingOccurrenceCommand,
@@ -126,6 +134,39 @@ function updateTermEndDate(command: UpdateTermEndDateCommand): Promise<Workspace
   ));
 }
 
+/**
+ * Sends one normalized HolidayRange creation through the bounded Workspace channel.
+ * @param {CreateHolidayRangeCommand} command - HolidayRange creation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function createHolidayRange(command: CreateHolidayRangeCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateHolidayRangeRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sends one normalized HolidayRange update through the bounded Workspace channel.
+ * @param {UpdateHolidayRangeCommand} command - HolidayRange update command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function updateHolidayRange(command: UpdateHolidayRangeCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeUpdateHolidayRangeRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sends one normalized HolidayRange deletion through the bounded Workspace channel.
+ * @param {DeleteHolidayRangeCommand} command - HolidayRange deletion command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function deleteHolidayRange(command: DeleteHolidayRangeCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeDeleteHolidayRangeRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 function restoreTermAsCurrent(
   command: RestoreTermAsCurrentRequestCommand,
 ): Promise<WorkspaceSetupOutcome> {
@@ -215,6 +256,9 @@ contextBridge.exposeInMainWorld(
     querySetup,
     createTerm,
     updateTermEndDate,
+    createHolidayRange,
+    updateHolidayRange,
+    deleteHolidayRange,
     restoreTermAsCurrent,
     createCourseWithMeeting,
     queryMeetingSeries,
