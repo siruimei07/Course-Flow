@@ -56,13 +56,13 @@
 | `WP-R3-01` | 学期生命周期和有效日期范围约束课程/meeting 投影 | `WP-R2-04` | — | `A-TERM-003`, `A-COURSE-007` | — | `Done` |
 | `WP-R3-02` | 重复 meeting 产生稳定 occurrence/segment，跨重启身份不漂移 | `WP-R3-01` | — | `A-COURSE-005` | `TEST-PLAN-004`, `TEST-PLAN-005` | `Done` |
 | `WP-R3-03` | 时间、TermZone、冲突和 TBA 语义完整且不把未知值默认化 | `WP-R3-02` | — | `A-COURSE-006` | `TEST-PLAN-002` | `Done` |
-| `WP-R3-04` | 假期设置与 holiday skip 对课表投影生效，边界日期可判定 | `WP-R3-03` | — | `A-TERM-004`, `A-TERM-005` | — | `Ready` |
+| `WP-R3-04` | 假期设置与 holiday skip 对课表投影生效，边界日期可判定 | `WP-R3-03` | — | `A-TERM-004`, `A-TERM-005` | — | `Done` |
 
 ### R4 — 完整 MVP-A 计划核心
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-R4-01` | 课程/全局任务的创建、编辑、完成与稳定身份闭环 | `WP-R3-04` | — | `A-TASK-001`–`A-TASK-003` | `TEST-PLAN-001` | — |
+| `WP-R4-01` | 课程/全局任务的创建、编辑、完成与稳定身份闭环 | `WP-R3-04` | — | `A-TASK-001`–`A-TASK-003` | `TEST-PLAN-001` | `Ready` |
 | `WP-R4-02` | 重复任务、适用范围、假期规则与实例展开闭环 | `WP-R4-01` | — | `A-TASK-004`, `A-TASK-007`, `A-TASK-010` | `TEST-PLAN-003` | — |
 | `WP-R4-03` | 实例状态、单次/后续范围、跳过与撤销按事实提交边界工作 | `WP-R4-02` | — | `A-TASK-005`, `A-TASK-006`, `A-TASK-008`, `A-TASK-009` | `TEST-SHELL-003`, `TEST-FLOW-01-COMMIT` | — |
 | `WP-R4-04` | Today、Week 与临近截止投影遵循统一计划和已批准日期边界 | `WP-R4-03` | — | `A-VIEW-001`–`A-VIEW-006` | `TEST-WORKSPACE-001`, `TEST-PLAN-006`, `TEST-PLAN-007` | — |
@@ -240,6 +240,9 @@
 | 2026-08-24 | `WP-R3-03` | `Ready → Verification` | clean implementation source `d13ece4f14b43d993d61bd4b292112abe01d514d` | 聚焦回归 41/41 PASS；`pnpm test` 194/194 PASS；`pnpm typecheck`、`git diff --check` PASS；把进程默认时区改为 `Pacific/Auckland` 后显式 TermZone 测试 4/4 PASS；25 个改动 TypeScript/TSX 路径的 FECS `@file` 与 120 字符门禁均 PASS | schema level 6 为 Meeting segment/override 持久化显式同日/次日 offset，level 5 经既有 verified safety-copy/逐级事务协议迁移且旧 receipt/digest 可重放。Meeting occurrence 只通过显式 TermZone 和可替换 ZoneRules 解析 Instant，采用确定性的 DST gap/overlap 规则和半开区间精确边界；冲突在同一 Term 内应用 segment/only-this override、排除 cancelled 与归档事实后计算。warning 携带拟议/既有 Course、MeetingSeries/Occurrence 稳定对象和双方/交集 Instant；review 不写事实，continue 在同一 expected revision/version 下重算并按原时间提交。TBA 仅是 location 状态，星期、时间格与冲突判断保留；单一 ReadSnapshot、稳定身份、事务、幂等、pre/post-COMMIT、重启和现有分段语义均有回归，无新增依赖。 |
 | 2026-08-24 | `WP-R3-03` | `Verification → Done` | clean source `d13ece4f14b43d993d61bd4b292112abe01d514d`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200` / build `26200` / x64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:d13ece4f14b43d993d61bd4b292112abe01d514d SQLite 3.53.1 verified-local` | `A-COURSE-006`、`Q-TIME-01`、`Q-STATE-01` 与本包 `TEST-PLAN-002` 切片关闭；正常周、精确边界、跨日、DST、only-this override、this-and-future segment、cancelled、TBA、历史 Term 排除和明确继续保存均有定位测试。macOS 未在本提交上重新 package/smoke，packaged 交互 E2E、签名、安装和公开发布不从本证据推断通过；假期、任务和广泛 UI 未实现。 |
 | 2026-08-24 | `WP-R3-04` | `— → Ready` | `WP-R3-03` clean implementation source `d13ece4f14b43d993d61bd4b292112abe01d514d` 与本次证据提交 | `WP-R3-03` 注册表为 `Done`，目标测试、Windows package/smoke 与文档追溯均通过；`WP-R3-04` 硬依赖满足且无额外证据依赖 | `WP-R3-04` 成为唯一 `Ready` 主链工作包；本次状态推进不实现 HolidayRange、holiday skip、任务或后续计划投影。 |
+| 2026-08-24 | `WP-R3-04` | `Ready → Verification` | clean implementation source `e5109a4036c6ee9c86dd0352b1c51afdd4e4b7c0` | HolidayRange/ADR-04/Workspace 聚焦回归 23/23 PASS；`pnpm test` 212/212 PASS；`pnpm typecheck`、`git diff --check` PASS；25 个改动 TypeScript 路径的 FECS `@file` 与 120 字符门禁均 PASS | schema level 7 以每个命名连续范围一行保存 inclusive LocalDate、稳定 `HolidayRangeId`、EntityVersion 与 tombstone；level 6 经 verified safety copy 和逐级事务迁移，既有 receipt/follow-up 保留。创建、编辑和删除均原子推进 revision/PLAN version、持久 receipt/effect/follow-up/watermark，并覆盖摘要固定向量、幂等、stale、pre/post-COMMIT、只读、恢复和重启。Meeting occurrence 先按 active HolidayRange 抑制，再应用 only-this replaced/cancelled override；编辑/删除确定性重派生且身份、segment、override 和历史事实不被重写。冲突只比较变更前后并返回新引入的 warning，review 不写事实、continue 明确保存。Workspace/preload/Main 仅增加窄 HolidayRange DTO 与调用链，无新增依赖。 |
+| 2026-08-24 | `WP-R3-04` | `Verification → Done` | clean source `e5109a4036c6ee9c86dd0352b1c51afdd4e4b7c0`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200` / build `26200` / x64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:e5109a4036c6ee9c86dd0352b1c51afdd4e4b7c0 SQLite 3.53.1 verified-local` | `A-TERM-004/005` 的 Meeting/课表假期切片关闭，R3 里程碑关闭。范围首尾、多个范围、编辑/删除重派生、稳定 occurrence identity、单次 override、历史 tombstone/revision、新增冲突 warning、迁移/事务/摘要幂等、持久化重启、只读与恢复均有定位测试。macOS 未在本提交上重新 package/smoke，packaged 交互 E2E、签名、安装和公开发布不从本证据推断通过；Task、`followTeachingWeek`、Attendance 与广泛 UI 未实现。 |
+| 2026-08-24 | `WP-R4-01` | `— → Ready` | `WP-R3-04` clean implementation source `e5109a4036c6ee9c86dd0352b1c51afdd4e4b7c0` 与本次证据提交 | `WP-R3-01`–`WP-R3-04` 注册表均为 `Done`，R3 的目标测试和 Windows package/smoke 通过；`WP-R4-01` 硬依赖满足且无额外证据依赖 | `WP-R4-01` 成为唯一 `Ready` 主链工作包；重复任务和 `followTeachingWeek` 假期逻辑仍由 `WP-R4-02` 拥有，本次关闭未提前实现 Task、Attendance 或广泛 UI。 |
 
 ## 7. 拆包与变更规则
 
