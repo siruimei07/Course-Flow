@@ -55,8 +55,8 @@
 |---|---|---|---|---|---|---|
 | `WP-R3-01` | 学期生命周期和有效日期范围约束课程/meeting 投影 | `WP-R2-04` | — | `A-TERM-003`, `A-COURSE-007` | — | `Done` |
 | `WP-R3-02` | 重复 meeting 产生稳定 occurrence/segment，跨重启身份不漂移 | `WP-R3-01` | — | `A-COURSE-005` | `TEST-PLAN-004`, `TEST-PLAN-005` | `Done` |
-| `WP-R3-03` | 时间、TermZone、冲突和 TBA 语义完整且不把未知值默认化 | `WP-R3-02` | — | `A-COURSE-006` | `TEST-PLAN-002` | `Ready` |
-| `WP-R3-04` | 假期设置与 holiday skip 对课表投影生效，边界日期可判定 | `WP-R3-03` | — | `A-TERM-004`, `A-TERM-005` | — | — |
+| `WP-R3-03` | 时间、TermZone、冲突和 TBA 语义完整且不把未知值默认化 | `WP-R3-02` | — | `A-COURSE-006` | `TEST-PLAN-002` | `Done` |
+| `WP-R3-04` | 假期设置与 holiday skip 对课表投影生效，边界日期可判定 | `WP-R3-03` | — | `A-TERM-004`, `A-TERM-005` | — | `Ready` |
 
 ### R4 — 完整 MVP-A 计划核心
 
@@ -237,6 +237,9 @@
 | 2026-08-23 | `WP-R3-02` | `In Progress → Verification` | clean implementation source `9a71b6e10f5cc98f0278e6e3f61c88e7eced6b60` | 聚焦测试 46/46 PASS；`pnpm test` 177/177 PASS；`pnpm typecheck`、`git diff --check` PASS；独立只读复审最终 Critical 0、Important 0、Ready Yes | 普通 occurrence 由 series 与原始 logical anchor 确定性派生且不落表；only-this 只持久化目标 `OccurrenceOverride`；this-and-future 保留 `MeetingSeriesId`，从目标 anchor 以独立 `SegmentId` 原子分割，旧段与新段不重叠且历史不变。schema level 5、v1–v4 链式迁移、影响预览/确认 token、事务/revision/entity version/receipt/follow-up/watermark、pre/post-COMMIT、幂等、read-only/recovery、reopen/restart 与 Renderer → preload → Main → Workspace → DATA 窄调用链均有回归；无新增依赖。 |
 | 2026-08-23 | `WP-R3-02` | `Verification → Done` | clean source `9a71b6e10f5cc98f0278e6e3f61c88e7eced6b60`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:9a71b6e10f5cc98f0278e6e3f61c88e7eced6b60 SQLite 3.53.1 verified-local` | `A-COURSE-005` 与 `TEST-PLAN-004/005` 的 Meeting occurrence/segment 切片关闭；两项 TEST 主所有权由尚未开始的 `WP-R4-03` 移至本包且全表仍保持唯一，未来任务 occurrence 仍归 R4。macOS 未在本提交上重新 package、smoke 或执行交互 E2E，不从既有平台证据推断通过；冲突、假期、任务 occurrence 和广泛 UI 未提前实现。 |
 | 2026-08-23 | `WP-R3-03` | `— → Ready` | `WP-R3-02` clean implementation source `9a71b6e10f5cc98f0278e6e3f61c88e7eced6b60` 与本次证据提交 | `WP-R3-02` 的 `A-COURSE-005`、`TEST-PLAN-004/005`、Windows package/smoke 和独立复审均通过；`WP-R3-03` 硬依赖满足且无额外证据依赖 | `WP-R3-03` 成为唯一 `Ready` 主链工作包；本次关闭不实现 `A-COURSE-006` 的冲突、完整时间或 TBA 语义。 |
+| 2026-08-24 | `WP-R3-03` | `Ready → Verification` | clean implementation source `d13ece4f14b43d993d61bd4b292112abe01d514d` | 聚焦回归 41/41 PASS；`pnpm test` 194/194 PASS；`pnpm typecheck`、`git diff --check` PASS；把进程默认时区改为 `Pacific/Auckland` 后显式 TermZone 测试 4/4 PASS；25 个改动 TypeScript/TSX 路径的 FECS `@file` 与 120 字符门禁均 PASS | schema level 6 为 Meeting segment/override 持久化显式同日/次日 offset，level 5 经既有 verified safety-copy/逐级事务协议迁移且旧 receipt/digest 可重放。Meeting occurrence 只通过显式 TermZone 和可替换 ZoneRules 解析 Instant，采用确定性的 DST gap/overlap 规则和半开区间精确边界；冲突在同一 Term 内应用 segment/only-this override、排除 cancelled 与归档事实后计算。warning 携带拟议/既有 Course、MeetingSeries/Occurrence 稳定对象和双方/交集 Instant；review 不写事实，continue 在同一 expected revision/version 下重算并按原时间提交。TBA 仅是 location 状态，星期、时间格与冲突判断保留；单一 ReadSnapshot、稳定身份、事务、幂等、pre/post-COMMIT、重启和现有分段语义均有回归，无新增依赖。 |
+| 2026-08-24 | `WP-R3-03` | `Verification → Done` | clean source `d13ece4f14b43d993d61bd4b292112abe01d514d`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200` / build `26200` / x64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:d13ece4f14b43d993d61bd4b292112abe01d514d SQLite 3.53.1 verified-local` | `A-COURSE-006`、`Q-TIME-01`、`Q-STATE-01` 与本包 `TEST-PLAN-002` 切片关闭；正常周、精确边界、跨日、DST、only-this override、this-and-future segment、cancelled、TBA、历史 Term 排除和明确继续保存均有定位测试。macOS 未在本提交上重新 package/smoke，packaged 交互 E2E、签名、安装和公开发布不从本证据推断通过；假期、任务和广泛 UI 未实现。 |
+| 2026-08-24 | `WP-R3-04` | `— → Ready` | `WP-R3-03` clean implementation source `d13ece4f14b43d993d61bd4b292112abe01d514d` 与本次证据提交 | `WP-R3-03` 注册表为 `Done`，目标测试、Windows package/smoke 与文档追溯均通过；`WP-R3-04` 硬依赖满足且无额外证据依赖 | `WP-R3-04` 成为唯一 `Ready` 主链工作包；本次状态推进不实现 HolidayRange、holiday skip、任务或后续计划投影。 |
 
 ## 7. 拆包与变更规则
 
