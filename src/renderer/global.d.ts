@@ -13,6 +13,10 @@ import type {
 } from '../shared/workspace-term-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
+  CancelMeetingOccurrenceCommand,
+  ChangeMeetingOccurrenceCommand,
+  MeetingOccurrenceImpactDraft,
+  MeetingOccurrenceWindow,
 } from '../shared/workspace-course-contract';
 
 declare global {
@@ -25,6 +29,13 @@ declare global {
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
       restoreTermAsCurrent(command: RestoreTermAsCurrentRequestCommand): Promise<WorkspaceSetupOutcome>;
       createCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Promise<WorkspaceSetupOutcome>;
+      queryMeetingSeries(
+        meetingSeriesId: string,
+        requestedWindow: MeetingOccurrenceWindow,
+      ): Promise<WorkspaceSetupOutcome>;
+      previewMeetingOccurrence(draft: MeetingOccurrenceImpactDraft): Promise<WorkspaceSetupOutcome>;
+      changeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
+      cancelMeetingOccurrence(command: CancelMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
     }>;
   }
 }

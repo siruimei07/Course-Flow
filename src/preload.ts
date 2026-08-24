@@ -14,7 +14,11 @@ import {
   isWorkspaceSetupOutcome,
   makeCreateCourseWithMeetingRequest,
   makeCreateTermRequest,
+  makeCancelMeetingOccurrenceRequest,
+  makeChangeMeetingOccurrenceRequest,
   makeInitializeWorkspaceRequest,
+  makeMeetingOccurrenceImpactRequest,
+  makeMeetingSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
   makeSetupQueryRequest,
   makeUpdateTermEndDateRequest,
@@ -29,6 +33,10 @@ import type {
 } from './shared/workspace-term-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
+  CancelMeetingOccurrenceCommand,
+  ChangeMeetingOccurrenceCommand,
+  MeetingOccurrenceImpactDraft,
+  MeetingOccurrenceWindow,
 } from './shared/workspace-course-contract';
 
 let workspaceEpoch: string | undefined;
@@ -139,6 +147,66 @@ function createCourseWithMeeting(
   ));
 }
 
+/**
+ * Queries one Meeting series through the bounded Workspace channel.
+ * @param {string} meetingSeriesId - Stable Meeting series identity.
+ * @param {MeetingOccurrenceWindow} requestedWindow - Physical-date expansion window.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function queryMeetingSeries(
+  meetingSeriesId: string,
+  requestedWindow: MeetingOccurrenceWindow,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeMeetingSeriesQueryRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      meetingSeriesId,
+      requestedWindow,
+    )
+  ));
+}
+
+/**
+ * Requests a version-bound whole-rule impact preview.
+ * @param {MeetingOccurrenceImpactDraft} draft - Exact proposed future rule.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function previewMeetingOccurrence(
+  draft: MeetingOccurrenceImpactDraft,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeMeetingOccurrenceImpactRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, draft)
+  ));
+}
+
+/**
+ * Submits an only-this override or confirmed future split.
+ * @param {ChangeMeetingOccurrenceCommand} command - Versioned occurrence change command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function changeMeetingOccurrence(
+  command: ChangeMeetingOccurrenceCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeChangeMeetingOccurrenceRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Submits an only-this Meeting cancellation.
+ * @param {CancelMeetingOccurrenceCommand} command - Versioned occurrence cancellation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function cancelMeetingOccurrence(
+  command: CancelMeetingOccurrenceCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCancelMeetingOccurrenceRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 contextBridge.exposeInMainWorld(
   'courseFlow',
   Object.freeze({
@@ -149,5 +217,9 @@ contextBridge.exposeInMainWorld(
     updateTermEndDate,
     restoreTermAsCurrent,
     createCourseWithMeeting,
+    queryMeetingSeries,
+    previewMeetingOccurrence,
+    changeMeetingOccurrence,
+    cancelMeetingOccurrence,
   }),
 );

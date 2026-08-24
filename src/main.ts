@@ -73,7 +73,12 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
         ? 'build-mismatch'
         : (kind === 'workspace.term.create'
           || kind === 'workspace.term.update-end-date'
-          || kind === 'workspace.term.restore-as-current')
+          || kind === 'workspace.term.restore-as-current'
+          || kind === 'workspace.course.create-with-first-meeting'
+          || kind === 'workspace.meeting-series.query'
+          || kind === 'workspace.meeting-occurrence.preview'
+          || kind === 'workspace.meeting-occurrence.change'
+          || kind === 'workspace.meeting-occurrence.cancel')
           ? 'validation'
           : 'invalid-request',
       message: 'Workspace request is unavailable.',
@@ -155,7 +160,8 @@ async function runSmokeMode(): Promise<void> {
     const window = await createWindow({ show: false });
     const outcome = await querySmokeOutcome(window);
 
-    if (!isBootstrapOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, (outcome as { value?: { requestId?: string } }).value?.requestId ?? '')) {
+    const requestId = (outcome as { value?: { requestId?: string } }).value?.requestId ?? '';
+    if (!isBootstrapOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, requestId)) {
       throw new Error('Smoke query returned an invalid outcome.');
     }
     if (

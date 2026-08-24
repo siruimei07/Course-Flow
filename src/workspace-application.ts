@@ -23,8 +23,12 @@ import {
 } from './shared/bootstrap-contract';
 import {
     isWorkspaceSetupRequest,
+    type CancelMeetingOccurrenceRequest,
+    type ChangeMeetingOccurrenceRequest,
     type CreateCourseWithMeetingRequest,
     type CreateTermRequest,
+    type MeetingOccurrenceImpactRequest,
+    type MeetingSeriesQueryRequest,
     type RestoreTermAsCurrentRequest,
     type UpdateTermEndDateRequest,
     type WorkspaceCommandResult,
@@ -130,7 +134,11 @@ export class WorkspaceApplication {
                     : (requestKind === 'workspace.term.create'
                         || requestKind === 'workspace.term.update-end-date'
                         || requestKind === 'workspace.term.restore-as-current'
-                        || requestKind === 'workspace.course.create-with-first-meeting')
+                        || requestKind === 'workspace.course.create-with-first-meeting'
+                        || requestKind === 'workspace.meeting-series.query'
+                        || requestKind === 'workspace.meeting-occurrence.preview'
+                        || requestKind === 'workspace.meeting-occurrence.change'
+                        || requestKind === 'workspace.meeting-occurrence.cancel')
                         ? 'validation'
                         : 'invalid-request';
             return this.problem(code, 'Workspace 请求无效。', requestIdFrom(request));
@@ -149,6 +157,18 @@ export class WorkspaceApplication {
                 return this.restoreTermAsCurrent(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
+            case 'workspace.meeting-series.query':
+                return this.queryMeetingSeries(
+                    request.requestId,
+                    request.meetingSeriesId,
+                    request.requestedWindow,
+                );
+            case 'workspace.meeting-occurrence.preview':
+                return this.previewMeetingOccurrence(request.requestId, request.draft);
+            case 'workspace.meeting-occurrence.change':
+                return this.commitMeetingOccurrence(request.requestId, request.command);
+            case 'workspace.meeting-occurrence.cancel':
+                return this.commitMeetingOccurrence(request.requestId, request.command);
         }
     }
 
@@ -235,6 +255,82 @@ export class WorkspaceApplication {
         }
         catch {
             return this.problem('recovery-required', '无法读取一致的 setup 数据。', requestId);
+        }
+    }
+
+    /**
+     * Routes a bounded Meeting series query to DATA and wraps its Workspace outcome.
+     * @param {string} requestId - Request correlation identity.
+     * @param {string} meetingSeriesId - Stable Meeting series identity.
+     * @param {MeetingOccurrenceWindow} requestedWindow - Requested physical-date window.
+     * @return {Promise<WorkspaceSetupOutcome>} Query projection or structured problem.
+     */
+    private async queryMeetingSeries(
+        requestId: string,
+        meetingSeriesId: MeetingSeriesQueryRequest['meetingSeriesId'],
+        requestedWindow: MeetingSeriesQueryRequest['requestedWindow'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的课节规则数据。', requestId);
+        }
+
+        try {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.meeting-series-projection',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: this.dataState.store.readMeetingSeriesDetail(meetingSeriesId, requestedWindow),
+                },
+            };
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法读取一致的课节规则数据。', requestId);
+        }
+    }
+
+    /**
+     * Routes a whole-rule Meeting impact draft to the DATA preview owner.
+     * @param {string} requestId - Request correlation identity.
+     * @param {MeetingOccurrenceImpactDraft} draft - Exact proposed future rule.
+     * @return {Promise<WorkspaceSetupOutcome>} Impact projection or structured problem.
+     */
+    private async previewMeetingOccurrence(
+        requestId: string,
+        draft: MeetingOccurrenceImpactRequest['draft'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的课节规则数据。', requestId);
+        }
+
+        try {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.meeting-occurrence-impact',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: this.dataState.store.previewMeetingOccurrenceChange(draft),
+                },
+            };
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法预览课节规则影响。', requestId);
         }
     }
 
@@ -456,6 +552,63 @@ export class WorkspaceApplication {
         }
     }
 
+    /**
+     * Commits a scoped Meeting occurrence mutation and preserves receipt recovery semantics.
+     * @param {string} requestId - Request correlation identity.
+     * @param {ChangeMeetingOccurrenceCommand | CancelMeetingOccurrenceCommand} command - Versioned mutation.
+     * @return {Promise<WorkspaceSetupOutcome>} Committed outcome or structured problem.
+     */
+    private async commitMeetingOccurrence(
+        requestId: string,
+        command: ChangeMeetingOccurrenceRequest['command'] | CancelMeetingOccurrenceRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        const expectedEffect = command.intent.kind === 'plan.cancel-meeting-occurrence'
+            ? 'plan.meeting-occurrence-cancelled'
+            : 'plan.meeting-occurrence-changed';
+
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = {
+                ...this.dataState,
+                status: this.dataState.store.status(),
+            };
+            if (!committed.ok) {
+                const code = committed.problem.code === 'permission'
+                    ? 'permission'
+                    : committed.problem.code === 'conflict'
+                        ? 'conflict'
+                        : committed.problem.code === 'decision-required'
+                            ? 'decision-required'
+                            : 'workspace-unavailable';
+                return this.problem(code, '课节实例未更改，正式数据没有改变。', requestId);
+            }
+            return this.meetingOccurrenceCommandOutcome(requestId, committed.value, expectedEffect);
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.meetingOccurrenceCommandOutcome(requestId, receipt, expectedEffect);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '课节实例未更改，正式数据没有改变。', requestId);
+        }
+    }
+
     private async recoverCommittedReceipt(commandId: string): Promise<CommandReceiptOutcome | null> {
         try {
             const reopened = await openWorkspaceDataWithMigrations(this.dataSlotsRoot, this.options);
@@ -549,6 +702,55 @@ export class WorkspaceApplication {
                     },
                 },
             ],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
+    }
+
+    /**
+     * Validates and maps a durable Meeting occurrence receipt into the Workspace contract.
+     * @param {string} requestId - Request correlation identity.
+     * @param {CommandReceiptOutcome} committed - Durable DATA receipt outcome.
+     * @param {'plan.meeting-occurrence-changed' | 'plan.meeting-occurrence-cancelled'} expectedEffect - Intent effect.
+     * @return {WorkspaceSetupOutcome} Exact Workspace command outcome or recovery problem.
+     */
+    private meetingOccurrenceCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+        expectedEffect: 'plan.meeting-occurrence-changed' | 'plan.meeting-occurrence-cancelled',
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== expectedEffect
+            || effect.entity.kind !== 'meeting-series') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与课节实例事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: effect.code,
+                entity: {
+                    kind: 'meeting-series',
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
             pendingFollowUps: [committed.pendingFollowUps[0]],
         };
         return {

@@ -6,8 +6,12 @@ import { createHash } from 'node:crypto';
 
 import { canonicalJson } from '../shared/canonical-json';
 import {
+    cancelMeetingOccurrenceDigestProjection,
+    changeMeetingOccurrenceDigestProjection,
     createCourseWithMeetingDigestProjection,
     type AcceptedCreateCourseWithMeetingCommand,
+    type CancelMeetingOccurrenceCommand,
+    type ChangeMeetingOccurrenceCommand,
 } from '../shared/workspace-course-contract';
 import {
     recordSetupDecisionDigestProjection,
@@ -36,6 +40,26 @@ export function digestCreateTerm(command: CreateTermCommand): Uint8Array {
 
 export function digestCreateCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Uint8Array {
     const canonicalText = canonicalJson(createCourseWithMeetingDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical scoped Meeting occurrence change receipt payload.
+ * @param {ChangeMeetingOccurrenceCommand} command - Normalized occurrence change command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestChangeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Uint8Array {
+    const canonicalText = canonicalJson(changeMeetingOccurrenceDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical only-this Meeting cancellation receipt payload.
+ * @param {CancelMeetingOccurrenceCommand} command - Normalized occurrence cancellation command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestCancelMeetingOccurrence(command: CancelMeetingOccurrenceCommand): Uint8Array {
+    const canonicalText = canonicalJson(cancelMeetingOccurrenceDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }
 

@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 4;
+export const CURRENT_SCHEMA_LEVEL = 5;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -461,6 +461,149 @@ const LEVEL_4_DDL = LEVEL_3_DDL
     .replace(LEVEL_3_RECEIPT_DDL, LEVEL_4_RECEIPT_DDL)
     .replace(LEVEL_3_PLAN_DDL, LEVEL_4_PLAN_DDL);
 
+const LEVEL_5_RECEIPT_DDL = `
+    CREATE TABLE command_receipts (
+        command_id TEXT PRIMARY KEY CHECK (${commandIdCheck}),
+        intent_kind TEXT NOT NULL CHECK (
+            intent_kind IN (
+                'workspace.record-setup-decision',
+                'workspace.reconcile-lifecycle',
+                'plan.create-term',
+                'plan.create-course-with-first-meeting',
+                'plan.update-term-end-date',
+                'plan.restore-term-as-current',
+                'plan.change-meeting-occurrence',
+                'plan.cancel-meeting-occurrence'
+            )
+        ),
+        intent_schema_version INTEGER NOT NULL CHECK (
+            intent_schema_version = 1
+            OR (intent_kind = 'plan.create-course-with-first-meeting' AND intent_schema_version = 2)
+        ),
+        canonical_encoding TEXT NOT NULL CHECK (canonical_encoding = 'courseflow-canonical-json-v1'),
+        digest_algorithm TEXT NOT NULL CHECK (digest_algorithm = 'sha256'),
+        payload_digest BLOB NOT NULL CHECK (length(payload_digest) = 32),
+        committed_revision INTEGER NOT NULL CHECK (committed_revision > 0),
+        result_kind TEXT NOT NULL CHECK (result_kind = 'committed')
+    ) STRICT;
+
+    CREATE TABLE receipt_effects (
+        command_id TEXT NOT NULL CHECK (${commandIdCheck}),
+        effect_order INTEGER NOT NULL CHECK (effect_order >= 0),
+        effect_code TEXT NOT NULL,
+        entity_kind TEXT NOT NULL,
+        entity_id TEXT NOT NULL CHECK (${effectEntityIdCheck}),
+        entity_version INTEGER NOT NULL CHECK (entity_version >= 0),
+        CHECK (
+            (effect_code = 'workspace.setup-decision-recorded' AND entity_kind = 'workspace-setup')
+            OR (effect_code = 'plan.term-created-current' AND entity_kind = 'term')
+            OR (effect_code = 'plan.term-auto-archived' AND entity_kind = 'term')
+            OR (effect_code = 'plan.term-end-date-updated' AND entity_kind = 'term')
+            OR (effect_code = 'plan.term-restored-current' AND entity_kind = 'term')
+            OR (effect_code = 'plan.course-created' AND entity_kind = 'course')
+            OR (effect_code = 'plan.meeting-series-created' AND entity_kind = 'meeting-series')
+            OR (effect_code = 'plan.meeting-occurrence-changed' AND entity_kind = 'meeting-series')
+            OR (effect_code = 'plan.meeting-occurrence-cancelled' AND entity_kind = 'meeting-series')
+        ),
+        PRIMARY KEY (command_id, effect_order),
+        FOREIGN KEY (command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_5_PLAN_DDL = LEVEL_4_PLAN_DDL.replace(
+    "        effective_range_kind TEXT NOT NULL CHECK (effective_range_kind IN ('inherit-course', 'explicit')),",
+    `        logical_start_anchor TEXT NOT NULL CHECK (
+            length(logical_start_anchor) = 10
+            AND substr(logical_start_anchor, 5, 1) = '-'
+            AND substr(logical_start_anchor, 8, 1) = '-'
+            AND logical_start_anchor NOT GLOB '*[^0-9-]*'
+        ),
+        logical_end_anchor TEXT CHECK (
+            logical_end_anchor IS NULL
+            OR (
+                length(logical_end_anchor) = 10
+                AND substr(logical_end_anchor, 5, 1) = '-'
+                AND substr(logical_end_anchor, 8, 1) = '-'
+                AND logical_end_anchor NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        effective_range_kind TEXT NOT NULL CHECK (effective_range_kind IN ('inherit-course', 'explicit')),`,
+).replace(
+    `        CHECK (
+            (
+                effective_range_kind = 'inherit-course'`,
+    `        CHECK (logical_end_anchor IS NULL OR logical_end_anchor >= logical_start_anchor),
+        CHECK (
+            (
+                effective_range_kind = 'inherit-course'`,
+) + `
+    CREATE TABLE meeting_occurrence_overrides (
+        meeting_series_id TEXT NOT NULL CHECK (${meetingSeriesIdCheck}),
+        original_logical_anchor TEXT NOT NULL CHECK (
+            length(original_logical_anchor) = 10
+            AND substr(original_logical_anchor, 5, 1) = '-'
+            AND substr(original_logical_anchor, 8, 1) = '-'
+            AND original_logical_anchor NOT GLOB '*[^0-9-]*'
+        ),
+        override_kind TEXT NOT NULL CHECK (override_kind IN ('replaced', 'cancelled')),
+        meeting_type TEXT CHECK (meeting_type IS NULL OR meeting_type IN ('LEC', 'TUT', 'PRA')),
+        weekday TEXT CHECK (weekday IS NULL OR weekday IN ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')),
+        local_start TEXT CHECK (
+            local_start IS NULL
+            OR (
+                length(local_start) = 5
+                AND substr(local_start, 3, 1) = ':'
+                AND local_start NOT GLOB '*[^0-9:]*'
+            )
+        ),
+        local_end TEXT CHECK (
+            local_end IS NULL
+            OR (
+                length(local_end) = 5
+                AND substr(local_end, 3, 1) = ':'
+                AND local_end NOT GLOB '*[^0-9:]*'
+            )
+        ),
+        location_kind TEXT CHECK (location_kind IS NULL OR location_kind IN ('known', 'tba')),
+        location_value TEXT CHECK (
+            location_value IS NULL
+            OR (length(location_value) BETWEEN 1 AND 240 AND location_value = trim(location_value))
+        ),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        CHECK (
+            (
+                override_kind = 'cancelled'
+                AND meeting_type IS NULL
+                AND weekday IS NULL
+                AND local_start IS NULL
+                AND local_end IS NULL
+                AND location_kind IS NULL
+                AND location_value IS NULL
+            )
+            OR (
+                override_kind = 'replaced'
+                AND meeting_type IS NOT NULL
+                AND weekday IS NOT NULL
+                AND local_start IS NOT NULL
+                AND local_end IS NOT NULL
+                AND local_end > local_start
+                AND location_kind IS NOT NULL
+                AND (
+                    (location_kind = 'tba' AND location_value IS NULL)
+                    OR (location_kind = 'known' AND location_value IS NOT NULL)
+                )
+            )
+        ),
+        PRIMARY KEY (meeting_series_id, original_logical_anchor),
+        FOREIGN KEY (meeting_series_id)
+            REFERENCES meeting_series(meeting_series_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_5_DDL = LEVEL_4_DDL
+    .replace(LEVEL_4_RECEIPT_DDL, LEVEL_5_RECEIPT_DDL)
+    .replace(LEVEL_4_PLAN_DDL, LEVEL_5_PLAN_DDL);
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -548,11 +691,25 @@ const TABLE_COLUMNS = {
         ['weekday', 'TEXT', 1, 0],
         ['local_start', 'TEXT', 1, 0],
         ['local_end', 'TEXT', 1, 0],
+        ['logical_start_anchor', 'TEXT', 1, 0],
+        ['logical_end_anchor', 'TEXT', 0, 0],
         ['effective_range_kind', 'TEXT', 1, 0],
         ['effective_start_date', 'TEXT', 0, 0],
         ['effective_end_date', 'TEXT', 0, 0],
         ['location_kind', 'TEXT', 1, 0],
         ['location_value', 'TEXT', 0, 0],
+    ],
+    meeting_occurrence_overrides: [
+        ['meeting_series_id', 'TEXT', 1, 1],
+        ['original_logical_anchor', 'TEXT', 1, 2],
+        ['override_kind', 'TEXT', 1, 0],
+        ['meeting_type', 'TEXT', 0, 0],
+        ['weekday', 'TEXT', 0, 0],
+        ['local_start', 'TEXT', 0, 0],
+        ['local_end', 'TEXT', 0, 0],
+        ['location_kind', 'TEXT', 0, 0],
+        ['location_value', 'TEXT', 0, 0],
+        ['entity_version', 'INTEGER', 1, 0],
     ],
 } as const;
 
@@ -585,6 +742,22 @@ const LEVEL_3_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly
     ],
 };
 
+const LEVEL_4_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly unknown[]>> = {
+    meeting_segments: [
+        ['meeting_segment_id', 'TEXT', 1, 1],
+        ['meeting_series_id', 'TEXT', 1, 0],
+        ['meeting_type', 'TEXT', 1, 0],
+        ['weekday', 'TEXT', 1, 0],
+        ['local_start', 'TEXT', 1, 0],
+        ['local_end', 'TEXT', 1, 0],
+        ['effective_range_kind', 'TEXT', 1, 0],
+        ['effective_start_date', 'TEXT', 0, 0],
+        ['effective_end_date', 'TEXT', 0, 0],
+        ['location_kind', 'TEXT', 1, 0],
+        ['location_value', 'TEXT', 0, 0],
+    ],
+};
+
 const FOREIGN_KEYS = {
     workspace_state: [],
     setup_state: [['singleton', 'workspace_state', 'singleton']],
@@ -600,6 +773,7 @@ const FOREIGN_KEYS = {
     courses: [['term_id', 'terms', 'term_id']],
     meeting_series: [['course_id', 'courses', 'course_id']],
     meeting_segments: [['meeting_series_id', 'meeting_series', 'meeting_series_id']],
+    meeting_occurrence_overrides: [['meeting_series_id', 'meeting_series', 'meeting_series_id']],
 } as const;
 
 const LEVEL_1_TABLES = [
@@ -615,6 +789,13 @@ const LEVEL_2_TABLES = [
     ...LEVEL_1_TABLES,
     'terms',
     'plan_state',
+] as const;
+
+const LEVEL_3_AND_4_TABLES = [
+    ...LEVEL_2_TABLES,
+    'courses',
+    'meeting_series',
+    'meeting_segments',
 ] as const;
 
 type CurrentTable = keyof typeof TABLE_COLUMNS;
@@ -637,12 +818,17 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-function tableNames(level: 1 | 2 | 3 | 4): readonly CurrentTable[] {
+type SchemaLevel = 1 | 2 | 3 | 4 | 5;
+
+function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
         return LEVEL_1_TABLES;
     }
     if (level === 2) {
         return LEVEL_2_TABLES;
+    }
+    if (level === 3 || level === 4) {
+        return LEVEL_3_AND_4_TABLES;
     }
     return Object.keys(TABLE_COLUMNS) as CurrentTable[];
 }
@@ -664,14 +850,16 @@ function normalizeTableSql(sql: string): string {
         .toLowerCase();
 }
 
-function expectedTableSql(table: CurrentTable, level: 1 | 2 | 3 | 4): string {
+function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
     const ddl = level === 1
         ? LEVEL_1_DDL
         : level === 2
             ? LEVEL_2_DDL
             : level === 3
                 ? LEVEL_3_DDL
-                : LEVEL_4_DDL;
+                : level === 4
+                    ? LEVEL_4_DDL
+                    : LEVEL_5_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -681,7 +869,7 @@ function expectedTableSql(table: CurrentTable, level: 1 | 2 | 3 | 4): string {
     return normalizeTableSql(statement);
 }
 
-function validateTables(database: DatabaseSync, level: 1 | 2 | 3 | 4): void {
+function validateTables(database: DatabaseSync, level: SchemaLevel): void {
     const expectedNames = Array.from(tableNames(level)).sort();
     const rows = database.prepare('PRAGMA table_list').all() as Array<{
         name: string;
@@ -710,7 +898,7 @@ function validateTables(database: DatabaseSync, level: 1 | 2 | 3 | 4): void {
 function validateColumnsAndForeignKeys(
     database: DatabaseSync,
     table: CurrentTable,
-    level: 1 | 2 | 3 | 4,
+    level: SchemaLevel,
 ): void {
     const columns = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{
         name: string;
@@ -726,7 +914,9 @@ function validateColumnsAndForeignKeys(
     ]);
     const expectedColumns = level === 3 && LEVEL_3_TABLE_COLUMNS[table]
         ? LEVEL_3_TABLE_COLUMNS[table]
-        : TABLE_COLUMNS[table];
+        : level === 4 && LEVEL_4_TABLE_COLUMNS[table]
+            ? LEVEL_4_TABLE_COLUMNS[table]
+            : TABLE_COLUMNS[table];
     if (!equalRows(actualColumns, expectedColumns)) {
         rejectSchema();
     }
@@ -802,7 +992,7 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
     }
 }
 
-function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2 | 3 | 4): SchemaFacts {
+function validateBootstrapFacts(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     const workspace = database.prepare(
         'SELECT workspace_id, revision FROM workspace_state WHERE singleton = 1',
     );
@@ -884,7 +1074,75 @@ function validateBootstrapFacts(database: DatabaseSync, level: 1 | 2 | 3 | 4): S
     };
 }
 
-function validateSchema(database: DatabaseSync, level: 1 | 2 | 3 | 4): SchemaFacts {
+/**
+ * Validates cross-row Meeting identity facts that SQLite column checks cannot express.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 5.
+ * @return {void}
+ */
+function validateLevel5MeetingFacts(database: DatabaseSync): void {
+    const overlappingSegments = database.prepare(`
+        SELECT count(*) AS count
+        FROM meeting_segments AS first_segment
+        JOIN meeting_segments AS second_segment
+            ON second_segment.meeting_series_id = first_segment.meeting_series_id
+            AND second_segment.meeting_segment_id > first_segment.meeting_segment_id
+            AND first_segment.logical_start_anchor
+                <= coalesce(second_segment.logical_end_anchor, '9999-12-31')
+            AND second_segment.logical_start_anchor
+                <= coalesce(first_segment.logical_end_anchor, '9999-12-31')
+    `);
+    overlappingSegments.setReadBigInts(true);
+    const overlapCount = (overlappingSegments.get() as { count: bigint }).count;
+
+    const detachedOverrides = database.prepare(`
+        SELECT count(*) AS count
+        FROM (
+            SELECT
+                occurrence_override.meeting_series_id,
+                occurrence_override.original_logical_anchor,
+                count(meeting_segments.meeting_segment_id) AS matching_segment_count
+            FROM meeting_occurrence_overrides AS occurrence_override
+            LEFT JOIN meeting_segments
+                ON meeting_segments.meeting_series_id = occurrence_override.meeting_series_id
+                AND occurrence_override.original_logical_anchor
+                    >= meeting_segments.logical_start_anchor
+                AND (
+                    meeting_segments.logical_end_anchor IS NULL
+                    OR occurrence_override.original_logical_anchor
+                        <= meeting_segments.logical_end_anchor
+                )
+                AND CAST(
+                    julianday(occurrence_override.original_logical_anchor)
+                    - julianday(meeting_segments.logical_start_anchor)
+                    AS INTEGER
+                ) % 7 = 0
+            GROUP BY
+                occurrence_override.meeting_series_id,
+                occurrence_override.original_logical_anchor
+            HAVING matching_segment_count <> 1
+        )
+    `);
+    detachedOverrides.setReadBigInts(true);
+    const detachedOverrideCount = (detachedOverrides.get() as { count: bigint }).count;
+    const segmentlessSeries = database.prepare(`
+        SELECT count(*) AS count
+        FROM meeting_series
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM meeting_segments
+            WHERE meeting_segments.meeting_series_id = meeting_series.meeting_series_id
+        )
+    `);
+    segmentlessSeries.setReadBigInts(true);
+    const segmentlessSeriesCount = (segmentlessSeries.get() as { count: bigint }).count;
+    if (overlapCount !== 0n
+        || detachedOverrideCount !== 0n
+        || segmentlessSeriesCount !== 0n) {
+        rejectSchema('database-corrupt');
+    }
+}
+
+function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
         rejectSchema();
@@ -905,6 +1163,9 @@ function validateSchema(database: DatabaseSync, level: 1 | 2 | 3 | 4): SchemaFac
     if (pragmaValue(database, 'integrity_check', 'integrity_check') !== 'ok'
         || (database.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
         rejectSchema('database-corrupt');
+    }
+    if (level === 5) {
+        validateLevel5MeetingFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -1113,6 +1374,167 @@ export function migrateLevel3To4(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Migrates level 4 Meeting rules to anchored level 5 segments and override storage.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel4To5(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_4;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_4;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_4;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_5_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_4;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_4;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_4;
+
+        DROP TABLE receipt_effects_level_4;
+        DROP TABLE durable_followups_level_4;
+        DROP TABLE command_receipts_level_4;
+
+        ALTER TABLE meeting_segments RENAME TO meeting_segments_level_4;
+        ALTER TABLE meeting_series RENAME TO meeting_series_level_4;
+        ALTER TABLE courses RENAME TO courses_level_4;
+        DROP INDEX meeting_segments_by_series;
+        DROP INDEX meeting_series_by_course;
+        DROP INDEX courses_by_term;
+
+        ${LEVEL_5_PLAN_DDL}
+
+        INSERT INTO courses SELECT * FROM courses_level_4;
+        INSERT INTO meeting_series SELECT * FROM meeting_series_level_4;
+
+        WITH resolved_segments AS (
+            SELECT
+                meeting_segments_level_4.*,
+                CASE
+                    WHEN meeting_segments_level_4.effective_range_kind = 'explicit'
+                        THEN meeting_segments_level_4.effective_start_date
+                    WHEN courses_level_4.teaching_range_kind = 'explicit'
+                        THEN courses_level_4.teaching_start_date
+                    ELSE terms.start_date
+                END AS resolved_start_date,
+                CASE
+                    WHEN meeting_segments_level_4.effective_range_kind = 'explicit'
+                        THEN meeting_segments_level_4.effective_end_date
+                    WHEN courses_level_4.teaching_range_kind = 'explicit'
+                        THEN courses_level_4.teaching_end_date
+                    ELSE terms.end_date
+                END AS resolved_end_date,
+                CASE meeting_segments_level_4.weekday
+                    WHEN 'SUN' THEN 0
+                    WHEN 'MON' THEN 1
+                    WHEN 'TUE' THEN 2
+                    WHEN 'WED' THEN 3
+                    WHEN 'THU' THEN 4
+                    WHEN 'FRI' THEN 5
+                    ELSE 6
+                END AS weekday_number
+            FROM meeting_segments_level_4
+            JOIN meeting_series_level_4
+                ON meeting_series_level_4.meeting_series_id = meeting_segments_level_4.meeting_series_id
+            JOIN courses_level_4
+                ON courses_level_4.course_id = meeting_series_level_4.course_id
+            JOIN terms ON terms.term_id = courses_level_4.term_id
+        ),
+        anchored_segments AS (
+            SELECT
+                resolved_segments.*,
+                CASE
+                    WHEN date(
+                        resolved_start_date,
+                        printf(
+                            '+%d days',
+                            (weekday_number - CAST(strftime('%w', resolved_start_date) AS INTEGER) + 7) % 7
+                        )
+                    ) IS NOT NULL
+                        THEN date(
+                            resolved_start_date,
+                            printf(
+                                '+%d days',
+                                (
+                                    weekday_number
+                                    - CAST(strftime('%w', resolved_start_date) AS INTEGER)
+                                    + 7
+                                ) % 7
+                            )
+                        )
+                    ELSE date(
+                        resolved_start_date,
+                        printf(
+                            '-%d days',
+                            (
+                                CAST(strftime('%w', resolved_start_date) AS INTEGER)
+                                - weekday_number
+                                + 7
+                            ) % 7
+                        )
+                    )
+                END AS first_anchor
+            FROM resolved_segments
+        )
+        INSERT INTO meeting_segments (
+            meeting_segment_id,
+            meeting_series_id,
+            meeting_type,
+            weekday,
+            local_start,
+            local_end,
+            logical_start_anchor,
+            logical_end_anchor,
+            effective_range_kind,
+            effective_start_date,
+            effective_end_date,
+            location_kind,
+            location_value
+        )
+        SELECT
+            meeting_segment_id,
+            meeting_series_id,
+            meeting_type,
+            weekday,
+            local_start,
+            local_end,
+            first_anchor,
+            NULL,
+            effective_range_kind,
+            effective_start_date,
+            effective_end_date,
+            location_kind,
+            location_value
+        FROM anchored_segments;
+
+        DROP TABLE meeting_segments_level_4;
+        DROP TABLE meeting_series_level_4;
+        DROP TABLE courses_level_4;
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 5;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -1123,6 +1545,15 @@ export function createSchemaLevel3(database: DatabaseSync): void {
 
 export function createSchemaLevel4(database: DatabaseSync): void {
     database.exec(LEVEL_4_DDL);
+}
+
+/**
+ * Creates the complete current level 5 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel5(database: DatabaseSync): void {
+    database.exec(LEVEL_5_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -1139,4 +1570,13 @@ export function validateSchemaLevel3(database: DatabaseSync): SchemaFacts {
 
 export function validateSchemaLevel4(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 4);
+}
+
+/**
+ * Validates exact level 5 structure and cross-row Meeting facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel5(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 5);
 }

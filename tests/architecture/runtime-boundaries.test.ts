@@ -546,7 +546,7 @@ test('Main awaits graceful Workspace shutdown for smoke exit and ordinary quit',
   );
 });
 
-test('preload exposes only the bounded CourseFlow setup capabilities on fixed IPC channels', async () => {
+test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels', async () => {
   const state = await compilerState();
   const preload = sourceFor(state, preloadPath);
   const exposeCalls: TypeScriptAst.CallExpression[] = [];
@@ -597,9 +597,13 @@ test('preload exposes only the bounded CourseFlow setup capabilities on fixed IP
       'updateTermEndDate',
       'restoreTermAsCurrent',
       'createCourseWithMeeting',
+      'queryMeetingSeries',
+      'previewMeetingOccurrence',
+      'changeMeetingOccurrence',
+      'cancelMeetingOccurrence',
     ],
   );
-  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1];
+  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1, 2, 1, 1, 1];
   exposedObject.properties.forEach((property, index) => {
     const method = publicMethod(state, preload, property);
     assert.ok(method, 'each exposed setup capability must resolve to a function body');

@@ -15,6 +15,7 @@ import {
     createSchemaLevel2,
     migrateLevel0To1,
     migrateLevel2To3,
+    migrateLevel3To4,
 } from '../../src/data/schema';
 import {
     initializeWorkspaceData,
@@ -125,26 +126,27 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
     }
 }
 
-test('TEST-DATA-001/005: level 4 initializes the delivered Term, Course, and Meeting schema', async (t) => {
+test('TEST-DATA-001/005: level 5 initializes the delivered occurrence and override schema', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 4);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 5);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 4,
+        schemaLevel: 5,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 4,
+        userVersion: 5,
         tables: [
             'command_receipts',
             'courses',
             'durable_followups',
+            'meeting_occurrence_overrides',
             'meeting_segments',
             'meeting_series',
             'plan_state',
@@ -165,7 +167,7 @@ test('TEST-DATA-001/005: level 4 initializes the delivered Term, Course, and Mee
     }
 });
 
-test('level 4 rejects representative constraint violations without changing bootstrap facts', (t) => {
+test('level 5 rejects representative constraint violations without changing bootstrap facts', (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const activeDatabase = join(dataSlotsRoot, 'active', 'workspace.sqlite');
@@ -179,7 +181,16 @@ test('level 4 rejects representative constraint violations without changing boot
                 statement: "UPDATE workspace_state SET revision = 'zero' WHERE singleton = 1",
             },
             {
-                statement: "INSERT INTO receipt_effects VALUES ('22222222-2222-4222-8222-222222222222', 0, 'workspace.setup-decision-recorded', 'workspace-setup', '11111111-1111-4111-8111-111111111111', 0)",
+                statement: `
+                    INSERT INTO receipt_effects VALUES (
+                        '22222222-2222-4222-8222-222222222222',
+                        0,
+                        'workspace.setup-decision-recorded',
+                        'workspace-setup',
+                        '11111111-1111-4111-8111-111111111111',
+                        0
+                    )
+                `,
             },
             {
                 statement: "INSERT INTO protection_watermarks VALUES (1, 0, 0)",
@@ -192,7 +203,7 @@ test('level 4 rejects representative constraint violations without changing boot
     });
 });
 
-test('level 4 rejects a same-name index whose required properties drift', async (t) => {
+test('level 5 rejects a same-name index whose required properties drift', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     await store.close();
@@ -242,7 +253,7 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 4,
+            schemaLevel: 5,
             revision: '0',
         });
         await store.close();
@@ -372,8 +383,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 4,
-        revision: '3',
+        schemaLevel: 5,
+        revision: '4',
     });
     await opened.store.close();
 
@@ -412,7 +423,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '4');
+    assert.equal(opened.store.status().revision, '5');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -479,7 +490,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 4,
+        requiredSchemaLevel: 5,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -738,7 +749,313 @@ function createLevel3WorkspaceWithCourse(dataSlotsRoot: string): void {
     }
 }
 
-test('TEST-DATA-002/006: level 2 Term facts migrate to level 4 without identity loss', async (t) => {
+/**
+ * Builds a supported level 4 Course and Meeting fixture for level 5 migration tests.
+ * @param {string} dataSlotsRoot - Target data-slots root.
+ * @return {void}
+ */
+function createLevel4WorkspaceWithCourse(dataSlotsRoot: string): void {
+    createLevel3WorkspaceWithCourse(dataSlotsRoot);
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec('PRAGMA foreign_keys = OFF');
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel3To4(database);
+        database.exec('COMMIT');
+    }
+    finally {
+        database.close();
+    }
+}
+
+test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safety boundary', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.before-level-commit') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    assert.equal(interrupted.kind, 'recovery');
+    const unchanged = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        readOnly: true,
+        readBigInts: true,
+    });
+    try {
+        assert.equal(
+            (unchanged.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version,
+            4n,
+        );
+        assert.equal(
+            (unchanged.prepare(
+                'SELECT revision FROM workspace_state WHERE singleton = 1',
+            ).get() as { revision: bigint }).revision,
+            4n,
+        );
+        assert.equal(
+            (unchanged.prepare('SELECT count(*) AS count FROM meeting_segments').get() as {
+                count: bigint;
+            }).count,
+            1n,
+        );
+    }
+    finally {
+        unchanged.close();
+    }
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-4-')).length,
+        1,
+    );
+
+    const continued = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(continued.kind, 'ready');
+    if (continued.kind !== 'ready') {
+        throw new Error('Expected level 4 migration to continue');
+    }
+    assert.equal(continued.store.status().revision, '5');
+    const detail = continued.store.readMeetingSeriesDetail(
+        '44444444-4444-4444-8444-444444444444',
+        { startDate: '2026-09-01', endDate: '2026-12-31' },
+    );
+    assert.deepEqual(detail.segments[0], {
+        segmentId: '55555555-5555-4555-8555-555555555555',
+        logicalStartAnchor: '2026-09-14',
+        logicalEndAnchor: null,
+        type: 'LEC',
+        weekday: 'MON',
+        localStart: '09:00',
+        localEnd: '10:00',
+        location: { kind: 'known', value: 'BA 1130' },
+    });
+    assert.deepEqual(continued.store.receipt(LEGACY_COURSE_COMMAND.commandId)?.effects.map(effect => effect.code), [
+        'plan.course-created',
+        'plan.meeting-series-created',
+    ]);
+    assert.equal(continued.store.readProtectionWatermark(), '5');
+    await continued.store.close();
+});
+
+test('ADR-04/TEST-DATA-006: level 4 migration preserves an empty rule at the LocalDate ceiling', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec(`
+            BEGIN IMMEDIATE;
+            UPDATE terms SET start_date = '9999-12-31', end_date = '9999-12-31';
+            UPDATE courses
+                SET teaching_range_kind = 'explicit',
+                    teaching_start_date = '9999-12-31',
+                    teaching_end_date = '9999-12-31';
+            UPDATE meeting_segments
+                SET weekday = 'SAT',
+                    effective_range_kind = 'explicit',
+                    effective_start_date = '9999-12-31',
+                    effective_end_date = '9999-12-31';
+            COMMIT;
+        `);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected level 4 ceiling migration to complete');
+    }
+    const detail = opened.store.readMeetingSeriesDetail(
+        '44444444-4444-4444-8444-444444444444',
+        { startDate: '9999-12-31', endDate: '9999-12-31' },
+    );
+    assert.equal(detail.segments[0]?.logicalStartAnchor, '9999-12-25');
+    assert.equal(detail.occurrences.length, 0);
+    await opened.store.close();
+});
+
+test('ADR-04: level 5 validation rejects overlapping Meeting segments as corrupt', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+    const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(migrated.kind, 'ready');
+    if (migrated.kind !== 'ready') {
+        throw new Error('Expected level 5 migration to complete');
+    }
+    await migrated.store.close();
+
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec(`
+            INSERT INTO meeting_segments (
+                meeting_segment_id,
+                meeting_series_id,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                logical_start_anchor,
+                logical_end_anchor,
+                effective_range_kind,
+                effective_start_date,
+                effective_end_date,
+                location_kind,
+                location_value
+            )
+            SELECT
+                '88888888-8888-4888-8888-888888888888',
+                meeting_series_id,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                logical_start_anchor,
+                logical_start_anchor,
+                effective_range_kind,
+                effective_start_date,
+                effective_end_date,
+                location_kind,
+                location_value
+            FROM meeting_segments
+            LIMIT 1;
+        `);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind === 'recovery') {
+        assert.equal(opened.problem.code, 'integrity');
+        assert.deepEqual(opened.problem.details, { reason: 'database-corrupt' });
+    }
+});
+
+test('ADR-04: level 5 validation rejects overrides detached from weekly anchors', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+    const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(migrated.kind, 'ready');
+    if (migrated.kind !== 'ready') {
+        throw new Error('Expected level 5 migration to complete');
+    }
+    await migrated.store.close();
+
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec(`
+            INSERT INTO meeting_occurrence_overrides (
+                meeting_series_id,
+                original_logical_anchor,
+                override_kind,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                location_kind,
+                location_value,
+                entity_version
+            ) VALUES (
+                '44444444-4444-4444-8444-444444444444',
+                '2026-09-15',
+                'cancelled',
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                NULL,
+                1
+            );
+        `);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind === 'recovery') {
+        assert.equal(opened.problem.code, 'integrity');
+        assert.deepEqual(opened.problem.details, { reason: 'database-corrupt' });
+    }
+});
+
+test('ADR-04: level 5 validation rejects a Meeting series without a rule segment', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+    const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(migrated.kind, 'ready');
+    if (migrated.kind !== 'ready') {
+        throw new Error('Expected level 5 migration to complete');
+    }
+    await migrated.store.close();
+
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec('DELETE FROM meeting_segments;');
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind === 'recovery') {
+        assert.equal(opened.problem.code, 'integrity');
+        assert.deepEqual(opened.problem.details, { reason: 'database-corrupt' });
+    }
+});
+
+test('ADR-04: level 4 migration rejects unsupported multi-segment legacy facts', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel4WorkspaceWithCourse(dataSlotsRoot);
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec(`
+            INSERT INTO meeting_segments (
+                meeting_segment_id,
+                meeting_series_id,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                effective_range_kind,
+                effective_start_date,
+                effective_end_date,
+                location_kind,
+                location_value
+            )
+            SELECT
+                '88888888-8888-4888-8888-888888888888',
+                meeting_series_id,
+                meeting_type,
+                weekday,
+                local_start,
+                local_end,
+                effective_range_kind,
+                effective_start_date,
+                effective_end_date,
+                location_kind,
+                location_value
+            FROM meeting_segments
+            LIMIT 1;
+        `);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(opened.kind, 'recovery');
+});
+
+test('TEST-DATA-002/006: level 2 Term facts migrate to level 5 without identity loss', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel2WorkspaceWithTerm(dataSlotsRoot);
 
@@ -751,8 +1068,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 4 without identity 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 4,
-        revision: '3',
+        schemaLevel: 5,
+        revision: '4',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -778,7 +1095,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 4 without identity 
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '3');
+    assert.equal(opened.store.readProtectionWatermark(), '4');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -803,7 +1120,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to level 4 without identity 
     }
 });
 
-test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to level 4', async (t) => {
+test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to level 5', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel3WorkspaceWithCourse(dataSlotsRoot);
 
@@ -815,8 +1132,8 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to l
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 4,
-        revision: '4',
+        schemaLevel: 5,
+        revision: '5',
     });
     const projection = opened.store.readSetupProjection();
     assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
@@ -834,6 +1151,24 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to l
         kind: 'explicit',
         startDate: '2026-09-08',
         endDate: '2026-12-18',
+    });
+    const meetingDetail = opened.store.readMeetingSeriesDetail(
+        '44444444-4444-4444-8444-444444444444',
+        { startDate: '2026-09-01', endDate: '2026-12-31' },
+    );
+    assert.deepEqual(meetingDetail.segments[0], {
+        segmentId: '55555555-5555-4555-8555-555555555555',
+        logicalStartAnchor: '2026-09-14',
+        logicalEndAnchor: null,
+        type: 'LEC',
+        weekday: 'MON',
+        localStart: '09:00',
+        localEnd: '10:00',
+        location: { kind: 'known', value: 'BA 1130' },
+    });
+    assert.deepEqual(meetingDetail.occurrences[0]?.occurrenceId, {
+        meetingSeriesId: '44444444-4444-4444-8444-444444444444',
+        originalLogicalAnchor: '2026-09-14',
     });
     assert.deepEqual(opened.store.receipt('66666666-6666-4666-8666-666666666666'), {
         kind: 'committed',
@@ -881,7 +1216,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to l
         commandId: '88888888-8888-4888-8888-888888888888',
         followUpId: '99999999-9999-4999-8999-999999999999',
     }), TypeError);
-    assert.equal(opened.store.status().revision, '4');
+    assert.equal(opened.store.status().revision, '5');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)

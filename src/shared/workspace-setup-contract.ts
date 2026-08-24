@@ -1,12 +1,24 @@
 /**
- * @file Defines setup and Term lifecycle requests crossing the Workspace boundary.
+ * @file Defines bounded setup and PLAN requests crossing the Workspace boundary.
  */
 
 import {
     isCourseProjection,
+    isMeetingOccurrenceImpactProjection,
+    isMeetingOccurrenceWindow,
+    isMeetingSeriesDetailProjection,
+    normalizeCancelMeetingOccurrenceCommand,
+    normalizeChangeMeetingOccurrenceCommand,
+    normalizeMeetingOccurrenceImpactDraft,
     normalizeAcceptedCreateCourseWithMeetingCommand,
     type AcceptedCreateCourseWithMeetingCommand,
+    type CancelMeetingOccurrenceCommand,
+    type ChangeMeetingOccurrenceCommand,
     type CourseProjection,
+    type MeetingSeriesDetailProjection,
+    type MeetingOccurrenceWindow,
+    type MeetingOccurrenceImpactDraft,
+    type MeetingOccurrenceImpactProjection,
 } from './workspace-course-contract';
 import {
     BOOTSTRAP_PROTOCOL_VERSION,
@@ -75,13 +87,38 @@ export type CreateCourseWithMeetingRequest = WorkspaceRequestBase & Readonly<{
     command: AcceptedCreateCourseWithMeetingCommand;
 }>;
 
+export type MeetingSeriesQueryRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.meeting-series.query';
+    meetingSeriesId: string;
+    requestedWindow: MeetingOccurrenceWindow;
+}>;
+
+export type MeetingOccurrenceImpactRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.meeting-occurrence.preview';
+    draft: MeetingOccurrenceImpactDraft;
+}>;
+
+export type ChangeMeetingOccurrenceRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.meeting-occurrence.change';
+    command: ChangeMeetingOccurrenceCommand;
+}>;
+
+export type CancelMeetingOccurrenceRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.meeting-occurrence.cancel';
+    command: CancelMeetingOccurrenceCommand;
+}>;
+
 export type WorkspaceSetupRequest =
     | InitializeWorkspaceRequest
     | SetupQueryRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
     | RestoreTermAsCurrentRequest
-    | CreateCourseWithMeetingRequest;
+    | CreateCourseWithMeetingRequest
+    | MeetingSeriesQueryRequest
+    | MeetingOccurrenceImpactRequest
+    | ChangeMeetingOccurrenceRequest
+    | CancelMeetingOccurrenceRequest;
 
 type WorkspaceCommandEffect = Readonly<{
     code:
@@ -89,7 +126,9 @@ type WorkspaceCommandEffect = Readonly<{
         | 'plan.term-end-date-updated'
         | 'plan.term-restored-current'
         | 'plan.course-created'
-        | 'plan.meeting-series-created';
+        | 'plan.meeting-series-created'
+        | 'plan.meeting-occurrence-changed'
+        | 'plan.meeting-occurrence-cancelled';
     entity: Readonly<{
         kind: 'term' | 'course' | 'meeting-series';
         id: string;
@@ -112,6 +151,7 @@ export type WorkspaceSetupProblemCode =
     | 'validation'
     | 'permission'
     | 'conflict'
+    | 'decision-required'
     | 'recovery-required';
 
 export type WorkspaceSetupProblem = Readonly<{
@@ -156,6 +196,30 @@ export type WorkspaceSetupOutcome =
             requestId: string;
             workspaceEpoch: string;
             outcome: WorkspaceCommandResult;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.meeting-series-projection';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: MeetingSeriesDetailProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.meeting-occurrence-impact';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: MeetingOccurrenceImpactProjection;
         }>;
     }>
     | Readonly<{ ok: false; problem: WorkspaceSetupProblem }>;
@@ -321,6 +385,108 @@ export function makeCreateCourseWithMeetingRequest(
     };
 }
 
+/**
+ * Builds an exact bounded Meeting series query request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {string} meetingSeriesId - Stable Meeting series identity.
+ * @param {MeetingOccurrenceWindow} requestedWindow - Physical-date expansion window.
+ * @return {MeetingSeriesQueryRequest} Canonical Workspace request.
+ */
+export function makeMeetingSeriesQueryRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    meetingSeriesId: string,
+    requestedWindow: MeetingOccurrenceWindow,
+): MeetingSeriesQueryRequest {
+    if (!isCanonicalUuid(meetingSeriesId) || !isMeetingOccurrenceWindow(requestedWindow)) {
+        throw new TypeError('Meeting series query requires a canonical ID and bounded window');
+    }
+    return {
+        kind: 'workspace.meeting-series.query',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        meetingSeriesId,
+        requestedWindow: Object.freeze({ ...requestedWindow }),
+    };
+}
+
+/**
+ * Builds an exact whole-rule Meeting impact preview request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {MeetingOccurrenceImpactDraft} draft - Canonical future-change draft.
+ * @return {MeetingOccurrenceImpactRequest} Canonical Workspace request.
+ */
+export function makeMeetingOccurrenceImpactRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    draft: MeetingOccurrenceImpactDraft,
+): MeetingOccurrenceImpactRequest {
+    return {
+        kind: 'workspace.meeting-occurrence.preview',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        draft: normalizeMeetingOccurrenceImpactDraft(draft),
+    };
+}
+
+/**
+ * Builds an exact scoped Meeting occurrence change request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {ChangeMeetingOccurrenceCommand} command - Versioned occurrence change command.
+ * @return {ChangeMeetingOccurrenceRequest} Canonical Workspace request.
+ */
+export function makeChangeMeetingOccurrenceRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ChangeMeetingOccurrenceCommand,
+): ChangeMeetingOccurrenceRequest {
+    return {
+        kind: 'workspace.meeting-occurrence.change',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeChangeMeetingOccurrenceCommand(command),
+    };
+}
+
+/**
+ * Builds an exact only-this Meeting cancellation request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CancelMeetingOccurrenceCommand} command - Versioned cancellation command.
+ * @return {CancelMeetingOccurrenceRequest} Canonical Workspace request.
+ */
+export function makeCancelMeetingOccurrenceRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CancelMeetingOccurrenceCommand,
+): CancelMeetingOccurrenceRequest {
+    return {
+        kind: 'workspace.meeting-occurrence.cancel',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCancelMeetingOccurrenceCommand(command),
+    };
+}
+
 export function isWorkspaceSetupRequest(
     value: unknown,
     expectedBuildId: string,
@@ -342,10 +508,44 @@ export function isWorkspaceSetupRequest(
             'workspaceEpoch',
         ]);
     }
+    if (value.kind === 'workspace.meeting-series.query') {
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'meetingSeriesId',
+            'requestedWindow',
+        ])
+            && isCanonicalUuid(value.meetingSeriesId)
+            && isMeetingOccurrenceWindow(value.requestedWindow);
+    }
+    if (value.kind === 'workspace.meeting-occurrence.preview') {
+        if (!hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'draft',
+        ])) {
+            return false;
+        }
+        try {
+            normalizeMeetingOccurrenceImpactDraft(value.draft);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
     if ((value.kind !== 'workspace.term.create'
             && value.kind !== 'workspace.term.update-end-date'
             && value.kind !== 'workspace.term.restore-as-current'
-            && value.kind !== 'workspace.course.create-with-first-meeting')
+            && value.kind !== 'workspace.course.create-with-first-meeting'
+            && value.kind !== 'workspace.meeting-occurrence.change'
+            && value.kind !== 'workspace.meeting-occurrence.cancel')
         || !hasExactDataKeys(value, [
             'kind',
             'protocolVersion',
@@ -367,8 +567,14 @@ export function isWorkspaceSetupRequest(
         else if (value.kind === 'workspace.term.restore-as-current') {
             normalizeRestoreTermAsCurrentRequestCommand(value.command);
         }
-        else {
+        else if (value.kind === 'workspace.course.create-with-first-meeting') {
             normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
+        }
+        else if (value.kind === 'workspace.meeting-occurrence.change') {
+            normalizeChangeMeetingOccurrenceCommand(value.command);
+        }
+        else {
+            normalizeCancelMeetingOccurrenceCommand(value.command);
         }
         return true;
     }
@@ -469,7 +675,9 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
     if (value.effects.length === 1) {
         return isEffect(value.effects[0], 'plan.term-created-current', 'term')
             || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
-            || isEffect(value.effects[0], 'plan.term-restored-current', 'term');
+            || isEffect(value.effects[0], 'plan.term-restored-current', 'term')
+            || isEffect(value.effects[0], 'plan.meeting-occurrence-changed', 'meeting-series')
+            || isEffect(value.effects[0], 'plan.meeting-occurrence-cancelled', 'meeting-series');
     }
     return isEffect(value.effects[0], 'plan.course-created', 'course')
         && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
@@ -504,6 +712,7 @@ export function isWorkspaceSetupOutcome(
                 'validation',
                 'permission',
                 'conflict',
+                'decision-required',
                 'recovery-required',
             ].includes(problem.code as string)
             && typeof problem.message === 'string'
@@ -539,6 +748,32 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isSetupProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.meeting-series-projection') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isMeetingSeriesDetailProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.meeting-occurrence-impact') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isMeetingOccurrenceImpactProjection(outcome.projection);
     }
     if (outcome.kind === 'workspace.command-outcome') {
         return hasExactDataKeys(outcome, [

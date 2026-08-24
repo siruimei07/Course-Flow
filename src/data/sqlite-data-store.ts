@@ -3,19 +3,34 @@
  */
 
 import { existsSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
-import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { backup, DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
 
 import {
+    normalizeCancelMeetingOccurrenceCommand,
+    normalizeChangeMeetingOccurrenceCommand,
+    normalizeMeetingOccurrenceWindow,
+    normalizeMeetingOccurrenceImpactDraft,
     normalizeAcceptedCreateCourseWithMeetingCommand,
     type AcceptedCreateCourseWithMeetingCommand,
+    type CancelMeetingOccurrenceCommand,
+    type ChangeMeetingOccurrenceCommand,
     type CourseColor,
     type CourseTeachingRangeIntent,
     type MeetingEffectiveRangeIntent,
+    type MeetingLocation,
+    type MeetingOccurrenceId,
+    type MeetingOccurrenceImpactDraft,
+    type MeetingOccurrenceImpactProjection,
+    type MeetingOccurrenceWindow,
+    type MeetingRuleReplacement,
+    type MeetingSeriesDetailProjection,
     type MeetingTypeCode,
     type MeetingWeekday,
+    deriveMeetingOccurrenceId,
 } from '../shared/workspace-course-contract';
+import { canonicalJson } from '../shared/canonical-json';
 import {
     isCanonicalUuid,
     normalizeRecordSetupDecisionCommand,
@@ -34,6 +49,8 @@ import {
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import {
+    digestCancelMeetingOccurrence,
+    digestChangeMeetingOccurrence,
     digestCreateCourseWithMeeting,
     digestCreateTerm,
     digestReconcileWorkspaceLifecycle,
@@ -44,15 +61,17 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel4,
+    createSchemaLevel5,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
+    migrateLevel4To5,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
     validateSchemaLevel3,
     validateSchemaLevel4,
+    validateSchemaLevel5,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -102,7 +121,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 4 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 5 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -135,13 +154,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 4;
+        schemaLevel: 5;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 4;
+        schemaLevel: 5;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -190,7 +209,9 @@ type ReceiptEffect = Readonly<{
         | 'plan.term-end-date-updated'
         | 'plan.term-restored-current'
         | 'plan.course-created'
-        | 'plan.meeting-series-created';
+        | 'plan.meeting-series-created'
+        | 'plan.meeting-occurrence-changed'
+        | 'plan.meeting-occurrence-cancelled';
     entity: Readonly<{
         kind: 'workspace-setup' | 'term' | 'course' | 'meeting-series';
         id: string;
@@ -226,7 +247,7 @@ type ConflictProblem = Readonly<{
     context: Readonly<{
         revision: string;
         entityVersions: readonly [Readonly<{
-            kind: 'workspace-setup' | 'plan-state';
+            kind: 'workspace-setup' | 'plan-state' | 'meeting-series';
             id: string;
             version: string;
         }>];
@@ -254,9 +275,22 @@ type PermissionCommitProblem = Readonly<{
     details: Readonly<{ reason: 'read-only' }>;
 }>;
 
+type DecisionRequiredProblem = Readonly<{
+    code: 'decision-required';
+    scope: 'operation';
+    dataEffect: 'unchanged';
+    affectedCapabilities: readonly ['workspace.write'];
+    allowedActions: readonly ['preview'];
+    context: Readonly<{ revision: string }>;
+    details: Readonly<{ reason: 'impact-confirmation-required' }>;
+}>;
+
 export type DataCommitResult =
     | Readonly<{ ok: true; value: CommandReceiptOutcome }>
-    | Readonly<{ ok: false; problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem }>;
+    | Readonly<{
+        ok: false;
+        problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem | DecisionRequiredProblem;
+    }>;
 
 type CommitWork = {
     command: WorkspaceDataCommand;
@@ -270,10 +304,15 @@ type TermMutationCommand =
     | UpdateTermEndDateCommand
     | RestoreTermAsCurrentCommand;
 
+type MeetingOccurrenceMutationCommand =
+    | ChangeMeetingOccurrenceCommand
+    | CancelMeetingOccurrenceCommand;
+
 type WorkspaceDataCommand =
     | RecordSetupDecisionCommand
     | CreateTermCommand
     | AcceptedCreateCourseWithMeetingCommand
+    | MeetingOccurrenceMutationCommand
     | TermMutationCommand;
 
 type CurrentVersions = Readonly<{
@@ -379,10 +418,411 @@ function meetingTypeName(type: MeetingTypeCode): 'Lecture' | 'Tutorial' | 'Pract
     return type === 'TUT' ? 'Tutorial' : 'Practical';
 }
 
+const MILLISECONDS_PER_DAY = 86_400_000;
+const MEETING_WEEKDAY_NUMBERS: Readonly<Record<MeetingWeekday, number>> = Object.freeze({
+    SUN: 0,
+    MON: 1,
+    TUE: 2,
+    WED: 3,
+    THU: 4,
+    FRI: 5,
+    SAT: 6,
+});
+
+/**
+ * Converts a canonical LocalDate to a UTC arithmetic coordinate.
+ * @param {string} value - Canonical LocalDate.
+ * @return {number} UTC midnight milliseconds used only for date arithmetic.
+ */
+function localDateMilliseconds(value: string): number {
+    return Date.parse(`${value}T00:00:00.000Z`);
+}
+
+/**
+ * Adds an in-range number of calendar days to a canonical LocalDate.
+ * @param {string} value - Canonical LocalDate.
+ * @param {number} days - Signed day offset known to remain representable.
+ * @return {string} Shifted canonical LocalDate.
+ */
+function addLocalDateDays(value: string, days: number): string {
+    return new Date(localDateMilliseconds(value) + days * MILLISECONDS_PER_DAY)
+        .toISOString()
+        .slice(0, 10);
+}
+
+/**
+ * Adds days while clamping to the supported LocalDate endpoints.
+ * @param {string} value - Canonical LocalDate.
+ * @param {number} days - Signed day offset.
+ * @return {string} Shifted or endpoint-clamped canonical LocalDate.
+ */
+function addClampedLocalDateDays(value: string, days: number): string {
+    const shifted = localDateMilliseconds(value) + days * MILLISECONDS_PER_DAY;
+    const minimum = localDateMilliseconds('0000-01-01');
+    const maximum = localDateMilliseconds('9999-12-31');
+    return new Date(Math.min(maximum, Math.max(minimum, shifted))).toISOString().slice(0, 10);
+}
+
+/**
+ * Projects a stable weekly logical anchor onto an effective weekday.
+ * @param {string} originalLogicalAnchor - Stable occurrence identity anchor.
+ * @param {MeetingWeekday} weekday - Effective weekday after segment or override rules.
+ * @return {string | null} Physical LocalDate, or null beyond the supported date domain.
+ */
+function occurrenceDate(originalLogicalAnchor: string, weekday: MeetingWeekday): string | null {
+    const anchorWeekday = new Date(localDateMilliseconds(originalLogicalAnchor)).getUTCDay();
+    const milliseconds = localDateMilliseconds(originalLogicalAnchor)
+        + (MEETING_WEEKDAY_NUMBERS[weekday] - anchorWeekday) * MILLISECONDS_PER_DAY;
+    if (milliseconds < localDateMilliseconds('0000-01-01')
+        || milliseconds > localDateMilliseconds('9999-12-31')) {
+        return null;
+    }
+    return new Date(milliseconds).toISOString().slice(0, 10);
+}
+
+/**
+ * Chooses the first representable weekly identity anchor for a new Meeting series.
+ * @param {string} startDate - Resolved inclusive effective-range start.
+ * @param {MeetingWeekday} weekday - Initial Meeting weekday.
+ * @return {string} First matching anchor, using the previous match at the LocalDate ceiling.
+ */
+function meetingFirstLogicalAnchor(startDate: string, weekday: MeetingWeekday): string {
+    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
+    const startWeekday = new Date(localDateMilliseconds(startDate)).getUTCDay();
+    const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
+    const forwardMilliseconds = localDateMilliseconds(startDate) + forwardDays * MILLISECONDS_PER_DAY;
+    return forwardMilliseconds <= localDateMilliseconds('9999-12-31')
+        ? new Date(forwardMilliseconds).toISOString().slice(0, 10)
+        : addLocalDateDays(startDate, forwardDays - 7);
+}
+
+type StoredMeetingSegment = Readonly<{
+    meeting_segment_id: string;
+    meeting_type: MeetingTypeCode;
+    weekday: MeetingWeekday;
+    local_start: string;
+    local_end: string;
+    logical_start_anchor: string;
+    logical_end_anchor: string | null;
+    effective_range_kind: MeetingEffectiveRangeIntent['kind'];
+    effective_start_date: string | null;
+    effective_end_date: string | null;
+    resolved_start_date: string;
+    resolved_end_date: string;
+    location_kind: 'known' | 'tba';
+    location_value: string | null;
+}>;
+
+type StoredMeetingOverride = Readonly<{
+    original_logical_anchor: string;
+    override_kind: 'replaced' | 'cancelled';
+    meeting_type: MeetingTypeCode | null;
+    weekday: MeetingWeekday | null;
+    local_start: string | null;
+    local_end: string | null;
+    location_kind: 'known' | 'tba' | null;
+    location_value: string | null;
+}>;
+
+/**
+ * Rejects an ordered segment sequence whose logical ranges overlap.
+ * @param {readonly StoredMeetingSegment[]} segments - Segments ordered by logical start anchor.
+ * @return {void}
+ */
+function validateMeetingSegmentSequence(segments: readonly StoredMeetingSegment[]): void {
+    let previousEndAnchor: string | null | undefined;
+    for (const segment of segments) {
+        if (previousEndAnchor !== undefined
+            && (previousEndAnchor === null || segment.logical_start_anchor <= previousEndAnchor)) {
+            throw new Error('Meeting series has overlapping logical segments');
+        }
+        previousEndAnchor = segment.logical_end_anchor;
+    }
+}
+
+/**
+ * Tests logical range membership and the segment's seven-day cadence.
+ * @param {StoredMeetingSegment} segment - Candidate owning segment.
+ * @param {string} anchor - Stable logical occurrence anchor.
+ * @return {boolean} Whether the anchor belongs to the segment's weekly sequence.
+ */
+function logicalAnchorBelongsToSegment(segment: StoredMeetingSegment, anchor: string): boolean {
+    return segment.logical_start_anchor <= anchor
+        && (segment.logical_end_anchor === null || segment.logical_end_anchor >= anchor)
+        && (localDateMilliseconds(anchor) - localDateMilliseconds(segment.logical_start_anchor))
+            % (7 * MILLISECONDS_PER_DAY) === 0;
+}
+
+/**
+ * Tests whether a logical anchor produces an occurrence inside the resolved effective range.
+ * @param {StoredMeetingSegment} segment - Candidate owning segment.
+ * @param {string} anchor - Stable logical occurrence anchor.
+ * @param {MeetingWeekday} weekday - Effective weekday used for physical range membership.
+ * @return {boolean} Whether the occurrence is currently active.
+ */
+function isActiveLogicalAnchor(
+    segment: StoredMeetingSegment,
+    anchor: string,
+    weekday: MeetingWeekday = segment.weekday,
+): boolean {
+    const date = occurrenceDate(anchor, weekday);
+    return date !== null
+        && logicalAnchorBelongsToSegment(segment, anchor)
+        && segment.resolved_start_date <= date
+        && segment.resolved_end_date >= date;
+}
+
+/**
+ * Enumerates only weekly anchors that can project into a bounded physical window.
+ * @param {StoredMeetingSegment} segment - Segment owning the weekly sequence.
+ * @param {MeetingOccurrenceWindow} requestedWindow - Bounded physical query window.
+ * @return {readonly string[]} Candidate anchors for final rule and override evaluation.
+ */
+function candidateLogicalAnchors(
+    segment: StoredMeetingSegment,
+    requestedWindow: MeetingOccurrenceWindow,
+): readonly string[] {
+    const weekMilliseconds = 7 * MILLISECONDS_PER_DAY;
+    const requestedStart = requestedWindow.startDate > segment.resolved_start_date
+        ? requestedWindow.startDate
+        : segment.resolved_start_date;
+    const requestedEnd = requestedWindow.endDate < segment.resolved_end_date
+        ? requestedWindow.endDate
+        : segment.resolved_end_date;
+    if (requestedEnd < requestedStart) {
+        return Object.freeze([]);
+    }
+    const firstAnchorMilliseconds = localDateMilliseconds(segment.logical_start_anchor);
+    const earliestAnchorMilliseconds = Math.max(
+        localDateMilliseconds('0000-01-01'),
+        localDateMilliseconds(requestedStart) - 6 * MILLISECONDS_PER_DAY,
+    );
+    const latestAnchorMilliseconds = Math.min(
+        localDateMilliseconds('9999-12-31'),
+        localDateMilliseconds(requestedEnd) + 6 * MILLISECONDS_PER_DAY,
+    );
+    const minimumIndex = Math.max(0, Math.ceil(
+        (earliestAnchorMilliseconds - firstAnchorMilliseconds) / weekMilliseconds,
+    ));
+    let maximumIndex = Math.floor(
+        (latestAnchorMilliseconds - firstAnchorMilliseconds) / weekMilliseconds,
+    );
+    if (segment.logical_end_anchor !== null) {
+        maximumIndex = Math.min(maximumIndex, Math.floor(
+            (localDateMilliseconds(segment.logical_end_anchor)
+                - localDateMilliseconds(segment.logical_start_anchor)) / weekMilliseconds,
+        ));
+    }
+    if (maximumIndex < minimumIndex) {
+        return Object.freeze([]);
+    }
+    return Object.freeze(Array.from({ length: maximumIndex - minimumIndex + 1 }, (_, index) => (
+        addLocalDateDays(segment.logical_start_anchor, (minimumIndex + index) * 7)
+    )));
+}
+
+/**
+ * Counts weekly anchors satisfying both logical-anchor and physical-date bounds.
+ * @param {StoredMeetingSegment} segment - Segment owning the logical anchor sequence.
+ * @param {MeetingWeekday} weekday - Weekday used to project each anchor to a physical date.
+ * @param {number} minimumAnchor - Inclusive lower logical-anchor bound in UTC milliseconds.
+ * @param {number} maximumAnchor - Inclusive upper logical-anchor bound in UTC milliseconds.
+ * @param {number} minimumDate - Inclusive lower physical-date bound in UTC milliseconds.
+ * @param {number} maximumDate - Inclusive upper physical-date bound in UTC milliseconds.
+ * @return {number} Number of active anchors satisfying every bound.
+ */
+function countActiveLogicalAnchors(
+    segment: StoredMeetingSegment,
+    weekday: MeetingWeekday,
+    minimumAnchor: number,
+    maximumAnchor: number,
+    minimumDate: number,
+    maximumDate: number,
+): number {
+    if (maximumAnchor < minimumAnchor || maximumDate < minimumDate) {
+        return 0;
+    }
+    const weekMilliseconds = 7 * MILLISECONDS_PER_DAY;
+    const firstAnchor = localDateMilliseconds(segment.logical_start_anchor);
+    const firstAnchorWeekday = new Date(firstAnchor).getUTCDay();
+    const firstDate = firstAnchor
+        + (MEETING_WEEKDAY_NUMBERS[weekday] - firstAnchorWeekday) * MILLISECONDS_PER_DAY;
+    const resolvedStart = localDateMilliseconds(segment.resolved_start_date);
+    const resolvedEnd = localDateMilliseconds(segment.resolved_end_date);
+    const localDateMaximum = localDateMilliseconds('9999-12-31');
+    let minimumIndex = Math.max(
+        0,
+        Math.ceil((minimumAnchor - firstAnchor) / weekMilliseconds),
+        Math.ceil((Math.max(minimumDate, resolvedStart) - firstDate) / weekMilliseconds),
+    );
+    let maximumIndex = Math.min(
+        Math.floor((maximumAnchor - firstAnchor) / weekMilliseconds),
+        Math.floor((Math.min(maximumDate, resolvedEnd) - firstDate) / weekMilliseconds),
+        Math.floor((localDateMaximum - firstAnchor) / weekMilliseconds),
+    );
+    if (segment.logical_end_anchor !== null) {
+        maximumIndex = Math.min(
+            maximumIndex,
+            Math.floor(
+                (localDateMilliseconds(segment.logical_end_anchor) - firstAnchor) / weekMilliseconds,
+            ),
+        );
+    }
+    minimumIndex = Math.ceil(minimumIndex);
+    maximumIndex = Math.floor(maximumIndex);
+    return maximumIndex < minimumIndex ? 0 : maximumIndex - minimumIndex + 1;
+}
+
+/**
+ * Detects whether a bounded preview omits an actual weekly occurrence in an anchor partition.
+ * @param {readonly StoredMeetingSegment[]} segments - Ordered segments in the Meeting series.
+ * @param {number} minimumAnchor - Inclusive lower logical-anchor bound in UTC milliseconds.
+ * @param {number} maximumAnchor - Inclusive upper logical-anchor bound in UTC milliseconds.
+ * @param {MeetingOccurrenceWindow} requestedWindow - Physical dates shown by the preview.
+ * @param {MeetingWeekday | null} replacementWeekday - Proposed weekday, or null for stored rules.
+ * @param {readonly StoredMeetingOverride[]} overrides - Boundary replacements that can cross the window.
+ * @param {string | null} clearedOverrideAnchor - Override cleared by the proposed split, when any.
+ * @return {boolean} Whether at least one matching occurrence falls outside the requested window.
+ */
+function hasOccurrenceOutsideRequestedWindow(
+    segments: readonly StoredMeetingSegment[],
+    minimumAnchor: number,
+    maximumAnchor: number,
+    requestedWindow: MeetingOccurrenceWindow,
+    replacementWeekday: MeetingWeekday | null,
+    overrides: readonly StoredMeetingOverride[],
+    clearedOverrideAnchor: string | null,
+): boolean {
+    const localDateMinimum = localDateMilliseconds('0000-01-01');
+    const localDateMaximum = localDateMilliseconds('9999-12-31');
+    const requestedStart = localDateMilliseconds(requestedWindow.startDate);
+    const requestedEnd = localDateMilliseconds(requestedWindow.endDate);
+    let outsideCount = segments.reduce((count, segment) => {
+        const weekday = replacementWeekday ?? segment.weekday;
+        const total = countActiveLogicalAnchors(
+            segment,
+            weekday,
+            minimumAnchor,
+            maximumAnchor,
+            localDateMinimum,
+            localDateMaximum,
+        );
+        const visible = countActiveLogicalAnchors(
+            segment,
+            weekday,
+            minimumAnchor,
+            maximumAnchor,
+            requestedStart,
+            requestedEnd,
+        );
+        return count + total - visible;
+    }, 0);
+
+    for (const override of overrides) {
+        if (override.override_kind !== 'replaced'
+            || override.original_logical_anchor === clearedOverrideAnchor) {
+            continue;
+        }
+        const anchor = localDateMilliseconds(override.original_logical_anchor);
+        if (anchor < minimumAnchor || anchor > maximumAnchor) {
+            continue;
+        }
+        const matchingSegments = segments.filter(segment => (
+            logicalAnchorBelongsToSegment(segment, override.original_logical_anchor)
+        ));
+        if (matchingSegments.length !== 1) {
+            throw new Error('Meeting override does not target a logical occurrence');
+        }
+        const segment = matchingSegments[0]!;
+        const baseWeekday = replacementWeekday ?? segment.weekday;
+        if (!isActiveLogicalAnchor(segment, override.original_logical_anchor, baseWeekday)) {
+            continue;
+        }
+        const baseDate = occurrenceDate(override.original_logical_anchor, baseWeekday);
+        const replacedDate = occurrenceDate(override.original_logical_anchor, override.weekday!);
+        if (baseDate === null || replacedDate === null) {
+            throw new Error('Meeting override has an invalid physical date');
+        }
+        const baseOutside = baseDate < requestedWindow.startDate || baseDate > requestedWindow.endDate;
+        const replacementOutside = replacedDate < requestedWindow.startDate
+            || replacedDate > requestedWindow.endDate;
+        outsideCount += Number(replacementOutside) - Number(baseOutside);
+    }
+    return outsideCount > 0;
+}
+
+/**
+ * Binds a whole-rule confirmation to versions, exact intent, and preview window.
+ * @param {string} revision - Workspace revision used by the preview.
+ * @param {string} planEntityVersion - PLAN version used by the preview.
+ * @param {string} meetingSeriesVersion - Meeting series version used by the preview.
+ * @param {object} change - Exact future-change scope, series, anchor, and replacement facts.
+ * @param {MeetingOccurrenceWindow} requestedWindow - Bounded preview window.
+ * @return {string} Lowercase SHA-256 confirmation token.
+ */
+function meetingOccurrenceConfirmationToken(
+    revision: string,
+    planEntityVersion: string,
+    meetingSeriesVersion: string,
+    change: Pick<
+        MeetingOccurrenceImpactDraft,
+        'scope' | 'meetingSeriesId' | 'originalLogicalAnchor' | 'replacement'
+    >,
+    requestedWindow: MeetingOccurrenceWindow,
+): string {
+    const encoded = canonicalJson({
+        encoding: 'courseflow-meeting-impact-v1',
+        revision,
+        planEntityVersion,
+        meetingSeriesVersion,
+        scope: change.scope,
+        meetingSeriesId: change.meetingSeriesId,
+        originalLogicalAnchor: change.originalLogicalAnchor,
+        replacement: change.replacement,
+        requestedWindow,
+    });
+    return createHash('sha256').update(encoded, 'utf8').digest('hex');
+}
+
+/**
+ * Materializes the explicit known/TBA location union from validated stored columns.
+ * @param {'known' | 'tba'} kind - Stored location discriminant.
+ * @param {string | null} value - Known location text, or null for TBA.
+ * @return {MeetingLocation} Immutable location DTO.
+ */
+function meetingLocation(kind: 'known' | 'tba', value: string | null): MeetingLocation {
+    return kind === 'tba'
+        ? Object.freeze({ kind: 'tba' as const })
+        : Object.freeze({ kind: 'known' as const, value: value! });
+}
+
 function isCourseWithMeetingCommand(
     command: WorkspaceDataCommand,
 ): command is AcceptedCreateCourseWithMeetingCommand {
     return command.intent.kind === 'plan.create-course-with-first-meeting';
+}
+
+/**
+ * Narrows a Workspace DATA command to a Meeting occurrence mutation.
+ * @param {WorkspaceDataCommand} command - Normalized DATA command.
+ * @return {boolean} Whether the command mutates one occurrence or a future rule segment.
+ */
+function isMeetingOccurrenceMutationCommand(
+    command: WorkspaceDataCommand,
+): command is MeetingOccurrenceMutationCommand {
+    return command.intent.kind === 'plan.change-meeting-occurrence'
+        || command.intent.kind === 'plan.cancel-meeting-occurrence';
+}
+
+/**
+ * Narrows an occurrence mutation to its change variant.
+ * @param {MeetingOccurrenceMutationCommand} command - Normalized occurrence mutation.
+ * @return {boolean} Whether the command carries a replacement rule.
+ */
+function isChangeMeetingOccurrenceCommand(
+    command: MeetingOccurrenceMutationCommand,
+): command is ChangeMeetingOccurrenceCommand {
+    return command.intent.kind === 'plan.change-meeting-occurrence';
 }
 
 function isTermMutationCommand(command: WorkspaceDataCommand): command is TermMutationCommand {
@@ -494,6 +934,40 @@ function planConflictResult(reason: ConflictReason, versions: CurrentVersions): 
     return Object.freeze({ ok: false as const, problem });
 }
 
+/**
+ * Builds a conflict problem carrying the authoritative Meeting series version.
+ * @param {ConflictReason} reason - Stable conflict reason.
+ * @param {CurrentVersions} versions - Current Workspace and PLAN versions.
+ * @param {string} meetingSeriesId - Conflicted Meeting series identity.
+ * @param {bigint} meetingSeriesVersion - Current Meeting series version.
+ * @return {DataCommitResult} Unchanged conflict result.
+ */
+function meetingSeriesConflictResult(
+    reason: ConflictReason,
+    versions: CurrentVersions,
+    meetingSeriesId: string,
+    meetingSeriesVersion: bigint,
+): DataCommitResult {
+    const entityVersion = Object.freeze({
+        kind: 'meeting-series' as const,
+        id: meetingSeriesId,
+        version: meetingSeriesVersion.toString(),
+    });
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context: Object.freeze({
+            revision: versions.revision.toString(),
+            entityVersions: freezeTuple([entityVersion]),
+        }),
+        details: Object.freeze({ reason }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
 function writerBusyResult(revision: bigint): DataCommitResult {
     const problem = Object.freeze({
         code: 'operation-in-progress' as const,
@@ -528,6 +1002,24 @@ function permissionCommitResult(revision: bigint): DataCommitResult {
         allowedActions: freezeEmptyTuple(),
         context: Object.freeze({ revision: revision.toString() }),
         details: Object.freeze({ reason: 'read-only' as const }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+/**
+ * Builds an unchanged result requiring a fresh whole-rule impact preview.
+ * @param {bigint} revision - Current Workspace revision.
+ * @return {DataCommitResult} Decision-required result.
+ */
+function decisionRequiredResult(revision: bigint): DataCommitResult {
+    const problem = Object.freeze({
+        code: 'decision-required' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['preview' as const]),
+        context: Object.freeze({ revision: revision.toString() }),
+        details: Object.freeze({ reason: 'impact-confirmation-required' as const }),
     });
     return Object.freeze({ ok: false as const, problem });
 }
@@ -749,6 +1241,8 @@ class SqliteDataStoreImplementation {
                     meeting_series.meeting_series_id,
                     meeting_series.course_id,
                     meeting_series.entity_version,
+                    meeting_segments.meeting_segment_id,
+                    meeting_segments.logical_start_anchor,
                     meeting_segments.meeting_type,
                     meeting_segments.weekday,
                     meeting_segments.local_start,
@@ -761,13 +1255,19 @@ class SqliteDataStoreImplementation {
                 FROM meeting_series
                 JOIN meeting_segments
                     ON meeting_segments.meeting_series_id = meeting_series.meeting_series_id
-                ORDER BY meeting_series.course_id, meeting_series.meeting_series_id
+                ORDER BY
+                    meeting_series.course_id,
+                    meeting_series.meeting_series_id,
+                    meeting_segments.logical_start_anchor,
+                    meeting_segments.meeting_segment_id
             `);
             meetingStatement.setReadBigInts(true);
             const meetingRows = meetingStatement.all() as Array<{
                     meeting_series_id: string;
                     course_id: string;
                     entity_version: bigint;
+                    meeting_segment_id: string;
+                    logical_start_anchor: string | null;
                     meeting_type: MeetingTypeCode;
                     weekday: MeetingWeekday;
                     local_start: string;
@@ -778,7 +1278,10 @@ class SqliteDataStoreImplementation {
                     location_kind: 'known' | 'tba';
                     location_value: string | null;
                 }>;
-            // ponytail: WP-R2-03 owns one segment per series; R3 rule splitting must replace this mapping.
+            const latestMeetingRows = Array.from(meetingRows.reduce((latest, meeting) => {
+                latest.set(meeting.meeting_series_id, meeting);
+                return latest;
+            }, new Map<string, typeof meetingRows[number]>()).values());
             const courses = Object.freeze(courseRows.map((course) => {
                 const teachingStartDate = course.teaching_range_kind === 'inherit-term'
                     ? course.term_start_date
@@ -804,7 +1307,7 @@ class SqliteDataStoreImplementation {
                     }),
                     archived: course.archived === 1n,
                     entityVersion: course.entity_version.toString(),
-                    meetings: Object.freeze(meetingRows
+                    meetings: Object.freeze(latestMeetingRows
                         .filter(meeting => meeting.course_id === course.course_id)
                         .map(meeting => Object.freeze({
                             meetingSeriesId: meeting.meeting_series_id,
@@ -850,6 +1353,507 @@ class SqliteDataStoreImplementation {
         }
     }
 
+    /**
+     * Reads a bounded Meeting series projection without persisting ordinary occurrences.
+     * @param {string} meetingSeriesId - Stable Meeting series identity.
+     * @param {MeetingOccurrenceWindow} candidateWindow - Requested physical-date window.
+     * @return {MeetingSeriesDetailProjection} Revision-bound segment and occurrence projection.
+     */
+    public readMeetingSeriesDetail(
+        meetingSeriesId: string,
+        candidateWindow: MeetingOccurrenceWindow,
+    ): MeetingSeriesDetailProjection {
+        return this.readMeetingSeriesDetailProjection(meetingSeriesId, candidateWindow, null);
+    }
+
+    /**
+     * Evaluates stored rules or a proposed future rule over one bounded window.
+     * @param {string} meetingSeriesId - Stable Meeting series identity.
+     * @param {MeetingOccurrenceWindow} candidateWindow - Requested physical-date window.
+     * @param {MeetingOccurrenceImpactDraft | null} futureChange - Proposed split, or null for current facts.
+     * @return {MeetingSeriesDetailProjection} Revision-bound derived occurrence projection.
+     */
+    private readMeetingSeriesDetailProjection(
+        meetingSeriesId: string,
+        candidateWindow: MeetingOccurrenceWindow,
+        futureChange: MeetingOccurrenceImpactDraft | null,
+    ): MeetingSeriesDetailProjection {
+        this.requireOpen();
+        if (!isCanonicalUuid(meetingSeriesId)) {
+            throw new TypeError('MeetingSeriesId must be a canonical UUID');
+        }
+        const requestedWindow = normalizeMeetingOccurrenceWindow(candidateWindow);
+        const expandedWindowStart = addClampedLocalDateDays(requestedWindow.startDate, -6);
+        const expandedWindowEnd = addClampedLocalDateDays(requestedWindow.endDate, 6);
+
+        try {
+            this.database.exec('BEGIN');
+            const seriesStatement = this.database.prepare(`
+                SELECT
+                    meeting_series.course_id,
+                    meeting_series.entity_version,
+                    workspace_state.revision,
+                    plan_state.plan_entity_version
+                FROM meeting_series
+                JOIN workspace_state ON workspace_state.singleton = 1
+                JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+                WHERE meeting_series_id = ?
+            `);
+            seriesStatement.setReadBigInts(true);
+            const series = seriesStatement.get(meetingSeriesId) as {
+                course_id: string;
+                entity_version: bigint;
+                revision: bigint;
+                plan_entity_version: bigint;
+            } | undefined;
+            if (!series) {
+                throw new TypeError('Meeting series does not exist');
+            }
+
+            const segmentRows = this.database.prepare(`
+                SELECT
+                    meeting_segments.meeting_segment_id,
+                    meeting_segments.meeting_type,
+                    meeting_segments.weekday,
+                    meeting_segments.local_start,
+                    meeting_segments.local_end,
+                    meeting_segments.logical_start_anchor,
+                    meeting_segments.logical_end_anchor,
+                    meeting_segments.effective_range_kind,
+                    meeting_segments.effective_start_date,
+                    meeting_segments.effective_end_date,
+                    meeting_segments.location_kind,
+                    meeting_segments.location_value,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_start_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_start_date
+                        ELSE terms.start_date
+                    END AS resolved_start_date,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_end_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_end_date
+                        ELSE terms.end_date
+                    END AS resolved_end_date
+                FROM meeting_segments
+                JOIN meeting_series
+                    ON meeting_series.meeting_series_id = meeting_segments.meeting_series_id
+                JOIN courses ON courses.course_id = meeting_series.course_id
+                JOIN terms ON terms.term_id = courses.term_id
+                WHERE meeting_segments.meeting_series_id = ?
+                    AND meeting_segments.logical_start_anchor <= ?
+                    AND (
+                        meeting_segments.logical_end_anchor IS NULL
+                        OR meeting_segments.logical_end_anchor >= ?
+                    )
+                ORDER BY meeting_segments.logical_start_anchor, meeting_segments.meeting_segment_id
+            `).all(meetingSeriesId, expandedWindowEnd, expandedWindowStart) as StoredMeetingSegment[];
+            const overrideRows = this.database.prepare(`
+                SELECT
+                    original_logical_anchor,
+                    override_kind,
+                    meeting_type,
+                    weekday,
+                    local_start,
+                    local_end,
+                    location_kind,
+                    location_value
+                FROM meeting_occurrence_overrides
+                WHERE meeting_series_id = ?
+                    AND original_logical_anchor BETWEEN ? AND ?
+                ORDER BY original_logical_anchor
+            `).all(meetingSeriesId, expandedWindowStart, expandedWindowEnd) as StoredMeetingOverride[];
+
+            validateMeetingSegmentSequence(segmentRows);
+            for (const override of overrideRows) {
+                const matchingSegments = segmentRows.filter(segment => (
+                    logicalAnchorBelongsToSegment(segment, override.original_logical_anchor)
+                ));
+                if (matchingSegments.length !== 1) {
+                    throw new Error('Meeting override does not target a logical occurrence');
+                }
+            }
+
+            const overrides = new Map(overrideRows.map(row => [row.original_logical_anchor, row]));
+            const seenAnchors = new Set<string>();
+            const segments = Object.freeze(segmentRows.map(row => Object.freeze({
+                    segmentId: row.meeting_segment_id,
+                    logicalStartAnchor: row.logical_start_anchor,
+                    logicalEndAnchor: row.logical_end_anchor,
+                    type: row.meeting_type,
+                    weekday: row.weekday,
+                    localStart: row.local_start,
+                    localEnd: row.local_end,
+                    location: meetingLocation(row.location_kind, row.location_value),
+                })));
+            const occurrences = [] as Array<Readonly<{
+                occurrenceId: MeetingOccurrenceId;
+                segmentId: string;
+                date: string;
+                status: 'scheduled' | 'cancelled';
+                overrideKind: 'replaced' | 'cancelled' | null;
+                type: MeetingTypeCode;
+                weekday: MeetingWeekday;
+                localStart: string;
+                localEnd: string;
+                location: MeetingLocation;
+            }>>;
+            for (const [index, segment] of segments.entries()) {
+                const storedSegment = segmentRows[index]!;
+                for (const anchor of candidateLogicalAnchors(storedSegment, requestedWindow)) {
+                    if (seenAnchors.has(anchor)) {
+                        throw new Error('Meeting occurrence logical anchor is duplicated');
+                    }
+                    seenAnchors.add(anchor);
+                    const override = overrides.get(anchor);
+                    const futureChangeApplies = futureChange !== null
+                        && anchor >= futureChange.originalLogicalAnchor;
+                    if (!isActiveLogicalAnchor(
+                        storedSegment,
+                        anchor,
+                        futureChangeApplies ? futureChange.replacement.weekday : storedSegment.weekday,
+                    )) {
+                        continue;
+                    }
+                    const retainedOverride = futureChangeApplies
+                        && anchor === futureChange.originalLogicalAnchor
+                        ? undefined
+                        : override;
+                    const replacement: MeetingRuleReplacement = retainedOverride?.override_kind === 'replaced'
+                        ? {
+                            type: retainedOverride.meeting_type!,
+                            weekday: retainedOverride.weekday!,
+                            localStart: retainedOverride.local_start!,
+                            localEnd: retainedOverride.local_end!,
+                            location: meetingLocation(
+                                retainedOverride.location_kind!,
+                                retainedOverride.location_value,
+                            ),
+                        }
+                        : futureChangeApplies
+                            ? futureChange.replacement
+                            : {
+                                type: segment.type,
+                                weekday: segment.weekday,
+                                localStart: segment.localStart,
+                                localEnd: segment.localEnd,
+                                location: segment.location,
+                            };
+                    const date = occurrenceDate(anchor, replacement.weekday);
+                    if (date === null
+                        || date < requestedWindow.startDate
+                        || date > requestedWindow.endDate) {
+                        continue;
+                    }
+                    occurrences.push(Object.freeze({
+                        occurrenceId: deriveMeetingOccurrenceId(meetingSeriesId, anchor),
+                        segmentId: segment.segmentId,
+                        date,
+                        status: retainedOverride?.override_kind === 'cancelled' ? 'cancelled' : 'scheduled',
+                        overrideKind: retainedOverride?.override_kind ?? null,
+                        type: replacement.type,
+                        weekday: replacement.weekday,
+                        localStart: replacement.localStart,
+                        localEnd: replacement.localEnd,
+                        location: replacement.location,
+                    }));
+                }
+            }
+            this.database.exec('COMMIT');
+
+            return Object.freeze({
+                workspaceRevision: series.revision.toString(),
+                planEntityVersion: series.plan_entity_version.toString(),
+                requestedWindow,
+                meetingSeriesId,
+                courseId: series.course_id,
+                entityVersion: series.entity_version.toString(),
+                segments,
+                occurrences: Object.freeze(occurrences),
+            });
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
+    /**
+     * Previews and tokenizes a this-and-future Meeting rule split.
+     * @param {MeetingOccurrenceImpactDraft} candidate - Untrusted exact preview draft.
+     * @return {MeetingOccurrenceImpactProjection} Version-bound current/after impact projection.
+     */
+    public previewMeetingOccurrenceChange(
+        candidate: MeetingOccurrenceImpactDraft,
+    ): MeetingOccurrenceImpactProjection {
+        this.requireOpen();
+        const draft = normalizeMeetingOccurrenceImpactDraft(candidate);
+        const detail = this.readMeetingSeriesDetail(draft.meetingSeriesId, draft.requestedWindow);
+        const target = detail.occurrences.find(occurrence => (
+            occurrence.occurrenceId.originalLogicalAnchor === draft.originalLogicalAnchor
+        ));
+        if (!target) {
+            throw new TypeError('Meeting occurrence impact target is outside the requested window');
+        }
+        const afterChangeDetail = this.readMeetingSeriesDetailProjection(
+            draft.meetingSeriesId,
+            draft.requestedWindow,
+            draft,
+        );
+
+        try {
+            this.database.exec('BEGIN');
+            const versions = this.currentVersions();
+            const seriesStatement = this.database.prepare(`
+                SELECT entity_version
+                FROM meeting_series
+                WHERE meeting_series_id = ? AND retired = 0
+            `);
+            seriesStatement.setReadBigInts(true);
+            const series = seriesStatement.get(draft.meetingSeriesId) as {
+                entity_version: bigint;
+            } | undefined;
+            if (!series
+                || versions.revision.toString() !== detail.workspaceRevision
+                || versions.planVersion.toString() !== detail.planEntityVersion
+                || series.entity_version.toString() !== detail.entityVersion
+                || afterChangeDetail.workspaceRevision !== detail.workspaceRevision
+                || afterChangeDetail.planEntityVersion !== detail.planEntityVersion
+                || afterChangeDetail.entityVersion !== detail.entityVersion) {
+                throw new Error('Meeting impact snapshot changed while it was being prepared');
+            }
+
+            const scopeSegments = this.database.prepare(`
+                SELECT
+                    meeting_segments.meeting_segment_id,
+                    meeting_segments.meeting_type,
+                    meeting_segments.weekday,
+                    meeting_segments.local_start,
+                    meeting_segments.local_end,
+                    meeting_segments.logical_start_anchor,
+                    meeting_segments.logical_end_anchor,
+                    meeting_segments.effective_range_kind,
+                    meeting_segments.effective_start_date,
+                    meeting_segments.effective_end_date,
+                    meeting_segments.location_kind,
+                    meeting_segments.location_value,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_start_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_start_date
+                        ELSE terms.start_date
+                    END AS resolved_start_date,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_end_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_end_date
+                        ELSE terms.end_date
+                    END AS resolved_end_date
+                FROM meeting_segments
+                JOIN meeting_series
+                    ON meeting_series.meeting_series_id = meeting_segments.meeting_series_id
+                JOIN courses ON courses.course_id = meeting_series.course_id
+                JOIN terms ON terms.term_id = courses.term_id
+                WHERE meeting_segments.meeting_series_id = ?
+                ORDER BY meeting_segments.logical_start_anchor, meeting_segments.meeting_segment_id
+            `).all(draft.meetingSeriesId) as StoredMeetingSegment[];
+            validateMeetingSegmentSequence(scopeSegments);
+            const range = scopeSegments.find(segment => segment.meeting_segment_id === target.segmentId);
+            const boundaryOverrides = this.database.prepare(`
+                SELECT
+                    original_logical_anchor,
+                    override_kind,
+                    meeting_type,
+                    weekday,
+                    local_start,
+                    local_end,
+                    location_kind,
+                    location_value
+                FROM meeting_occurrence_overrides
+                WHERE meeting_series_id = ?
+                    AND original_logical_anchor BETWEEN ? AND ?
+                ORDER BY original_logical_anchor
+            `).all(
+                draft.meetingSeriesId,
+                addClampedLocalDateDays(draft.requestedWindow.startDate, -12),
+                addClampedLocalDateDays(draft.requestedWindow.endDate, 12),
+            ) as StoredMeetingOverride[];
+            const targetDateAfterChange = occurrenceDate(
+                draft.originalLogicalAnchor,
+                draft.replacement.weekday,
+            );
+            if (!range
+                || targetDateAfterChange === null
+                || targetDateAfterChange < range.resolved_start_date
+                || targetDateAfterChange > range.resolved_end_date) {
+                throw new TypeError('Meeting occurrence replacement falls outside its effective range');
+            }
+
+            const impactStatement = this.database.prepare(`
+                SELECT
+                    (
+                        SELECT count(*)
+                        FROM meeting_segments
+                        WHERE meeting_series_id = ?
+                            AND (
+                                logical_end_anchor IS NULL
+                                OR logical_end_anchor >= ?
+                            )
+                    ) AS affected_segment_count,
+                    (
+                        SELECT count(*)
+                        FROM meeting_occurrence_overrides
+                        WHERE meeting_series_id = ? AND original_logical_anchor >= ?
+                    ) AS future_override_count,
+                    (
+                        SELECT override_kind
+                        FROM meeting_occurrence_overrides
+                        WHERE meeting_series_id = ? AND original_logical_anchor = ?
+                    ) AS target_override_kind
+            `);
+            impactStatement.setReadBigInts(true);
+            const impact = impactStatement.get(
+                draft.meetingSeriesId,
+                draft.originalLogicalAnchor,
+                draft.meetingSeriesId,
+                draft.originalLogicalAnchor,
+                draft.meetingSeriesId,
+                draft.originalLogicalAnchor,
+            ) as {
+                affected_segment_count: bigint;
+                future_override_count: bigint;
+                target_override_kind: 'replaced' | 'cancelled' | null;
+            };
+            const confirmationToken = meetingOccurrenceConfirmationToken(
+                detail.workspaceRevision,
+                detail.planEntityVersion,
+                detail.entityVersion,
+                draft,
+                draft.requestedWindow,
+            );
+            const minimumLocalDate = localDateMilliseconds('0000-01-01');
+            const maximumLocalDate = localDateMilliseconds('9999-12-31');
+            const targetAnchor = localDateMilliseconds(draft.originalLogicalAnchor);
+            const historyOutsideRequestedWindow = hasOccurrenceOutsideRequestedWindow(
+                scopeSegments,
+                minimumLocalDate,
+                targetAnchor - 1,
+                draft.requestedWindow,
+                null,
+                boundaryOverrides,
+                null,
+            );
+            const currentFutureOutsideRequestedWindow = hasOccurrenceOutsideRequestedWindow(
+                scopeSegments,
+                targetAnchor,
+                maximumLocalDate,
+                draft.requestedWindow,
+                null,
+                boundaryOverrides,
+                null,
+            );
+            const changedFutureOutsideRequestedWindow = hasOccurrenceOutsideRequestedWindow(
+                scopeSegments,
+                targetAnchor,
+                maximumLocalDate,
+                draft.requestedWindow,
+                draft.replacement.weekday,
+                boundaryOverrides,
+                draft.originalLogicalAnchor,
+            );
+            const futureOutsideRequestedWindow = currentFutureOutsideRequestedWindow
+                || changedFutureOutsideRequestedWindow;
+            const targetOverrideKind = impact.target_override_kind ?? 'none';
+            const warnings = [] as Array<Readonly<{
+                code:
+                    | 'preview-window-truncated-history'
+                    | 'preview-window-truncated-future'
+                    | 'target-override-will-be-cleared';
+            }>>;
+            if (historyOutsideRequestedWindow) {
+                warnings.push(Object.freeze({ code: 'preview-window-truncated-history' }));
+            }
+            if (futureOutsideRequestedWindow) {
+                warnings.push(Object.freeze({ code: 'preview-window-truncated-future' }));
+            }
+            if (targetOverrideKind !== 'none') {
+                warnings.push(Object.freeze({ code: 'target-override-will-be-cleared' }));
+            }
+            const affectedFutureSegmentCount = impact.affected_segment_count.toString();
+            this.database.exec('COMMIT');
+
+            return Object.freeze({
+                basedOnRevision: detail.workspaceRevision,
+                planEntityVersion: detail.planEntityVersion,
+                meetingSeriesVersion: detail.entityVersion,
+                affectedEntities: freezeTuple([Object.freeze({
+                    kind: 'meeting-series' as const,
+                    id: draft.meetingSeriesId,
+                    version: detail.entityVersion,
+                })]),
+                effects: freezeTuple([Object.freeze({
+                    code: 'plan.meeting-series-split' as const,
+                    originalLogicalAnchor: draft.originalLogicalAnchor,
+                    affectedFutureSegmentCount,
+                    targetOverrideAction: targetOverrideKind === 'none' ? 'none' as const : 'clear' as const,
+                    laterOverrideAction: 'retain' as const,
+                })]),
+                warnings: Object.freeze(warnings),
+                choices: freezeTuple([Object.freeze({ id: 'apply-this-and-future' as const })]),
+                defaultChoice: Object.freeze({ id: 'apply-this-and-future' as const }),
+                recoverability: Object.freeze({
+                    kind: 'permanent' as const,
+                    reason: 'meeting-rule-split-has-no-undo' as const,
+                }),
+                unresolvedReferences: freezeEmptyTuple(),
+                scope: draft.scope,
+                meetingSeriesId: draft.meetingSeriesId,
+                originalLogicalAnchor: draft.originalLogicalAnchor,
+                requestedWindow: draft.requestedWindow,
+                replacement: draft.replacement,
+                targetDateAfterChange,
+                targetOverrideKind,
+                affectedFutureSegmentCount,
+                futureOverrideCount: impact.future_override_count.toString(),
+                historicalOccurrences: Object.freeze(detail.occurrences.filter(occurrence => (
+                    occurrence.occurrenceId.originalLogicalAnchor < draft.originalLogicalAnchor
+                ))),
+                currentFutureOccurrences: Object.freeze(detail.occurrences.filter(occurrence => (
+                    occurrence.occurrenceId.originalLogicalAnchor >= draft.originalLogicalAnchor
+                ))),
+                futureOccurrencesAfterChange: Object.freeze(afterChangeDetail.occurrences
+                    .filter(occurrence => (
+                        occurrence.occurrenceId.originalLogicalAnchor >= draft.originalLogicalAnchor
+                    ))
+                    .map(occurrence => Object.freeze({
+                        occurrenceId: occurrence.occurrenceId,
+                        date: occurrence.date,
+                        status: occurrence.status,
+                        overrideKind: occurrence.overrideKind,
+                        type: occurrence.type,
+                        weekday: occurrence.weekday,
+                        localStart: occurrence.localStart,
+                        localEnd: occurrence.localEnd,
+                        location: occurrence.location,
+                    }))),
+                historyOutsideRequestedWindow,
+                futureOutsideRequestedWindow,
+                attendanceRecordCount: '0',
+                explicitGradeReferenceCount: '0',
+                confirmationToken,
+            });
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
     public commit(
         candidate: WorkspaceDataCommand,
         options: CommitOptions = {},
@@ -872,6 +1876,12 @@ class SqliteDataStoreImplementation {
                 break;
             case 'plan.create-course-with-first-meeting':
                 command = normalizeAcceptedCreateCourseWithMeetingCommand(candidate);
+                break;
+            case 'plan.change-meeting-occurrence':
+                command = normalizeChangeMeetingOccurrenceCommand(candidate);
+                break;
+            case 'plan.cancel-meeting-occurrence':
+                command = normalizeCancelMeetingOccurrenceCommand(candidate);
                 break;
             case 'workspace.reconcile-lifecycle':
                 command = normalizeReconcileWorkspaceLifecycleCommand(candidate);
@@ -1075,6 +2085,9 @@ class SqliteDataStoreImplementation {
         }
         if (isCourseWithMeetingCommand(command)) {
             return this.commitCourseWithMeetingSynchronously(command, options);
+        }
+        if (isMeetingOccurrenceMutationCommand(command)) {
+            return this.commitMeetingOccurrenceMutationSynchronously(command, options);
         }
         if (isTermMutationCommand(command)) {
             return this.commitTermMutationSynchronously(command, options);
@@ -1484,6 +2497,10 @@ class SqliteDataStoreImplementation {
             const meetingSeriesId = randomUUID();
             const meetingSegmentId = randomUUID();
             const [creditsCoefficient, creditsScale] = decimalToCoefficient(payload.course.credits);
+            const logicalStartAnchor = meetingFirstLogicalAnchor(
+                effectiveStartDate,
+                payload.meeting.weekday,
+            );
             this.database.prepare(`
                 INSERT INTO courses (
                     course_id,
@@ -1535,12 +2552,14 @@ class SqliteDataStoreImplementation {
                     weekday,
                     local_start,
                     local_end,
+                    logical_start_anchor,
+                    logical_end_anchor,
                     effective_range_kind,
                     effective_start_date,
                     effective_end_date,
                     location_kind,
                     location_value
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(
                 meetingSegmentId,
                 meetingSeriesId,
@@ -1548,6 +2567,8 @@ class SqliteDataStoreImplementation {
                 payload.meeting.weekday,
                 payload.meeting.localStart,
                 payload.meeting.localEnd,
+                logicalStartAnchor,
+                null,
                 payload.meeting.effectiveRange.kind,
                 payload.meeting.effectiveRange.kind === 'explicit'
                     ? payload.meeting.effectiveRange.startDate
@@ -1599,6 +2620,399 @@ class SqliteDataStoreImplementation {
                     (?, 0, 'plan.course-created', 'course', ?, 1),
                     (?, 1, 'plan.meeting-series-created', 'meeting-series', ?, 1)
             `).run(command.commandId, courseId, command.commandId, meetingSeriesId);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
+    /**
+     * Commits one occurrence override or deterministic future segment split atomically.
+     * @param {MeetingOccurrenceMutationCommand} command - Normalized versioned mutation.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {DataCommitResult} Committed receipt or unchanged structured problem.
+     */
+    private commitMeetingOccurrenceMutationSynchronously(
+        command: MeetingOccurrenceMutationCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = isChangeMeetingOccurrenceCommand(command)
+            ? digestChangeMeetingOccurrence(command)
+            : digestCancelMeetingOccurrence(command);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            const payload = command.intent.payload;
+            const seriesStatement = this.database.prepare(`
+                SELECT entity_version, retired
+                FROM meeting_series
+                WHERE meeting_series_id = ?
+            `);
+            seriesStatement.setReadBigInts(true);
+            const series = seriesStatement.get(payload.meetingSeriesId) as {
+                entity_version: bigint;
+                retired: bigint;
+            } | undefined;
+            if (!series || series.retired !== 0n) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Meeting series is not editable');
+            }
+            const isFutureChange = isChangeMeetingOccurrenceCommand(command)
+                && command.intent.payload.scope === 'this-and-future';
+            if (isFutureChange) {
+                const expectedToken = command.impactWindow === null
+                    ? null
+                    : meetingOccurrenceConfirmationToken(
+                        versions.revision.toString(),
+                        versions.planVersion.toString(),
+                        series.entity_version.toString(),
+                        {
+                            ...command.intent.payload,
+                            scope: 'this-and-future',
+                        },
+                        command.impactWindow,
+                    );
+                if (versions.revision !== BigInt(command.expectedRevision)
+                    || versions.planVersion !== BigInt(command.expectedPlanVersion)
+                    || series.entity_version !== BigInt(command.expectedMeetingSeriesVersion)
+                    || expectedToken === null
+                    || command.confirmationToken === null
+                    || command.confirmationToken !== expectedToken) {
+                    this.rollbackOrRequireReopen();
+                    return decisionRequiredResult(versions.revision);
+                }
+            }
+            else if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            else if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            if (series.entity_version !== BigInt(command.expectedMeetingSeriesVersion)) {
+                this.rollbackOrRequireReopen();
+                return meetingSeriesConflictResult(
+                    'expected-entity-version',
+                    versions,
+                    payload.meetingSeriesId,
+                    series.entity_version,
+                );
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const segmentRows = this.database.prepare(`
+                SELECT
+                    meeting_segments.meeting_segment_id,
+                    meeting_segments.meeting_type,
+                    meeting_segments.weekday,
+                    meeting_segments.local_start,
+                    meeting_segments.local_end,
+                    meeting_segments.logical_start_anchor,
+                    meeting_segments.logical_end_anchor,
+                    meeting_segments.effective_range_kind,
+                    meeting_segments.effective_start_date,
+                    meeting_segments.effective_end_date,
+                    meeting_segments.location_kind,
+                    meeting_segments.location_value,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_start_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_start_date
+                        ELSE terms.start_date
+                    END AS resolved_start_date,
+                    CASE
+                        WHEN meeting_segments.effective_range_kind = 'explicit'
+                            THEN meeting_segments.effective_end_date
+                        WHEN courses.teaching_range_kind = 'explicit'
+                            THEN courses.teaching_end_date
+                        ELSE terms.end_date
+                    END AS resolved_end_date
+                FROM meeting_segments
+                JOIN meeting_series
+                    ON meeting_series.meeting_series_id = meeting_segments.meeting_series_id
+                JOIN courses ON courses.course_id = meeting_series.course_id
+                JOIN terms ON terms.term_id = courses.term_id
+                WHERE meeting_segments.meeting_series_id = ?
+                ORDER BY meeting_segments.logical_start_anchor, meeting_segments.meeting_segment_id
+            `).all(payload.meetingSeriesId) as StoredMeetingSegment[];
+            validateMeetingSegmentSequence(segmentRows);
+            const matchingSegments = segmentRows.filter(candidate => (
+                isActiveLogicalAnchor(candidate, payload.originalLogicalAnchor)
+            ));
+            if (matchingSegments.length !== 1) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Meeting occurrence logical anchor does not exist');
+            }
+            const segment = matchingSegments[0]!;
+            if (isChangeMeetingOccurrenceCommand(command)) {
+                const replacementDate = occurrenceDate(
+                    payload.originalLogicalAnchor,
+                    command.intent.payload.replacement.weekday,
+                );
+                if (replacementDate === null
+                    || replacementDate < segment.resolved_start_date
+                    || replacementDate > segment.resolved_end_date) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Meeting occurrence replacement falls outside its effective range');
+                }
+            }
+            if (versions.revision === SQLITE_INTEGER_MAX
+                || versions.planVersion === SQLITE_INTEGER_MAX
+                || series.entity_version === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const newSeriesVersion = series.entity_version + 1n;
+            if (command.intent.kind === 'plan.cancel-meeting-occurrence') {
+                this.database.prepare(`
+                    INSERT INTO meeting_occurrence_overrides (
+                        meeting_series_id,
+                        original_logical_anchor,
+                        override_kind,
+                        meeting_type,
+                        weekday,
+                        local_start,
+                        local_end,
+                        location_kind,
+                        location_value,
+                        entity_version
+                    ) VALUES (?, ?, 'cancelled', NULL, NULL, NULL, NULL, NULL, NULL, 1)
+                    ON CONFLICT (meeting_series_id, original_logical_anchor) DO UPDATE SET
+                        override_kind = 'cancelled',
+                        meeting_type = NULL,
+                        weekday = NULL,
+                        local_start = NULL,
+                        local_end = NULL,
+                        location_kind = NULL,
+                        location_value = NULL,
+                        entity_version = meeting_occurrence_overrides.entity_version + 1
+                `).run(payload.meetingSeriesId, payload.originalLogicalAnchor);
+            }
+            else if (command.intent.payload.scope === 'only-this') {
+                const replacement = command.intent.payload.replacement;
+                this.database.prepare(`
+                    INSERT INTO meeting_occurrence_overrides (
+                        meeting_series_id,
+                        original_logical_anchor,
+                        override_kind,
+                        meeting_type,
+                        weekday,
+                        local_start,
+                        local_end,
+                        location_kind,
+                        location_value,
+                        entity_version
+                    ) VALUES (?, ?, 'replaced', ?, ?, ?, ?, ?, ?, 1)
+                    ON CONFLICT (meeting_series_id, original_logical_anchor) DO UPDATE SET
+                        override_kind = 'replaced',
+                        meeting_type = excluded.meeting_type,
+                        weekday = excluded.weekday,
+                        local_start = excluded.local_start,
+                        local_end = excluded.local_end,
+                        location_kind = excluded.location_kind,
+                        location_value = excluded.location_value,
+                        entity_version = meeting_occurrence_overrides.entity_version + 1
+                `).run(
+                    payload.meetingSeriesId,
+                    payload.originalLogicalAnchor,
+                    replacement.type,
+                    replacement.weekday,
+                    replacement.localStart,
+                    replacement.localEnd,
+                    replacement.location.kind,
+                    replacement.location.kind === 'known' ? replacement.location.value : null,
+                );
+            }
+            else {
+                const replacement = command.intent.payload.replacement;
+                const newSegmentId = randomUUID();
+                const finalLogicalEndAnchor = segmentRows.at(-1)!.logical_end_anchor;
+                this.database.prepare(`
+                    DELETE FROM meeting_segments
+                    WHERE meeting_series_id = ? AND logical_start_anchor > ?
+                `).run(payload.meetingSeriesId, payload.originalLogicalAnchor);
+                this.database.prepare(`
+                    DELETE FROM meeting_occurrence_overrides
+                    WHERE meeting_series_id = ? AND original_logical_anchor = ?
+                `).run(payload.meetingSeriesId, payload.originalLogicalAnchor);
+                if (payload.originalLogicalAnchor === segment.logical_start_anchor) {
+                    this.database.prepare(
+                        'DELETE FROM meeting_segments WHERE meeting_segment_id = ?',
+                    ).run(segment.meeting_segment_id);
+                }
+                else {
+                    this.database.prepare(`
+                        UPDATE meeting_segments
+                        SET logical_end_anchor = ?
+                        WHERE meeting_segment_id = ?
+                    `).run(
+                        addLocalDateDays(payload.originalLogicalAnchor, -7),
+                        segment.meeting_segment_id,
+                    );
+                }
+                this.database.prepare(`
+                    INSERT INTO meeting_segments (
+                        meeting_segment_id,
+                        meeting_series_id,
+                        meeting_type,
+                        weekday,
+                        local_start,
+                        local_end,
+                        logical_start_anchor,
+                        logical_end_anchor,
+                        effective_range_kind,
+                        effective_start_date,
+                        effective_end_date,
+                        location_kind,
+                        location_value
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                    newSegmentId,
+                    payload.meetingSeriesId,
+                    replacement.type,
+                    replacement.weekday,
+                    replacement.localStart,
+                    replacement.localEnd,
+                    payload.originalLogicalAnchor,
+                    finalLogicalEndAnchor,
+                    segment.effective_range_kind,
+                    segment.effective_start_date,
+                    segment.effective_end_date,
+                    replacement.location.kind,
+                    replacement.location.kind === 'known' ? replacement.location.value : null,
+                );
+            }
+            this.database.prepare(`
+                UPDATE meeting_series SET entity_version = ? WHERE meeting_series_id = ?
+            `).run(newSeriesVersion, payload.meetingSeriesId);
+            this.database.prepare(`
+                UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
+            `).run(newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, ?, 1,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, command.intent.kind, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, ?, 'meeting-series', ?, ?)
+            `).run(
+                command.commandId,
+                command.intent.kind === 'plan.cancel-meeting-occurrence'
+                    ? 'plan.meeting-occurrence-cancelled'
+                    : 'plan.meeting-occurrence-changed',
+                payload.meetingSeriesId,
+                newSeriesVersion,
+            );
             this.database.prepare(`
                 INSERT INTO durable_followups (
                     follow_up_id,
@@ -2162,7 +3576,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel4(stagingDatabase);
+        createSchemaLevel5(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -2194,7 +3608,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel4(validationDatabase);
+            validateSchemaLevel5(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -2203,7 +3617,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel4(activeDatabase);
+        const facts = validateSchemaLevel5(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -2276,7 +3690,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel4(validationDatabase);
+        const facts = validateSchemaLevel5(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -2326,7 +3740,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel4(activeDatabase);
+        const facts = validateSchemaLevel5(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -2364,7 +3778,8 @@ export async function openWorkspaceDataWithMigrations(
         if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
             || (identity.schemaLevel !== 1
                 && identity.schemaLevel !== 2
-                && identity.schemaLevel !== 3)) {
+                && identity.schemaLevel !== 3
+                && identity.schemaLevel !== 4)) {
             closeBestEffort(source);
             return opened;
         }
@@ -2379,8 +3794,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 2) {
             validateSchemaLevel2(source);
         }
-        else {
+        else if (identity.schemaLevel === 3) {
             validateSchemaLevel3(source);
+        }
+        else {
+            validateSchemaLevel4(source);
         }
         const safetyDirectory = join(
             dataSlotsRoot,
@@ -2397,8 +3815,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 2) {
                 validateSchemaLevel2(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 3) {
                 validateSchemaLevel3(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel4(safetyDatabase);
             }
         }
         finally {
@@ -2430,10 +3851,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel2To3(maintenance);
                         validateSchemaLevel3(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 3) {
                         validateSchemaLevel3(maintenance);
                         migrateLevel3To4(maintenance);
                         validateSchemaLevel4(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel4(maintenance);
+                        migrateLevel4To5(maintenance);
+                        validateSchemaLevel5(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -2457,7 +3883,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel4(maintenance);
+            validateSchemaLevel5(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

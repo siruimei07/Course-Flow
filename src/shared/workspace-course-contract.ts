@@ -1,5 +1,5 @@
 /**
- * @file Defines the bounded Course and first Meeting Workspace contract.
+ * @file Defines bounded Course, Meeting rule, and occurrence Workspace contracts.
  */
 
 import type { CanonicalValue } from './canonical-json';
@@ -35,6 +35,155 @@ export type MeetingEffectiveRangeProjection = Readonly<{
     kind: MeetingEffectiveRangeIntent['kind'];
     startDate: string;
     endDate: string;
+}>;
+
+export type MeetingOccurrenceId = Readonly<{
+    meetingSeriesId: string;
+    originalLogicalAnchor: string;
+}>;
+
+export type MeetingOccurrenceWindow = Readonly<{
+    startDate: string;
+    endDate: string;
+}>;
+
+export type MeetingRuleReplacement = Readonly<{
+    type: MeetingTypeCode;
+    weekday: MeetingWeekday;
+    localStart: string;
+    localEnd: string;
+    location: MeetingLocation;
+}>;
+
+export type MeetingSegmentProjection = Readonly<{
+    segmentId: string;
+    logicalStartAnchor: string;
+    logicalEndAnchor: string | null;
+    type: MeetingTypeCode;
+    weekday: MeetingWeekday;
+    localStart: string;
+    localEnd: string;
+    location: MeetingLocation;
+}>;
+
+export type MeetingOccurrenceProjection = Readonly<{
+    occurrenceId: MeetingOccurrenceId;
+    segmentId: string;
+    date: string;
+    status: 'scheduled' | 'cancelled';
+    overrideKind: 'replaced' | 'cancelled' | null;
+    type: MeetingTypeCode;
+    weekday: MeetingWeekday;
+    localStart: string;
+    localEnd: string;
+    location: MeetingLocation;
+}>;
+
+export type MeetingOccurrenceImpactOccurrenceProjection = Readonly<
+    Omit<MeetingOccurrenceProjection, 'segmentId'>
+>;
+
+export type MeetingSeriesDetailProjection = Readonly<{
+    workspaceRevision: string;
+    planEntityVersion: string;
+    requestedWindow: MeetingOccurrenceWindow;
+    meetingSeriesId: string;
+    courseId: string;
+    entityVersion: string;
+    segments: readonly MeetingSegmentProjection[];
+    occurrences: readonly MeetingOccurrenceProjection[];
+}>;
+
+export type MeetingOccurrenceImpactDraft = Readonly<{
+    scope: 'this-and-future';
+    meetingSeriesId: string;
+    originalLogicalAnchor: string;
+    replacement: MeetingRuleReplacement;
+    requestedWindow: MeetingOccurrenceWindow;
+}>;
+
+export type MeetingOccurrenceImpactProjection = Readonly<{
+    basedOnRevision: string;
+    planEntityVersion: string;
+    meetingSeriesVersion: string;
+    affectedEntities: readonly [Readonly<{
+        kind: 'meeting-series';
+        id: string;
+        version: string;
+    }>];
+    effects: readonly [Readonly<{
+        code: 'plan.meeting-series-split';
+        originalLogicalAnchor: string;
+        affectedFutureSegmentCount: string;
+        targetOverrideAction: 'none' | 'clear';
+        laterOverrideAction: 'retain';
+    }>];
+    warnings: readonly Readonly<{
+        code:
+            | 'preview-window-truncated-history'
+            | 'preview-window-truncated-future'
+            | 'target-override-will-be-cleared';
+    }>[];
+    choices: readonly [Readonly<{ id: 'apply-this-and-future' }>];
+    defaultChoice: Readonly<{ id: 'apply-this-and-future' }>;
+    recoverability: Readonly<{
+        kind: 'permanent';
+        reason: 'meeting-rule-split-has-no-undo';
+    }>;
+    unresolvedReferences: readonly [];
+    scope: 'this-and-future';
+    meetingSeriesId: string;
+    originalLogicalAnchor: string;
+    requestedWindow: MeetingOccurrenceWindow;
+    replacement: MeetingRuleReplacement;
+    targetDateAfterChange: string;
+    targetOverrideKind: 'none' | 'replaced' | 'cancelled';
+    affectedFutureSegmentCount: string;
+    futureOverrideCount: string;
+    historicalOccurrences: readonly MeetingOccurrenceProjection[];
+    currentFutureOccurrences: readonly MeetingOccurrenceProjection[];
+    futureOccurrencesAfterChange: readonly MeetingOccurrenceImpactOccurrenceProjection[];
+    historyOutsideRequestedWindow: boolean;
+    futureOutsideRequestedWindow: boolean;
+    attendanceRecordCount: '0';
+    explicitGradeReferenceCount: '0';
+    confirmationToken: string;
+}>;
+
+export type ChangeMeetingOccurrenceCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    confirmationToken: string | null;
+    impactWindow: MeetingOccurrenceWindow | null;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedMeetingSeriesVersion: string;
+    intent: Readonly<{
+        kind: 'plan.change-meeting-occurrence';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            meetingSeriesId: string;
+            originalLogicalAnchor: string;
+            scope: 'only-this' | 'this-and-future';
+            replacement: MeetingRuleReplacement;
+        }>;
+    }>;
+}>;
+
+export type CancelMeetingOccurrenceCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedMeetingSeriesVersion: string;
+    intent: Readonly<{
+        kind: 'plan.cancel-meeting-occurrence';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            meetingSeriesId: string;
+            originalLogicalAnchor: string;
+        }>;
+    }>;
 }>;
 
 export type MeetingSeriesProjection = Readonly<{
@@ -148,7 +297,21 @@ const MEETING_WEEKDAYS = new Set<MeetingWeekday>([
 ]);
 const LOCAL_TIME_PATTERN = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
 const DECIMAL_PATTERN = /^(0|[1-9][0-9]*)(?:\.([0-9]+))?$/;
+const CONFIRMATION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const SQLITE_INTEGER_MAX = 9223372036854775807n;
+const MILLISECONDS_PER_DAY = 86_400_000;
+export const MAX_MEETING_OCCURRENCE_WINDOW_DAYS = 366;
+const MAX_MEETING_OCCURRENCE_ITEMS = MAX_MEETING_OCCURRENCE_WINDOW_DAYS + 1;
+const MAX_MEETING_SEGMENT_ITEMS = MAX_MEETING_OCCURRENCE_WINDOW_DAYS + 13;
+const MEETING_WEEKDAY_NUMBERS: Readonly<Record<MeetingWeekday, number>> = Object.freeze({
+    SUN: 0,
+    MON: 1,
+    TUE: 2,
+    WED: 3,
+    THU: 4,
+    FRI: 5,
+    SAT: 6,
+});
 
 /**
  * Checks whether a value is a plain record with exactly the expected data properties.
@@ -170,6 +333,49 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
             const descriptor = descriptors[key];
             return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
         });
+}
+
+/**
+ * Rejects sparse arrays and arrays carrying extra structured-clone properties.
+ * @param {unknown} value - Candidate array crossing the Workspace boundary.
+ * @return {boolean} Whether every numeric slot is an enumerable data property and no extras exist.
+ */
+function isDenseArray(value: unknown): value is unknown[] {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+        return false;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(descriptors).length !== value.length + 1) {
+        return false;
+    }
+    return Array.from({ length: value.length }, (_, index) => String(index)).every(key => {
+        const descriptor = descriptors[key];
+        return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
+    });
+}
+
+/**
+ * Reconstructs the physical date represented by a stable anchor and effective weekday.
+ * @param {string} originalLogicalAnchor - Stable weekly anchor carried by the occurrence ID.
+ * @param {MeetingWeekday} weekday - Effective weekday after any replacement.
+ * @return {string | null} Canonical physical date, or null when it would exceed LocalDate.
+ */
+function projectedMeetingOccurrenceDate(
+    originalLogicalAnchor: string,
+    weekday: MeetingWeekday,
+): string | null {
+    if (!MEETING_WEEKDAYS.has(weekday)) {
+        return null;
+    }
+    const anchorMilliseconds = Date.parse(`${originalLogicalAnchor}T00:00:00.000Z`);
+    const anchorWeekday = new Date(anchorMilliseconds).getUTCDay();
+    const milliseconds = anchorMilliseconds
+        + (MEETING_WEEKDAY_NUMBERS[weekday] - anchorWeekday) * MILLISECONDS_PER_DAY;
+    const minimum = Date.parse('0000-01-01T00:00:00.000Z');
+    const maximum = Date.parse('9999-12-31T00:00:00.000Z');
+    return milliseconds < minimum || milliseconds > maximum
+        ? null
+        : new Date(milliseconds).toISOString().slice(0, 10);
 }
 
 /**
@@ -229,6 +435,269 @@ function canonicalLocation(value: unknown): MeetingLocation | null {
     }
     const text = canonicalText(value.value, 240);
     return text === null ? null : { kind: 'known', value: text };
+}
+
+/**
+ * Checks a location without serializing untrusted structured-clone input.
+ * @param {unknown} value - Candidate location DTO.
+ * @return {boolean} Whether the value is already in canonical DTO form.
+ */
+function isCanonicalLocation(value: unknown): value is MeetingLocation {
+    const canonical = canonicalLocation(value);
+    if (canonical === null) {
+        return false;
+    }
+    return canonical.kind === 'tba'
+        ? hasExactDataKeys(value, ['kind']) && value.kind === canonical.kind
+        : hasExactDataKeys(value, ['kind', 'value'])
+            && value.kind === canonical.kind
+            && value.value === canonical.value;
+}
+
+/**
+ * Canonicalizes the exact replacement rule carried by occurrence edits.
+ * @param {unknown} value - Candidate replacement DTO.
+ * @return {MeetingRuleReplacement | null} Canonical replacement, or null when invalid.
+ */
+function canonicalMeetingRuleReplacement(value: unknown): MeetingRuleReplacement | null {
+    if (!hasExactDataKeys(value, [
+        'type',
+        'weekday',
+        'localStart',
+        'localEnd',
+        'location',
+    ])) {
+        return null;
+    }
+    const location = canonicalLocation(value.location);
+    if (!MEETING_TYPES.has(value.type as MeetingTypeCode)
+        || !MEETING_WEEKDAYS.has(value.weekday as MeetingWeekday)
+        || typeof value.localStart !== 'string'
+        || typeof value.localEnd !== 'string'
+        || !LOCAL_TIME_PATTERN.test(value.localStart)
+        || !LOCAL_TIME_PATTERN.test(value.localEnd)
+        || value.localEnd <= value.localStart
+        || location === null) {
+        return null;
+    }
+    return {
+        type: value.type as MeetingTypeCode,
+        weekday: value.weekday as MeetingWeekday,
+        localStart: value.localStart,
+        localEnd: value.localEnd,
+        location,
+    };
+}
+
+/**
+ * Checks a replacement rule without serializing untrusted structured-clone input.
+ * @param {unknown} value - Candidate replacement DTO.
+ * @return {boolean} Whether the replacement is already in canonical DTO form.
+ */
+function isCanonicalMeetingRuleReplacement(value: unknown): value is MeetingRuleReplacement {
+    const canonical = canonicalMeetingRuleReplacement(value);
+    return canonical !== null
+        && hasExactDataKeys(value, ['type', 'weekday', 'localStart', 'localEnd', 'location'])
+        && value.type === canonical.type
+        && value.weekday === canonical.weekday
+        && value.localStart === canonical.localStart
+        && value.localEnd === canonical.localEnd
+        && isCanonicalLocation(value.location);
+}
+
+/**
+ * Derives the ADR-04 logical occurrence identity without introducing a stored occurrence row.
+ * @param {string} meetingSeriesId - Stable Meeting series identity.
+ * @param {string} originalLogicalAnchor - Canonical original weekly anchor.
+ * @return {MeetingOccurrenceId} Frozen stable tuple identity.
+ */
+export function deriveMeetingOccurrenceId(
+    meetingSeriesId: string,
+    originalLogicalAnchor: string,
+): MeetingOccurrenceId {
+    if (!isCanonicalUuid(meetingSeriesId) || !isCanonicalLocalDate(originalLogicalAnchor)) {
+        throw new TypeError('MeetingOccurrenceId requires a canonical series and logical anchor');
+    }
+    return Object.freeze({ meetingSeriesId, originalLogicalAnchor });
+}
+
+/**
+ * Normalizes the bounded physical-date window used to expand Meeting occurrences.
+ * @param {unknown} value - Untrusted candidate window.
+ * @return {MeetingOccurrenceWindow} Frozen canonical window.
+ */
+export function normalizeMeetingOccurrenceWindow(value: unknown): MeetingOccurrenceWindow {
+    if (!isMeetingOccurrenceWindow(value)) {
+        throw new TypeError('Meeting occurrence window must be canonical and bounded');
+    }
+    return Object.freeze({ startDate: value.startDate, endDate: value.endDate });
+}
+
+/**
+ * Validates the exact bounded physical-date window used to expand Meeting occurrences.
+ * @param {unknown} value - Untrusted candidate window.
+ * @return {boolean} Whether the window is exact, canonical, ordered, and bounded.
+ */
+export function isMeetingOccurrenceWindow(value: unknown): value is MeetingOccurrenceWindow {
+    if (!hasExactDataKeys(value, ['startDate', 'endDate'])
+        || !isCanonicalLocalDate(value.startDate)) {
+        return false;
+    }
+    return isCanonicalLocalDate(value.endDate)
+        && value.endDate >= value.startDate
+        && (Date.parse(`${value.endDate}T00:00:00.000Z`)
+            - Date.parse(`${value.startDate}T00:00:00.000Z`)) / MILLISECONDS_PER_DAY
+        <= MAX_MEETING_OCCURRENCE_WINDOW_DAYS;
+}
+
+/**
+ * Normalizes an exact occurrence change before DATA evaluates its edit scope.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {ChangeMeetingOccurrenceCommand} Canonical versioned occurrence change.
+ */
+export function normalizeChangeMeetingOccurrenceCommand(value: unknown): ChangeMeetingOccurrenceCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'confirmationToken',
+        'impactWindow',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedMeetingSeriesVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || (value.confirmationToken !== null
+            && (typeof value.confirmationToken !== 'string'
+                || !CONFIRMATION_TOKEN_PATTERN.test(value.confirmationToken)))
+        || (value.impactWindow !== null && !isMeetingOccurrenceWindow(value.impactWindow))
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedMeetingSeriesVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.change-meeting-occurrence'
+        || value.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(value.intent.payload, [
+            'meetingSeriesId',
+            'originalLogicalAnchor',
+            'scope',
+            'replacement',
+        ])) {
+        throw new TypeError('ChangeMeetingOccurrenceCommand has invalid fields');
+    }
+
+    const payload = value.intent.payload;
+    const replacement = canonicalMeetingRuleReplacement(payload.replacement);
+    if (!isCanonicalUuid(payload.meetingSeriesId)
+        || !isCanonicalLocalDate(payload.originalLogicalAnchor)
+        || (payload.scope !== 'only-this' && payload.scope !== 'this-and-future')
+        || replacement === null
+        || (payload.scope === 'only-this'
+            && (value.confirmationToken !== null || value.impactWindow !== null))
+        || (payload.scope === 'this-and-future'
+            && ((value.confirmationToken === null) !== (value.impactWindow === null)))) {
+        throw new TypeError('ChangeMeetingOccurrenceCommand has invalid occurrence facts');
+    }
+
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        confirmationToken: value.confirmationToken,
+        impactWindow: value.impactWindow === null
+            ? null
+            : Object.freeze({ ...value.impactWindow }),
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        expectedMeetingSeriesVersion: value.expectedMeetingSeriesVersion,
+        intent: {
+            kind: 'plan.change-meeting-occurrence',
+            intentSchemaVersion: 1,
+            payload: {
+                meetingSeriesId: payload.meetingSeriesId,
+                originalLogicalAnchor: payload.originalLogicalAnchor,
+                scope: payload.scope,
+                replacement,
+            },
+        },
+    };
+}
+
+/**
+ * Normalizes a bounded whole-rule impact draft before a confirmation token is issued.
+ * @param {unknown} value - Untrusted impact draft.
+ * @return {MeetingOccurrenceImpactDraft} Frozen canonical future-change preview request.
+ */
+export function normalizeMeetingOccurrenceImpactDraft(value: unknown): MeetingOccurrenceImpactDraft {
+    if (!hasExactDataKeys(value, [
+        'scope',
+        'meetingSeriesId',
+        'originalLogicalAnchor',
+        'replacement',
+        'requestedWindow',
+    ])
+        || value.scope !== 'this-and-future'
+        || !isCanonicalUuid(value.meetingSeriesId)
+        || !isCanonicalLocalDate(value.originalLogicalAnchor)
+        || !isMeetingOccurrenceWindow(value.requestedWindow)) {
+        throw new TypeError('Meeting occurrence impact draft has invalid fields');
+    }
+    const replacement = canonicalMeetingRuleReplacement(value.replacement);
+    if (replacement === null) {
+        throw new TypeError('Meeting occurrence impact draft has invalid replacement facts');
+    }
+    return Object.freeze({
+        scope: 'this-and-future',
+        meetingSeriesId: value.meetingSeriesId,
+        originalLogicalAnchor: value.originalLogicalAnchor,
+        replacement: Object.freeze(replacement),
+        requestedWindow: Object.freeze({ ...value.requestedWindow }),
+    });
+}
+
+/**
+ * Normalizes the bounded only-this cancellation command.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {CancelMeetingOccurrenceCommand} Canonical versioned cancellation command.
+ */
+export function normalizeCancelMeetingOccurrenceCommand(value: unknown): CancelMeetingOccurrenceCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedMeetingSeriesVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedMeetingSeriesVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.cancel-meeting-occurrence'
+        || value.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(value.intent.payload, ['meetingSeriesId', 'originalLogicalAnchor'])
+        || !isCanonicalUuid(value.intent.payload.meetingSeriesId)
+        || !isCanonicalLocalDate(value.intent.payload.originalLogicalAnchor)) {
+        throw new TypeError('CancelMeetingOccurrenceCommand has invalid fields');
+    }
+
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        expectedMeetingSeriesVersion: value.expectedMeetingSeriesVersion,
+        intent: {
+            kind: 'plan.cancel-meeting-occurrence',
+            intentSchemaVersion: 1,
+            payload: {
+                meetingSeriesId: value.intent.payload.meetingSeriesId,
+                originalLogicalAnchor: value.intent.payload.originalLogicalAnchor,
+            },
+        },
+    };
 }
 
 /**
@@ -303,11 +772,366 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
         || !LOCAL_TIME_PATTERN.test(value.localEnd)
         || value.localEnd <= value.localStart
         || !isResolvedDateRange(value.effectiveRange, 'inherit-course')
-        || JSON.stringify(canonicalLocation(value.location)) !== JSON.stringify(value.location)
+        || !isCanonicalLocation(value.location)
         || !isCanonicalUnsignedSqliteInteger(value.entityVersion)) {
         return false;
     }
     return true;
+}
+
+/**
+ * Validates the shared exact Meeting rule fields used by segment and occurrence DTOs.
+ * @param {Record<string, unknown>} value - Candidate DTO containing Meeting rule fields.
+ * @return {boolean} Whether every rule field is canonical and internally ordered.
+ */
+function hasValidMeetingRuleFields(value: Record<string, unknown>): boolean {
+    return MEETING_TYPES.has(value.type as MeetingTypeCode)
+        && MEETING_WEEKDAYS.has(value.weekday as MeetingWeekday)
+        && typeof value.localStart === 'string'
+        && typeof value.localEnd === 'string'
+        && LOCAL_TIME_PATTERN.test(value.localStart)
+        && LOCAL_TIME_PATTERN.test(value.localEnd)
+        && value.localEnd > value.localStart
+        && isCanonicalLocation(value.location);
+}
+
+/**
+ * Validates one exact non-overlapping-ready Meeting segment DTO.
+ * @param {unknown} value - Untrusted segment projection.
+ * @return {boolean} Whether the segment fields are canonical.
+ */
+function isMeetingSegmentProjection(value: unknown): value is MeetingSegmentProjection {
+    return hasExactDataKeys(value, [
+        'segmentId',
+        'logicalStartAnchor',
+        'logicalEndAnchor',
+        'type',
+        'weekday',
+        'localStart',
+        'localEnd',
+        'location',
+    ])
+        && isCanonicalUuid(value.segmentId)
+        && isCanonicalLocalDate(value.logicalStartAnchor)
+        && (value.logicalEndAnchor === null
+            || (isCanonicalLocalDate(value.logicalEndAnchor)
+                && value.logicalEndAnchor >= value.logicalStartAnchor))
+        && hasValidMeetingRuleFields(value);
+}
+
+/**
+ * Validates one exact derived Meeting occurrence DTO including physical-date coherence.
+ * @param {unknown} value - Untrusted occurrence projection.
+ * @return {boolean} Whether identity, status, date, and rule fields are coherent.
+ */
+function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurrenceProjection {
+    if (!hasExactDataKeys(value, [
+        'occurrenceId',
+        'segmentId',
+        'date',
+        'status',
+        'overrideKind',
+        'type',
+        'weekday',
+        'localStart',
+        'localEnd',
+        'location',
+    ])
+        || !hasExactDataKeys(value.occurrenceId, ['meetingSeriesId', 'originalLogicalAnchor'])
+        || !isCanonicalUuid(value.occurrenceId.meetingSeriesId)
+        || !isCanonicalLocalDate(value.occurrenceId.originalLogicalAnchor)
+        || !isCanonicalUuid(value.segmentId)
+        || !isCanonicalLocalDate(value.date)
+        || !hasValidMeetingRuleFields(value)
+        || projectedMeetingOccurrenceDate(
+            value.occurrenceId.originalLogicalAnchor,
+            value.weekday as MeetingWeekday,
+        ) !== value.date) {
+        return false;
+    }
+    return (value.status === 'scheduled'
+        && (value.overrideKind === null || value.overrideKind === 'replaced'))
+        || (value.status === 'cancelled' && value.overrideKind === 'cancelled');
+}
+
+/**
+ * Validates the path-free occurrence shape used by the proposed-after impact list.
+ * @param {unknown} value - Untrusted impact occurrence projection.
+ * @return {boolean} Whether identity, status, date, and rule fields are coherent.
+ */
+function isMeetingOccurrenceImpactOccurrenceProjection(
+    value: unknown,
+): value is MeetingOccurrenceImpactOccurrenceProjection {
+    if (!hasExactDataKeys(value, [
+        'occurrenceId',
+        'date',
+        'status',
+        'overrideKind',
+        'type',
+        'weekday',
+        'localStart',
+        'localEnd',
+        'location',
+    ])
+        || !hasExactDataKeys(value.occurrenceId, ['meetingSeriesId', 'originalLogicalAnchor'])
+        || !isCanonicalUuid(value.occurrenceId.meetingSeriesId)
+        || !isCanonicalLocalDate(value.occurrenceId.originalLogicalAnchor)
+        || !isCanonicalLocalDate(value.date)
+        || !hasValidMeetingRuleFields(value)
+        || projectedMeetingOccurrenceDate(
+            value.occurrenceId.originalLogicalAnchor,
+            value.weekday as MeetingWeekday,
+        ) !== value.date) {
+        return false;
+    }
+    return (value.status === 'scheduled'
+        && (value.overrideKind === null || value.overrideKind === 'replaced'))
+        || (value.status === 'cancelled' && value.overrideKind === 'cancelled');
+}
+
+/**
+ * Validates a bounded, path-free Meeting series detail projection crossing Workspace IPC.
+ * @param {unknown} value - Untrusted Workspace outcome projection.
+ * @return {boolean} Whether the detail DTO and segment/occurrence relations are exact.
+ */
+export function isMeetingSeriesDetailProjection(value: unknown): value is MeetingSeriesDetailProjection {
+    if (!hasExactDataKeys(value, [
+        'workspaceRevision',
+        'planEntityVersion',
+        'requestedWindow',
+        'meetingSeriesId',
+        'courseId',
+        'entityVersion',
+        'segments',
+        'occurrences',
+    ])
+        || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
+        || !isMeetingOccurrenceWindow(value.requestedWindow)
+        || !isCanonicalUuid(value.meetingSeriesId)
+        || !isCanonicalUuid(value.courseId)
+        || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
+        || !isDenseArray(value.segments)
+        || value.segments.length > MAX_MEETING_SEGMENT_ITEMS
+        || !value.segments.every(isMeetingSegmentProjection)
+        || !isDenseArray(value.occurrences)
+        || value.occurrences.length > MAX_MEETING_OCCURRENCE_ITEMS
+        || !value.occurrences.every(isMeetingOccurrenceProjection)) {
+        return false;
+    }
+
+    const segments = value.segments as MeetingSegmentProjection[];
+    const occurrences = value.occurrences as MeetingOccurrenceProjection[];
+    const segmentIds = new Set(segments.map(segment => segment.segmentId));
+    const segmentsById = new Map(segments.map(segment => [segment.segmentId, segment]));
+    const occurrenceKeys = occurrences.map(occurrence => (
+        `${occurrence.occurrenceId.meetingSeriesId}:${occurrence.occurrenceId.originalLogicalAnchor}`
+    ));
+    const requestedWindow = value.requestedWindow as MeetingOccurrenceWindow;
+    return segmentIds.size === segments.length
+        && segments.every((segment, index) => {
+            if (index === 0) {
+                return true;
+            }
+            const previous = segments[index - 1]!;
+            return previous.logicalEndAnchor !== null
+                && previous.logicalEndAnchor < segment.logicalStartAnchor;
+        })
+        && new Set(occurrenceKeys).size === occurrenceKeys.length
+        && occurrences.every(occurrence => {
+            const segment = segmentsById.get(occurrence.segmentId);
+            const anchor = occurrence.occurrenceId.originalLogicalAnchor;
+            return occurrence.occurrenceId.meetingSeriesId === value.meetingSeriesId
+                && segment !== undefined
+                && anchor >= segment.logicalStartAnchor
+                && (segment.logicalEndAnchor === null || anchor <= segment.logicalEndAnchor)
+                && (Date.parse(`${anchor}T00:00:00.000Z`)
+                    - Date.parse(`${segment.logicalStartAnchor}T00:00:00.000Z`))
+                    % (7 * MILLISECONDS_PER_DAY) === 0
+                && occurrence.date >= requestedWindow.startDate
+                && occurrence.date <= requestedWindow.endDate;
+        });
+}
+
+/**
+ * Validates a bounded whole-rule Meeting impact projection crossing Workspace IPC.
+ * @param {unknown} value - Untrusted Workspace impact projection.
+ * @return {boolean} Whether the preview is exact, bounded, and internally coherent.
+ */
+export function isMeetingOccurrenceImpactProjection(
+    value: unknown,
+): value is MeetingOccurrenceImpactProjection {
+    if (!hasExactDataKeys(value, [
+        'basedOnRevision',
+        'planEntityVersion',
+        'meetingSeriesVersion',
+        'affectedEntities',
+        'effects',
+        'warnings',
+        'choices',
+        'defaultChoice',
+        'recoverability',
+        'unresolvedReferences',
+        'scope',
+        'meetingSeriesId',
+        'originalLogicalAnchor',
+        'requestedWindow',
+        'replacement',
+        'targetDateAfterChange',
+        'targetOverrideKind',
+        'affectedFutureSegmentCount',
+        'futureOverrideCount',
+        'historicalOccurrences',
+        'currentFutureOccurrences',
+        'futureOccurrencesAfterChange',
+        'historyOutsideRequestedWindow',
+        'futureOutsideRequestedWindow',
+        'attendanceRecordCount',
+        'explicitGradeReferenceCount',
+        'confirmationToken',
+    ])
+        || !isCanonicalUnsignedSqliteInteger(value.basedOnRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.meetingSeriesVersion)
+        || !isDenseArray(value.affectedEntities)
+        || value.affectedEntities.length !== 1
+        || !hasExactDataKeys(value.affectedEntities[0], ['kind', 'id', 'version'])
+        || value.affectedEntities[0].kind !== 'meeting-series'
+        || value.affectedEntities[0].id !== value.meetingSeriesId
+        || value.affectedEntities[0].version !== value.meetingSeriesVersion
+        || !isDenseArray(value.effects)
+        || value.effects.length !== 1
+        || !hasExactDataKeys(value.effects[0], [
+            'code',
+            'originalLogicalAnchor',
+            'affectedFutureSegmentCount',
+            'targetOverrideAction',
+            'laterOverrideAction',
+        ])
+        || value.effects[0].code !== 'plan.meeting-series-split'
+        || value.effects[0].originalLogicalAnchor !== value.originalLogicalAnchor
+        || value.effects[0].affectedFutureSegmentCount !== value.affectedFutureSegmentCount
+        || !['none', 'clear'].includes(value.effects[0].targetOverrideAction as string)
+        || value.effects[0].laterOverrideAction !== 'retain'
+        || !isDenseArray(value.warnings)
+        || value.warnings.length > 3
+        || !value.warnings.every(warning => (
+            hasExactDataKeys(warning, ['code'])
+            && [
+                'preview-window-truncated-history',
+                'preview-window-truncated-future',
+                'target-override-will-be-cleared',
+            ].includes(warning.code as string)
+        ))
+        || !isDenseArray(value.choices)
+        || value.choices.length !== 1
+        || !hasExactDataKeys(value.choices[0], ['id'])
+        || value.choices[0].id !== 'apply-this-and-future'
+        || !hasExactDataKeys(value.defaultChoice, ['id'])
+        || value.defaultChoice.id !== 'apply-this-and-future'
+        || !hasExactDataKeys(value.recoverability, ['kind', 'reason'])
+        || value.recoverability.kind !== 'permanent'
+        || value.recoverability.reason !== 'meeting-rule-split-has-no-undo'
+        || !isDenseArray(value.unresolvedReferences)
+        || value.unresolvedReferences.length !== 0
+        || value.scope !== 'this-and-future'
+        || !isCanonicalUuid(value.meetingSeriesId)
+        || !isCanonicalLocalDate(value.originalLogicalAnchor)
+        || !isMeetingOccurrenceWindow(value.requestedWindow)
+        || !isCanonicalMeetingRuleReplacement(value.replacement)
+        || !isCanonicalLocalDate(value.targetDateAfterChange)
+        || projectedMeetingOccurrenceDate(
+            value.originalLogicalAnchor as string,
+            (value.replacement as MeetingRuleReplacement).weekday,
+        ) !== value.targetDateAfterChange
+        || !['none', 'replaced', 'cancelled'].includes(value.targetOverrideKind as string)
+        || !isCanonicalUnsignedSqliteInteger(value.affectedFutureSegmentCount)
+        || !isCanonicalUnsignedSqliteInteger(value.futureOverrideCount)
+        || !isDenseArray(value.historicalOccurrences)
+        || value.historicalOccurrences.length > MAX_MEETING_OCCURRENCE_ITEMS
+        || !value.historicalOccurrences.every(isMeetingOccurrenceProjection)
+        || !isDenseArray(value.currentFutureOccurrences)
+        || value.historicalOccurrences.length + value.currentFutureOccurrences.length
+            > MAX_MEETING_OCCURRENCE_ITEMS
+        || !value.currentFutureOccurrences.every(isMeetingOccurrenceProjection)
+        || !isDenseArray(value.futureOccurrencesAfterChange)
+        || value.futureOccurrencesAfterChange.length > MAX_MEETING_OCCURRENCE_ITEMS
+        || !value.futureOccurrencesAfterChange.every(isMeetingOccurrenceImpactOccurrenceProjection)
+        || typeof value.historyOutsideRequestedWindow !== 'boolean'
+        || typeof value.futureOutsideRequestedWindow !== 'boolean'
+        || value.attendanceRecordCount !== '0'
+        || value.explicitGradeReferenceCount !== '0'
+        || typeof value.confirmationToken !== 'string'
+        || !CONFIRMATION_TOKEN_PATTERN.test(value.confirmationToken)) {
+        return false;
+    }
+    const occurrences = [...value.historicalOccurrences, ...value.currentFutureOccurrences];
+    const keys = occurrences.map(occurrence => occurrence.occurrenceId.originalLogicalAnchor);
+    const futureKeys = value.futureOccurrencesAfterChange.map(occurrence => (
+        occurrence.occurrenceId.originalLogicalAnchor
+    ));
+    const warningCodes = (value.warnings as Array<{ code: string }>).map(warning => warning.code);
+    const originalLogicalAnchor = value.originalLogicalAnchor as string;
+    const requestedWindow = value.requestedWindow as MeetingOccurrenceWindow;
+    const targetOverrideKind = value.targetOverrideKind as 'none' | 'replaced' | 'cancelled';
+    const targetOverrideAction = (value.effects as Array<{
+        targetOverrideAction: 'none' | 'clear';
+    }>)[0]!.targetOverrideAction;
+    const targetOccurrence = value.currentFutureOccurrences.find(occurrence => (
+        occurrence.occurrenceId.originalLogicalAnchor === originalLogicalAnchor
+    ));
+    const targetAfterChange = value.futureOccurrencesAfterChange.find(occurrence => (
+        occurrence.occurrenceId.originalLogicalAnchor === originalLogicalAnchor
+    ));
+    const replacement = value.replacement as MeetingRuleReplacement;
+    const targetAfterChangeIsVisible = value.targetDateAfterChange >= requestedWindow.startDate
+        && value.targetDateAfterChange <= requestedWindow.endDate;
+    const targetAfterChangeMatches = targetAfterChange !== undefined
+        && targetAfterChange.date === value.targetDateAfterChange
+        && targetAfterChange.status === 'scheduled'
+        && targetAfterChange.overrideKind === null
+        && targetAfterChange.type === replacement.type
+        && targetAfterChange.weekday === replacement.weekday
+        && targetAfterChange.localStart === replacement.localStart
+        && targetAfterChange.localEnd === replacement.localEnd
+        && targetAfterChange.location.kind === replacement.location.kind
+        && (targetAfterChange.location.kind === 'tba'
+            || (replacement.location.kind === 'known'
+                && targetAfterChange.location.value === replacement.location.value));
+    const expectedWarningCodes = [
+        ...(value.historyOutsideRequestedWindow ? ['preview-window-truncated-history'] : []),
+        ...(value.futureOutsideRequestedWindow ? ['preview-window-truncated-future'] : []),
+        ...(targetOverrideKind === 'none' ? [] : ['target-override-will-be-cleared']),
+    ];
+    return new Set(keys).size === keys.length
+        && new Set(futureKeys).size === futureKeys.length
+        && new Set(warningCodes).size === warningCodes.length
+        && warningCodes.length === expectedWarningCodes.length
+        && expectedWarningCodes.every(code => warningCodes.includes(code))
+        && targetOverrideAction === (targetOverrideKind === 'none' ? 'none' : 'clear')
+        && value.affectedFutureSegmentCount !== '0'
+        && targetOccurrence !== undefined
+        && (targetOccurrence.overrideKind ?? 'none') === targetOverrideKind
+        && (targetAfterChangeIsVisible
+            ? targetAfterChangeMatches
+            : targetAfterChange === undefined && value.futureOutsideRequestedWindow)
+        && occurrences.every(occurrence => (
+            occurrence.occurrenceId.meetingSeriesId === value.meetingSeriesId
+            && occurrence.date >= requestedWindow.startDate
+            && occurrence.date <= requestedWindow.endDate
+        ))
+        && value.historicalOccurrences.every(occurrence => (
+            occurrence.occurrenceId.originalLogicalAnchor < originalLogicalAnchor
+        ))
+        && value.currentFutureOccurrences.every(occurrence => (
+            occurrence.occurrenceId.originalLogicalAnchor >= originalLogicalAnchor
+        ))
+        && value.futureOccurrencesAfterChange.every(occurrence => (
+            occurrence.occurrenceId.meetingSeriesId === value.meetingSeriesId
+            && occurrence.occurrenceId.originalLogicalAnchor >= originalLogicalAnchor
+            && occurrence.date >= requestedWindow.startDate
+            && occurrence.date <= requestedWindow.endDate
+        ));
 }
 
 /**
@@ -588,6 +1412,72 @@ export function createCourseWithMeetingDigestProjection(
             entityId: 'singleton',
             version: command.expectedPlanVersion,
         }],
+        durableFollowUps: [{
+            followUpId: command.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    };
+}
+
+/**
+ * Builds the canonical receipt digest projection for a scoped Meeting occurrence change.
+ * @param {ChangeMeetingOccurrenceCommand} command - Normalized occurrence change command.
+ * @return {CanonicalValue} Canonical payload covered by the durable receipt digest.
+ */
+export function changeMeetingOccurrenceDigestProjection(
+    command: ChangeMeetingOccurrenceCommand,
+): CanonicalValue {
+    return {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: command.intent,
+        confirmationToken: command.confirmationToken,
+        impactWindow: command.impactWindow,
+        expectedRevision: command.expectedRevision,
+        expectedEntityVersions: [
+            {
+                entityKind: 'plan-state',
+                entityId: 'singleton',
+                version: command.expectedPlanVersion,
+            },
+            {
+                entityKind: 'meeting-series',
+                entityId: command.intent.payload.meetingSeriesId,
+                version: command.expectedMeetingSeriesVersion,
+            },
+        ],
+        durableFollowUps: [{
+            followUpId: command.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    };
+}
+
+/**
+ * Builds the canonical receipt digest projection for an only-this cancellation.
+ * @param {CancelMeetingOccurrenceCommand} command - Normalized occurrence cancellation command.
+ * @return {CanonicalValue} Canonical payload covered by the durable receipt digest.
+ */
+export function cancelMeetingOccurrenceDigestProjection(
+    command: CancelMeetingOccurrenceCommand,
+): CanonicalValue {
+    return {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: command.intent,
+        expectedRevision: command.expectedRevision,
+        expectedEntityVersions: [
+            {
+                entityKind: 'plan-state',
+                entityId: 'singleton',
+                version: command.expectedPlanVersion,
+            },
+            {
+                entityKind: 'meeting-series',
+                entityId: command.intent.payload.meetingSeriesId,
+                version: command.expectedMeetingSeriesVersion,
+            },
+        ],
         durableFollowUps: [{
             followUpId: command.followUpId,
             owner: 'protect',
