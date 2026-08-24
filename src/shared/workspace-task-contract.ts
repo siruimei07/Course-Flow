@@ -87,6 +87,12 @@ export type CompleteTaskCommand = ExistingTaskCommandBase & Readonly<{
     }>;
 }>;
 
+export type TaskCommand =
+    | CreateTaskCommand
+    | UpdateTaskCommand
+    | DeleteTaskCommand
+    | CompleteTaskCommand;
+
 const MAX_TASK_TITLE_LENGTH = 240;
 
 /**

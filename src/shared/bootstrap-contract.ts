@@ -37,7 +37,7 @@ export type DataOpenProblem =
       affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
       allowedActions: readonly [];
       context: Readonly<Record<never, never>>;
-      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 7 }>;
+      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 8 }>;
     }>
   | Readonly<{
       code: 'integrity';
@@ -65,13 +65,13 @@ export type WorkspaceDataStatus =
   | Readonly<{
       kind: 'ready';
       workspaceId: string;
-      schemaLevel: 7;
+      schemaLevel: 8;
       revision: string;
     }>
   | Readonly<{
       kind: 'read-only';
       workspaceId: string;
-      schemaLevel: 7;
+      schemaLevel: 8;
       revision: string;
       problem: DataOpenProblem;
     }>
@@ -199,9 +199,9 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
       hasOnlyKeys(value.details, ['actualSchemaLevel', 'requiredSchemaLevel']) &&
       typeof value.details.actualSchemaLevel === 'number' &&
       Number.isSafeInteger(value.details.actualSchemaLevel) &&
-      value.details.actualSchemaLevel !== 7 &&
+      value.details.actualSchemaLevel !== 8 &&
       value.details.actualSchemaLevel >= 1 &&
-      value.details.requiredSchemaLevel === 7
+      value.details.requiredSchemaLevel === 8
     );
   }
 
@@ -244,7 +244,7 @@ function isWorkspaceDataStatus(value: unknown): value is WorkspaceDataStatus {
     (value.kind === 'ready' || value.kind === 'read-only') &&
     hasOnlyKeys(value, statusKeys) &&
     isCanonicalUuid(value.workspaceId) &&
-    value.schemaLevel === 7 &&
+    value.schemaLevel === 8 &&
     isCanonicalUnsignedSqliteInteger(value.revision) &&
     (value.kind === 'ready' || isDataOpenProblem(value.problem))
   );

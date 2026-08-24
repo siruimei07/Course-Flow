@@ -14,6 +14,7 @@ import {
   isWorkspaceSetupOutcome,
   makeCreateCourseWithMeetingRequest,
   makeCreateHolidayRangeRequest,
+  makeCreateTaskRequest,
   makeCreateTermRequest,
   makeCancelMeetingOccurrenceRequest,
   makeChangeMeetingOccurrenceRequest,
@@ -22,9 +23,12 @@ import {
   makeMeetingSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
   makeDeleteHolidayRangeRequest,
+  makeDeleteTaskRequest,
+  makeCompleteTaskRequest,
   makeSetupQueryRequest,
   makeUpdateTermEndDateRequest,
   makeUpdateHolidayRangeRequest,
+  makeUpdateTaskRequest,
   WORKSPACE_SETUP_CHANNEL,
   type RestoreTermAsCurrentRequestCommand,
   type WorkspaceSetupOutcome,
@@ -39,6 +43,12 @@ import type {
   DeleteHolidayRangeCommand,
   UpdateHolidayRangeCommand,
 } from './shared/workspace-holiday-contract';
+import type {
+  CompleteTaskCommand,
+  CreateTaskCommand,
+  DeleteTaskCommand,
+  UpdateTaskCommand,
+} from './shared/workspace-task-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
   CancelMeetingOccurrenceCommand,
@@ -167,6 +177,50 @@ function deleteHolidayRange(command: DeleteHolidayRangeCommand): Promise<Workspa
   ));
 }
 
+/**
+ * Sends one normalized one-time Task creation through the bounded Workspace channel.
+ * @param {CreateTaskCommand} command - Task creation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function createTask(command: CreateTaskCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateTaskRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sends one normalized one-time Task update through the bounded Workspace channel.
+ * @param {UpdateTaskCommand} command - Task update command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function updateTask(command: UpdateTaskCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeUpdateTaskRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sends one normalized one-time Task deletion through the bounded Workspace channel.
+ * @param {DeleteTaskCommand} command - Task deletion command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function deleteTask(command: DeleteTaskCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeDeleteTaskRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sends one normalized one-time Task completion through the bounded Workspace channel.
+ * @param {CompleteTaskCommand} command - Task completion command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function completeTask(command: CompleteTaskCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCompleteTaskRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 function restoreTermAsCurrent(
   command: RestoreTermAsCurrentRequestCommand,
 ): Promise<WorkspaceSetupOutcome> {
@@ -259,6 +313,10 @@ contextBridge.exposeInMainWorld(
     createHolidayRange,
     updateHolidayRange,
     deleteHolidayRange,
+    createTask,
+    updateTask,
+    deleteTask,
+    completeTask,
     restoreTermAsCurrent,
     createCourseWithMeeting,
     queryMeetingSeries,

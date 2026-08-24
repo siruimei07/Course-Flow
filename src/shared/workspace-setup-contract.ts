@@ -42,6 +42,18 @@ import {
     type UpdateHolidayRangeCommand,
 } from './workspace-holiday-contract';
 import {
+    isTaskProjection,
+    normalizeCompleteTaskCommand,
+    normalizeCreateTaskCommand,
+    normalizeDeleteTaskCommand,
+    normalizeUpdateTaskCommand,
+    type CompleteTaskCommand,
+    type CreateTaskCommand,
+    type DeleteTaskCommand,
+    type TaskProjection,
+    type UpdateTaskCommand,
+} from './workspace-task-contract';
+import {
     normalizeCreateTermCommand,
     normalizeUpdateTermEndDateCommand,
     type CreateTermCommand,
@@ -90,6 +102,26 @@ export type UpdateHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
 export type DeleteHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.holiday-range.delete';
     command: DeleteHolidayRangeCommand;
+}>;
+
+export type CreateTaskRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.create';
+    command: CreateTaskCommand;
+}>;
+
+export type UpdateTaskRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.update';
+    command: UpdateTaskCommand;
+}>;
+
+export type DeleteTaskRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.delete';
+    command: DeleteTaskCommand;
+}>;
+
+export type CompleteTaskRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.complete';
+    command: CompleteTaskCommand;
 }>;
 
 export type RestoreTermAsCurrentRequestCommand = Readonly<{
@@ -144,6 +176,10 @@ export type WorkspaceSetupRequest =
     | CreateHolidayRangeRequest
     | UpdateHolidayRangeRequest
     | DeleteHolidayRangeRequest
+    | CreateTaskRequest
+    | UpdateTaskRequest
+    | DeleteTaskRequest
+    | CompleteTaskRequest
     | RestoreTermAsCurrentRequest
     | CreateCourseWithMeetingRequest
     | MeetingSeriesQueryRequest
@@ -162,9 +198,13 @@ type WorkspaceCommandEffect = Readonly<{
         | 'plan.meeting-occurrence-cancelled'
         | 'plan.holiday-range-created'
         | 'plan.holiday-range-updated'
-        | 'plan.holiday-range-deleted';
+        | 'plan.holiday-range-deleted'
+        | 'plan.task-series-created'
+        | 'plan.task-series-updated'
+        | 'plan.task-series-deleted'
+        | 'plan.task-occurrence-completed';
     entity: Readonly<{
-        kind: 'term' | 'course' | 'meeting-series' | 'holiday-range';
+        kind: 'term' | 'course' | 'meeting-series' | 'holiday-range' | 'task-series';
         id: string;
         version: string;
     }>;
@@ -186,6 +226,7 @@ export type WorkspaceSetupProblemCode =
     | 'permission'
     | 'conflict'
     | 'decision-required'
+    | 'operation-in-progress'
     | 'recovery-required';
 
 export type WorkspaceSetupProblem = Readonly<{
@@ -195,10 +236,12 @@ export type WorkspaceSetupProblem = Readonly<{
     appBuildId: string;
     workspaceEpoch: string;
     dataEffect: 'unchanged' | 'unknown';
-    details?: Readonly<{
-        reason: 'meeting-time-overlap';
-        warnings: readonly MeetingOverlapWarning[];
-    }>;
+    details?:
+        | Readonly<{
+            reason: 'meeting-time-overlap';
+            warnings: readonly MeetingOverlapWarning[];
+        }>
+        | Readonly<{ reason: 'writer-busy' }>;
 }>;
 
 export type WorkspaceSetupOutcome =
@@ -463,6 +506,102 @@ export function makeDeleteHolidayRangeRequest(
     };
 }
 
+/**
+ * Builds one exact one-time Task creation request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CreateTaskCommand} command - Candidate creation command.
+ * @return {CreateTaskRequest} Normalized Workspace request.
+ */
+export function makeCreateTaskRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CreateTaskCommand,
+): CreateTaskRequest {
+    return {
+        kind: 'workspace.task.create',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCreateTaskCommand(command),
+    };
+}
+
+/**
+ * Builds one exact one-time Task update request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {UpdateTaskCommand} command - Candidate update command.
+ * @return {UpdateTaskRequest} Normalized Workspace request.
+ */
+export function makeUpdateTaskRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: UpdateTaskCommand,
+): UpdateTaskRequest {
+    return {
+        kind: 'workspace.task.update',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeUpdateTaskCommand(command),
+    };
+}
+
+/**
+ * Builds one exact one-time Task deletion request.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {DeleteTaskCommand} command - Candidate deletion command.
+ * @return {DeleteTaskRequest} Normalized Workspace request.
+ */
+export function makeDeleteTaskRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: DeleteTaskCommand,
+): DeleteTaskRequest {
+    return {
+        kind: 'workspace.task.delete',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeDeleteTaskCommand(command),
+    };
+}
+
+/**
+ * Builds the bounded pending-to-completed transition for a one-time Task occurrence.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CompleteTaskCommand} command - Candidate completion command.
+ * @return {CompleteTaskRequest} Normalized Workspace request.
+ */
+export function makeCompleteTaskRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CompleteTaskCommand,
+): CompleteTaskRequest {
+    return {
+        kind: 'workspace.task.complete',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCompleteTaskCommand(command),
+    };
+}
+
 export function makeRestoreTermAsCurrentRequest(
     requestId: string,
     appBuildId: string,
@@ -656,6 +795,10 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.holiday-range.create'
             && value.kind !== 'workspace.holiday-range.update'
             && value.kind !== 'workspace.holiday-range.delete'
+            && value.kind !== 'workspace.task.create'
+            && value.kind !== 'workspace.task.update'
+            && value.kind !== 'workspace.task.delete'
+            && value.kind !== 'workspace.task.complete'
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
             && value.kind !== 'workspace.meeting-occurrence.cancel')
@@ -688,6 +831,18 @@ export function isWorkspaceSetupRequest(
         }
         else if (value.kind === 'workspace.holiday-range.delete') {
             normalizeDeleteHolidayRangeCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.create') {
+            normalizeCreateTaskCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.update') {
+            normalizeUpdateTaskCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.delete') {
+            normalizeDeleteTaskCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.complete') {
+            normalizeCompleteTaskCommand(value.command);
         }
         else if (value.kind === 'workspace.course.create-with-first-meeting') {
             normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
@@ -742,6 +897,7 @@ function isSetupProjection(value: unknown): boolean {
         'terms',
         'courses',
         'holidayRanges',
+        'tasks',
     ])
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
@@ -751,13 +907,16 @@ function isSetupProjection(value: unknown): boolean {
         || !Array.isArray(value.courses)
         || !value.courses.every(isCourseProjection)
         || !Array.isArray(value.holidayRanges)
-        || !value.holidayRanges.every(isHolidayRangeProjection)) {
+        || !value.holidayRanges.every(isHolidayRangeProjection)
+        || !Array.isArray(value.tasks)
+        || !value.tasks.every(isTaskProjection)) {
         return false;
     }
 
     const terms = value.terms as TermProjection[];
     const courses = value.courses as CourseProjection[];
     const holidayRanges = value.holidayRanges as HolidayRangeProjection[];
+    const tasks = value.tasks as TaskProjection[];
     if (value.currentTerm !== null) {
         const currentTerm = value.currentTerm as TermProjection;
         const storedTerm = terms.find(term => term.termId === currentTerm.termId);
@@ -778,7 +937,7 @@ function isSetupProjection(value: unknown): boolean {
         return term !== undefined
             && holidayRange.startDate >= term.startDate
             && holidayRange.endDate <= term.endDate;
-    });
+    }) && tasks.every(task => courses.some(course => course.courseId === task.courseId));
 }
 
 function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResult {
@@ -811,7 +970,11 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
             || isEffect(value.effects[0], 'plan.meeting-occurrence-cancelled', 'meeting-series')
             || isEffect(value.effects[0], 'plan.holiday-range-created', 'holiday-range')
             || isEffect(value.effects[0], 'plan.holiday-range-updated', 'holiday-range')
-            || isEffect(value.effects[0], 'plan.holiday-range-deleted', 'holiday-range');
+            || isEffect(value.effects[0], 'plan.holiday-range-deleted', 'holiday-range')
+            || isEffect(value.effects[0], 'plan.task-series-created', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-series-updated', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-series-deleted', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-occurrence-completed', 'task-series');
     }
     return isEffect(value.effects[0], 'plan.course-created', 'course')
         && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
@@ -837,8 +1000,8 @@ export function isWorkspaceSetupOutcome(
             'workspaceEpoch',
             'dataEffect',
         ];
-        const hasOverlapDetails = hasExactDataKeys(problem, [...problemKeys, 'details']);
-        const overlapDetailsAreValid = hasOverlapDetails
+        const hasProblemDetails = hasExactDataKeys(problem, [...problemKeys, 'details']);
+        const overlapDetailsAreValid = hasProblemDetails
             && problem.code === 'decision-required'
             && hasExactDataKeys(problem.details, ['reason', 'warnings'])
             && problem.details.reason === 'meeting-time-overlap'
@@ -847,8 +1010,14 @@ export function isWorkspaceSetupOutcome(
             && problem.details.warnings.length <= MAX_MEETING_OVERLAP_WARNINGS
             && problem.details.warnings.length === Object.keys(problem.details.warnings).length
             && problem.details.warnings.every(isMeetingOverlapWarning);
+        const writerBusyDetailsAreValid = hasProblemDetails
+            && problem.code === 'operation-in-progress'
+            && hasExactDataKeys(problem.details, ['reason'])
+            && problem.details.reason === 'writer-busy';
         return hasExactDataKeys(value, ['ok', 'problem'])
-            && (hasExactDataKeys(problem, problemKeys) || overlapDetailsAreValid)
+            && ((hasExactDataKeys(problem, problemKeys) && problem.code !== 'operation-in-progress')
+                || overlapDetailsAreValid
+                || writerBusyDetailsAreValid)
             && [
                 'invalid-request',
                 'build-mismatch',
@@ -858,6 +1027,7 @@ export function isWorkspaceSetupOutcome(
                 'permission',
                 'conflict',
                 'decision-required',
+                'operation-in-progress',
                 'recovery-required',
             ].includes(problem.code as string)
             && typeof problem.message === 'string'

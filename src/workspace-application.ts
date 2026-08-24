@@ -10,6 +10,7 @@ import {
     openWorkspaceDataWithMigrations,
     type CommandReceiptOutcome,
     type CommitOptions,
+    type DataCommitResult,
     type DataOpenResult,
     type OpenWorkspaceDataOptions,
     type SqliteDataStore,
@@ -25,15 +26,19 @@ import {
     isWorkspaceSetupRequest,
     type CancelMeetingOccurrenceRequest,
     type ChangeMeetingOccurrenceRequest,
+    type CompleteTaskRequest,
     type CreateHolidayRangeRequest,
     type CreateCourseWithMeetingRequest,
+    type CreateTaskRequest,
     type CreateTermRequest,
     type DeleteHolidayRangeRequest,
+    type DeleteTaskRequest,
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type RestoreTermAsCurrentRequest,
     type UpdateTermEndDateRequest,
     type UpdateHolidayRangeRequest,
+    type UpdateTaskRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblem,
@@ -68,6 +73,8 @@ type WorkspaceDataState = Readonly<{
     status: WorkspaceDataStatus;
     store?: SqliteDataStore;
 }>;
+
+type DataCommitProblem = Extract<DataCommitResult, { ok: false }>['problem'];
 
 function requestIdFrom(value: unknown): string | null {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -141,6 +148,10 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.holiday-range.create'
                         || requestKind === 'workspace.holiday-range.update'
                         || requestKind === 'workspace.holiday-range.delete'
+                        || requestKind === 'workspace.task.create'
+                        || requestKind === 'workspace.task.update'
+                        || requestKind === 'workspace.task.delete'
+                        || requestKind === 'workspace.task.complete'
                         || requestKind === 'workspace.course.create-with-first-meeting'
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
@@ -168,6 +179,14 @@ export class WorkspaceApplication {
                 return this.commitHolidayRange(request.requestId, request.command);
             case 'workspace.holiday-range.delete':
                 return this.commitHolidayRange(request.requestId, request.command);
+            case 'workspace.task.create':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.update':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.delete':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.complete':
+                return this.commitTask(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
             case 'workspace.meeting-series.query':
@@ -389,12 +408,11 @@ export class WorkspaceApplication {
                 status: this.dataState.store!.status(),
             };
             if (!committed.ok) {
-                const code = committed.problem.code === 'permission'
-                    ? 'permission'
-                    : committed.problem.code === 'conflict'
-                        ? 'conflict'
-                        : 'workspace-unavailable';
-                return this.problem(code, '学期生命周期未更新，正式数据没有改变。', requestId);
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '学期生命周期未更新，正式数据没有改变。',
+                );
             }
             return null;
         }
@@ -491,12 +509,7 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
-                const code = committed.problem.code === 'permission'
-                    ? 'permission'
-                    : committed.problem.code === 'conflict'
-                        ? 'conflict'
-                        : 'workspace-unavailable';
-                return this.problem(code, unchangedMessage, requestId);
+                return this.commitProblem(committed.problem, requestId, unchangedMessage);
             }
             return this.termCommandOutcome(requestId, committed.value);
         }
@@ -552,22 +565,12 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
-                if (committed.problem.code === 'decision-required'
-                    && committed.problem.details.reason === 'meeting-time-overlap') {
-                    return this.problem(
-                        'decision-required',
-                        '假期变更会恢复有时间冲突的课节；确认继续后可保存。',
-                        requestId,
-                        'unchanged',
-                        committed.problem.details,
-                    );
-                }
-                const code = committed.problem.code === 'permission'
-                    ? 'permission'
-                    : committed.problem.code === 'conflict'
-                        ? 'conflict'
-                        : 'workspace-unavailable';
-                return this.problem(code, '假期范围未更改，正式数据没有改变。', requestId);
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '假期范围未更改，正式数据没有改变。',
+                    '假期变更会恢复有时间冲突的课节；确认继续后可保存。',
+                );
             }
             return this.holidayRangeCommandOutcome(requestId, committed.value, expectedEffect);
         }
@@ -590,6 +593,69 @@ export class WorkspaceApplication {
         }
     }
 
+    /**
+     * Commits one bounded one-time Task transition and recovers uncertain receipts.
+     * @param {string} requestId - Workspace request correlation identity.
+     * @param {CreateTaskRequest['command'] | UpdateTaskRequest['command']
+     *     | DeleteTaskRequest['command'] | CompleteTaskRequest['command']} command - Task command.
+     * @return {Promise<WorkspaceSetupOutcome>} Committed result or structured problem.
+     */
+    private async commitTask(
+        requestId: string,
+        command:
+            | CreateTaskRequest['command']
+            | UpdateTaskRequest['command']
+            | DeleteTaskRequest['command']
+            | CompleteTaskRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        const expectedEffect = command.intent.kind === 'plan.create-task-series'
+            ? 'plan.task-series-created' as const
+            : command.intent.kind === 'plan.update-task-series'
+                ? 'plan.task-series-updated' as const
+                : command.intent.kind === 'plan.delete-task-series'
+                    ? 'plan.task-series-deleted' as const
+                    : 'plan.task-occurrence-completed' as const;
+
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = {
+                ...this.dataState,
+                status: this.dataState.store.status(),
+            };
+            if (!committed.ok) {
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '任务未更改，正式数据没有改变。',
+                );
+            }
+            return this.taskCommandOutcome(requestId, committed.value, expectedEffect);
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.taskCommandOutcome(requestId, receipt, expectedEffect);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '任务未更改，正式数据没有改变。', requestId);
+        }
+    }
+
     private async createCourseWithMeeting(
         requestId: string,
         command: CreateCourseWithMeetingRequest['command'],
@@ -608,22 +674,12 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
-                if (committed.problem.code === 'decision-required'
-                    && committed.problem.details.reason === 'meeting-time-overlap') {
-                    return this.problem(
-                        'decision-required',
-                        '检测到课节时间重叠；确认继续后可按原时间保存。',
-                        requestId,
-                        'unchanged',
-                        committed.problem.details,
-                    );
-                }
-                const code = committed.problem.code === 'permission'
-                    ? 'permission'
-                    : committed.problem.code === 'conflict'
-                        ? 'conflict'
-                        : 'workspace-unavailable';
-                return this.problem(code, '课程与首个课节未保存，正式数据没有改变。', requestId);
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '课程与首个课节未保存，正式数据没有改变。',
+                    '检测到课节时间重叠；确认继续后可按原时间保存。',
+                );
             }
             return this.courseCommandOutcome(requestId, committed.value);
         }
@@ -673,24 +729,12 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
-                if (committed.problem.code === 'decision-required'
-                    && committed.problem.details.reason === 'meeting-time-overlap') {
-                    return this.problem(
-                        'decision-required',
-                        '检测到课节时间重叠；确认继续后可按原时间保存。',
-                        requestId,
-                        'unchanged',
-                        committed.problem.details,
-                    );
-                }
-                const code = committed.problem.code === 'permission'
-                    ? 'permission'
-                    : committed.problem.code === 'conflict'
-                        ? 'conflict'
-                        : committed.problem.code === 'decision-required'
-                            ? 'decision-required'
-                            : 'workspace-unavailable';
-                return this.problem(code, '课节实例未更改，正式数据没有改变。', requestId);
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '课节实例未更改，正式数据没有改变。',
+                    '检测到课节时间重叠；确认继续后可按原时间保存。',
+                );
             }
             return this.meetingOccurrenceCommandOutcome(requestId, committed.value, expectedEffect);
         }
@@ -819,6 +863,59 @@ export class WorkspaceApplication {
         };
     }
 
+    /**
+     * Maps one exact durable Task effect into the Workspace command outcome.
+     * @param {string} requestId - Workspace request correlation identity.
+     * @param {CommandReceiptOutcome} committed - Durable DATA receipt outcome.
+     * @param {string} expectedEffect - Exact Task effect required by the request.
+     * @return {WorkspaceSetupOutcome} Validated command outcome or recovery problem.
+     */
+    private taskCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+        expectedEffect:
+            | 'plan.task-series-created'
+            | 'plan.task-series-updated'
+            | 'plan.task-series-deleted'
+            | 'plan.task-occurrence-completed',
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== expectedEffect
+            || effect.entity.kind !== 'task-series') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与任务事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: effect.code,
+                entity: {
+                    kind: 'task-series',
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
+    }
+
     private courseCommandOutcome(
         requestId: string,
         committed: CommandReceiptOutcome,
@@ -920,6 +1017,43 @@ export class WorkspaceApplication {
                 outcome,
             },
         };
+    }
+
+    /**
+     * Preserves DATA commit semantics at the Workspace boundary.
+     * @param {DataCommitProblem} problem - DATA-owned stable commit problem.
+     * @param {string} requestId - Workspace request correlation identity.
+     * @param {string} unchangedMessage - Domain message for an unchanged write.
+     * @param {string} overlapMessage - Optional domain message for Meeting overlap.
+     * @return {WorkspaceSetupOutcome} Workspace-owned structured problem.
+     */
+    private commitProblem(
+        problem: DataCommitProblem,
+        requestId: string,
+        unchangedMessage: string,
+        overlapMessage?: string,
+    ): WorkspaceSetupOutcome {
+        if (problem.code === 'decision-required'
+            && problem.details.reason === 'meeting-time-overlap'
+            && overlapMessage !== undefined) {
+            return this.problem(
+                'decision-required',
+                overlapMessage,
+                requestId,
+                'unchanged',
+                problem.details,
+            );
+        }
+        if (problem.code === 'operation-in-progress') {
+            return this.problem(
+                'operation-in-progress',
+                '另一个写入正在完成；请重试，正式数据没有改变。',
+                requestId,
+                'unchanged',
+                problem.details,
+            );
+        }
+        return this.problem(problem.code, unchangedMessage, requestId);
     }
 
     private problem(

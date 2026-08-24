@@ -5,6 +5,7 @@
 import type { CanonicalValue } from './canonical-json';
 import type { CourseProjection } from './workspace-course-contract';
 import type { HolidayRangeProjection } from './workspace-holiday-contract';
+import type { TaskProjection } from './workspace-task-contract';
 import {
     isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
@@ -27,6 +28,7 @@ export type SetupProjection = Readonly<{
     terms: readonly TermProjection[];
     courses: readonly CourseProjection[];
     holidayRanges: readonly HolidayRangeProjection[];
+    tasks: readonly TaskProjection[];
 }>;
 
 export type CreateTermCommand = Readonly<{

@@ -134,6 +134,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         terms: [],
         courses: [],
         holidayRanges: [],
+        tasks: [],
       },
     },
   });
@@ -154,6 +155,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
         terms: [],
         courses: [],
         holidayRanges: [],
+        tasks: [],
       },
     },
   });

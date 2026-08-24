@@ -35,6 +35,16 @@ import {
     type RestoreTermAsCurrentCommand,
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
+import {
+    completeTaskDigestProjection,
+    createTaskDigestProjection,
+    deleteTaskDigestProjection,
+    updateTaskDigestProjection,
+    type CompleteTaskCommand,
+    type CreateTaskCommand,
+    type DeleteTaskCommand,
+    type UpdateTaskCommand,
+} from '../shared/workspace-task-contract';
 
 export function digestRecordSetupDecision(command: RecordSetupDecisionCommand): Uint8Array {
     const canonicalText = canonicalJson(recordSetupDecisionDigestProjection(command));
@@ -115,5 +125,25 @@ export function digestUpdateHolidayRange(command: UpdateHolidayRangeCommand): Ui
  */
 export function digestDeleteHolidayRange(command: DeleteHolidayRangeCommand): Uint8Array {
     const canonicalText = canonicalJson(deleteHolidayRangeDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestCreateTask(command: CreateTaskCommand): Uint8Array {
+    const canonicalText = canonicalJson(createTaskDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestUpdateTask(command: UpdateTaskCommand): Uint8Array {
+    const canonicalText = canonicalJson(updateTaskDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestDeleteTask(command: DeleteTaskCommand): Uint8Array {
+    const canonicalText = canonicalJson(deleteTaskDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestCompleteTask(command: CompleteTaskCommand): Uint8Array {
+    const canonicalText = canonicalJson(completeTaskDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }

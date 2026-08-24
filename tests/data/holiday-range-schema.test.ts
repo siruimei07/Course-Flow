@@ -77,11 +77,11 @@ function createLevel6Workspace(dataSlotsRoot: string): void {
     }
 }
 
-test('ADR-04/A-TERM-004: level 7 creates one strict HolidayRange row per inclusive range', async (t) => {
+test('ADR-04/A-TERM-004: level 8 retains one strict HolidayRange row per inclusive range', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 7);
-    assert.equal(store.status().schemaLevel, 7);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 8);
+    assert.equal(store.status().schemaLevel, 8);
     await store.close();
 
     const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
@@ -107,7 +107,7 @@ test('ADR-04/A-TERM-004: level 7 creates one strict HolidayRange row per inclusi
             return [index.name, index.origin, index.partial];
         });
 
-        assert.equal(userVersion.user_version, 7n);
+        assert.equal(userVersion.user_version, 8n);
         assert.equal(table.name, 'holiday_ranges');
         assert.equal(table.strict, 1n);
         assert.deepEqual(columns, [
@@ -130,7 +130,7 @@ test('ADR-04/A-TERM-004: level 7 creates one strict HolidayRange row per inclusi
     }
 });
 
-test('ADR-04/TEST-DATA-006: level 6 migrates HolidayRange storage atomically and restartably', async (t) => {
+test('ADR-04/TEST-DATA-006: level 6 migrates through HolidayRange storage atomically', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel6Workspace(dataSlotsRoot);
 
@@ -172,7 +172,7 @@ test('ADR-04/TEST-DATA-006: level 6 migrates HolidayRange storage atomically and
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 6 HolidayRange migration to continue');
     }
-    assert.equal(continued.store.status().schemaLevel, 7);
-    assert.equal(continued.store.status().revision, '1');
+    assert.equal(continued.store.status().schemaLevel, 8);
+    assert.equal(continued.store.status().revision, '2');
     await continued.store.close();
 });

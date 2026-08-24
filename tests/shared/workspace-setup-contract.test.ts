@@ -63,6 +63,19 @@ const HOLIDAY_RANGE = {
     endDate: '2026-10-16',
     entityVersion: '1',
 } as const;
+const TASK = {
+    taskSeriesId: '66666666-6666-4666-8666-666666666666',
+    courseId: COURSE.courseId,
+    title: 'Submit design review',
+    size: 'small',
+    deadline: { kind: 'tba' },
+    occurrenceId: {
+        taskSeriesId: '66666666-6666-4666-8666-666666666666',
+        originalLogicalAnchor: 'once',
+    },
+    status: 'pending',
+    entityVersion: '1',
+} as const;
 
 function outcomeWithCourse(course: unknown): unknown {
     return {
@@ -81,6 +94,7 @@ function outcomeWithCourse(course: unknown): unknown {
                 terms: [TERM],
                 courses: [course],
                 holidayRanges: [HOLIDAY_RANGE],
+                tasks: [TASK],
             },
         },
     };
@@ -162,6 +176,43 @@ test('A-COURSE-007: Workspace projection rejects dangling and out-of-owner range
     for (const course of invalidCourses) {
         assert.equal(accepts(course), false);
     }
+});
+
+test('A-TASK-001/TEST-PLAN-001: Workspace projection rejects dangling Task ownership', () => {
+    const base = outcomeWithCourse(COURSE) as {
+        value: { projection: { tasks: unknown[] } };
+    };
+    for (const task of [
+        { ...TASK, courseId: '77777777-7777-4777-8777-777777777777' },
+        {
+            ...TASK,
+            occurrenceId: { ...TASK.occurrenceId, taskSeriesId: COURSE.courseId },
+        },
+        { ...TASK, deadline: { kind: 'tba', date: '2026-10-12' } },
+    ]) {
+        assert.equal(isWorkspaceSetupOutcome({
+            ...base,
+            value: {
+                ...base.value,
+                projection: { ...base.value.projection, tasks: [task] },
+            },
+        }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+    }
+});
+
+test('TEST-DATA-005: Workspace boundary preserves writer-busy retry semantics', () => {
+    assert.equal(isWorkspaceSetupOutcome({
+        ok: false,
+        problem: {
+            code: 'operation-in-progress',
+            message: '另一个写入正在完成；请重试。',
+            requestId: REQUEST_ID,
+            appBuildId: APP_BUILD_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            dataEffect: 'unchanged',
+            details: { reason: 'writer-busy' },
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
 });
 
 test('TEST-DATA-002/006: Workspace boundary retains schema-1 Course receipt replay DTOs', () => {

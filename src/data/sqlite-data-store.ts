@@ -68,28 +68,47 @@ import {
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import {
+    deriveTaskOccurrenceId,
+    normalizeCompleteTaskCommand,
+    normalizeCreateTaskCommand,
+    normalizeDeleteTaskCommand,
+    normalizeUpdateTaskCommand,
+    type CompleteTaskCommand,
+    type CreateTaskCommand,
+    type DeleteTaskCommand,
+    type TaskCommand,
+    type TaskDeadline,
+    type TaskSize,
+    type UpdateTaskCommand,
+} from '../shared/workspace-task-contract';
+import {
     digestCancelMeetingOccurrence,
     digestChangeMeetingOccurrence,
     digestCreateCourseWithMeeting,
     digestCreateHolidayRange,
     digestCreateTerm,
     digestDeleteHolidayRange,
+    digestCompleteTask,
+    digestCreateTask,
+    digestDeleteTask,
     digestReconcileWorkspaceLifecycle,
     digestRecordSetupDecision,
     digestRestoreTermAsCurrent,
     digestUpdateTermEndDate,
     digestUpdateHolidayRange,
+    digestUpdateTask,
 } from './command-digest';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel7,
+    createSchemaLevel8,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
     migrateLevel4To5,
     migrateLevel5To6,
     migrateLevel6To7,
+    migrateLevel7To8,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -98,6 +117,7 @@ import {
     validateSchemaLevel5,
     validateSchemaLevel6,
     validateSchemaLevel7,
+    validateSchemaLevel8,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -147,7 +167,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 7 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 8 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -180,13 +200,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 7;
+        schemaLevel: 8;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 7;
+        schemaLevel: 8;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -240,9 +260,19 @@ type ReceiptEffect = Readonly<{
         | 'plan.meeting-occurrence-cancelled'
         | 'plan.holiday-range-created'
         | 'plan.holiday-range-updated'
-        | 'plan.holiday-range-deleted';
+        | 'plan.holiday-range-deleted'
+        | 'plan.task-series-created'
+        | 'plan.task-series-updated'
+        | 'plan.task-series-deleted'
+        | 'plan.task-occurrence-completed';
     entity: Readonly<{
-        kind: 'workspace-setup' | 'term' | 'course' | 'meeting-series' | 'holiday-range';
+        kind:
+            | 'workspace-setup'
+            | 'term'
+            | 'course'
+            | 'meeting-series'
+            | 'holiday-range'
+            | 'task-series';
         id: string;
         version: string;
     }>;
@@ -276,7 +306,12 @@ type ConflictProblem = Readonly<{
     context: Readonly<{
         revision: string;
         entityVersions: readonly [Readonly<{
-            kind: 'workspace-setup' | 'plan-state' | 'meeting-series' | 'holiday-range';
+            kind:
+                | 'workspace-setup'
+                | 'plan-state'
+                | 'meeting-series'
+                | 'holiday-range'
+                | 'task-series';
             id: string;
             version: string;
         }>];
@@ -356,6 +391,7 @@ type WorkspaceDataCommand =
     | AcceptedCreateCourseWithMeetingCommand
     | MeetingOccurrenceMutationCommand
     | HolidayRangeCommand
+    | TaskCommand
     | TermMutationCommand;
 
 type CurrentVersions = Readonly<{
@@ -1056,6 +1092,38 @@ function meetingLocation(kind: 'known' | 'tba', value: string | null): MeetingLo
         : Object.freeze({ kind: 'known' as const, value: value! });
 }
 
+type TaskDeadlineColumns = readonly [
+    TaskDeadline['kind'],
+    string | null,
+    string | null,
+    string | null,
+];
+
+function taskDeadlineColumns(deadline: TaskDeadline): TaskDeadlineColumns {
+    if (deadline.kind === 'date-only') {
+        return Object.freeze(['date-only', deadline.date, null, null]);
+    }
+    if (deadline.kind === 'timed') {
+        return Object.freeze(['timed', null, deadline.instant, deadline.timeZone]);
+    }
+    return Object.freeze(['tba', null, null, null]);
+}
+
+function taskDeadlineProjection(
+    kind: TaskDeadline['kind'],
+    date: string | null,
+    instant: string | null,
+    displayZone: string | null,
+): TaskDeadline {
+    if (kind === 'date-only') {
+        return Object.freeze({ kind, date: date! });
+    }
+    if (kind === 'timed') {
+        return Object.freeze({ kind, instant: instant!, timeZone: displayZone! });
+    }
+    return Object.freeze({ kind });
+}
+
 function isCourseWithMeetingCommand(
     command: WorkspaceDataCommand,
 ): command is AcceptedCreateCourseWithMeetingCommand {
@@ -1117,6 +1185,13 @@ function isHolidayRangeCommand(command: WorkspaceDataCommand): command is Holida
     return command.intent.kind === 'plan.create-holiday-range'
         || command.intent.kind === 'plan.update-holiday-range'
         || command.intent.kind === 'plan.delete-holiday-range';
+}
+
+function isTaskCommand(command: WorkspaceDataCommand): command is TaskCommand {
+    return command.intent.kind === 'plan.create-task-series'
+        || command.intent.kind === 'plan.update-task-series'
+        || command.intent.kind === 'plan.delete-task-series'
+        || command.intent.kind === 'plan.set-task-occurrence-status';
 }
 
 function freezeTuple<T>(value: [T]): readonly [T] {
@@ -1272,6 +1347,31 @@ function holidayRangeConflictResult(
         kind: 'holiday-range' as const,
         id: holidayRangeId,
         version: holidayRangeVersion.toString(),
+    });
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context: Object.freeze({
+            revision: versions.revision.toString(),
+            entityVersions: freezeTuple([entityVersion]),
+        }),
+        details: Object.freeze({ reason: 'expected-entity-version' as const }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+function taskSeriesConflictResult(
+    versions: CurrentVersions,
+    taskSeriesId: string,
+    taskSeriesVersion: bigint,
+): DataCommitResult {
+    const entityVersion = Object.freeze({
+        kind: 'task-series' as const,
+        id: taskSeriesId,
+        version: taskSeriesVersion.toString(),
     });
     const problem = Object.freeze({
         code: 'conflict' as const,
@@ -1709,6 +1809,55 @@ class SqliteDataStoreImplementation {
                         }))),
                 });
             }));
+
+            const taskStatement = this.database.prepare(`
+                SELECT
+                    task_series.task_series_id,
+                    task_series.course_id,
+                    task_series.entity_version,
+                    task_segments.title,
+                    task_segments.task_size,
+                    task_segments.deadline_kind,
+                    task_segments.deadline_date,
+                    task_segments.deadline_instant,
+                    task_segments.deadline_display_zone,
+                    task_occurrence_states.status
+                FROM task_series
+                JOIN task_segments ON task_segments.task_series_id = task_series.task_series_id
+                LEFT JOIN task_occurrence_states
+                    ON task_occurrence_states.task_series_id = task_series.task_series_id
+                    AND task_occurrence_states.original_logical_anchor = 'once'
+                WHERE task_series.retired = 0
+                ORDER BY task_series.course_id, task_series.task_series_id
+            `);
+            taskStatement.setReadBigInts(true);
+            const taskRows = taskStatement.all() as Array<{
+                task_series_id: string;
+                course_id: string;
+                entity_version: bigint;
+                title: string;
+                task_size: TaskSize;
+                deadline_kind: TaskDeadline['kind'];
+                deadline_date: string | null;
+                deadline_instant: string | null;
+                deadline_display_zone: string | null;
+                status: 'completed' | null;
+            }>;
+            const tasks = Object.freeze(taskRows.map(row => Object.freeze({
+                taskSeriesId: row.task_series_id,
+                courseId: row.course_id,
+                title: row.title,
+                size: row.task_size,
+                deadline: taskDeadlineProjection(
+                    row.deadline_kind,
+                    row.deadline_date,
+                    row.deadline_instant,
+                    row.deadline_display_zone,
+                ),
+                occurrenceId: deriveTaskOccurrenceId(row.task_series_id),
+                status: row.status ?? 'pending',
+                entityVersion: row.entity_version.toString(),
+            })));
             this.database.exec('COMMIT');
 
             return Object.freeze({
@@ -1718,6 +1867,7 @@ class SqliteDataStoreImplementation {
                 terms,
                 courses,
                 holidayRanges,
+                tasks,
             });
         }
         catch (error) {
@@ -2427,6 +2577,18 @@ class SqliteDataStoreImplementation {
             case 'plan.delete-holiday-range':
                 command = normalizeDeleteHolidayRangeCommand(candidate);
                 break;
+            case 'plan.create-task-series':
+                command = normalizeCreateTaskCommand(candidate);
+                break;
+            case 'plan.update-task-series':
+                command = normalizeUpdateTaskCommand(candidate);
+                break;
+            case 'plan.delete-task-series':
+                command = normalizeDeleteTaskCommand(candidate);
+                break;
+            case 'plan.set-task-occurrence-status':
+                command = normalizeCompleteTaskCommand(candidate);
+                break;
             default:
                 command = normalizeRecordSetupDecisionCommand(candidate);
         }
@@ -2629,6 +2791,9 @@ class SqliteDataStoreImplementation {
         }
         if (isHolidayRangeCommand(command)) {
             return this.commitHolidayRangeSynchronously(command, options);
+        }
+        if (isTaskCommand(command)) {
+            return this.commitTaskSynchronously(command, options);
         }
         return this.commitTermSynchronously(command, options);
     }
@@ -4125,6 +4290,320 @@ class SqliteDataStoreImplementation {
         }
     }
 
+    /**
+     * Commits one once-only Task lifecycle transition and its durable receipt atomically.
+     * @param {TaskCommand} command - Normalized Task command.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {DataCommitResult} Committed receipt or unchanged structured problem.
+     */
+    private commitTaskSynchronously(
+        command: TaskCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = command.intent.kind === 'plan.create-task-series'
+            ? digestCreateTask(command as CreateTaskCommand)
+            : command.intent.kind === 'plan.update-task-series'
+                ? digestUpdateTask(command as UpdateTaskCommand)
+                : command.intent.kind === 'plan.delete-task-series'
+                    ? digestDeleteTask(command as DeleteTaskCommand)
+                    : digestCompleteTask(command as CompleteTaskCommand);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+
+            const existing = command.intent.kind === 'plan.create-task-series'
+                ? undefined
+                : (() => {
+                    const statement = this.database.prepare(`
+                        SELECT
+                            task_series.course_id,
+                            task_series.retired,
+                            task_series.entity_version,
+                            task_occurrence_states.status
+                        FROM task_series
+                        LEFT JOIN task_occurrence_states
+                            ON task_occurrence_states.task_series_id = task_series.task_series_id
+                            AND task_occurrence_states.original_logical_anchor = 'once'
+                        WHERE task_series.task_series_id = ?
+                    `);
+                    statement.setReadBigInts(true);
+                    return statement.get(command.intent.payload.taskSeriesId) as {
+                        course_id: string;
+                        retired: bigint;
+                        entity_version: bigint;
+                        status: 'completed' | null;
+                    } | undefined;
+                })();
+            if (command.intent.kind !== 'plan.create-task-series') {
+                const mutation = command as UpdateTaskCommand | DeleteTaskCommand | CompleteTaskCommand;
+                if (!existing || existing.retired !== 0n) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Task series is not editable');
+                }
+                if (existing.entity_version !== BigInt(mutation.expectedTaskSeriesVersion)) {
+                    this.rollbackOrRequireReopen();
+                    return taskSeriesConflictResult(
+                        versions,
+                        command.intent.payload.taskSeriesId,
+                        existing.entity_version,
+                    );
+                }
+                if (command.intent.kind === 'plan.set-task-occurrence-status'
+                    && existing.status === 'completed') {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Task occurrence is already completed');
+                }
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const courseId = command.intent.kind === 'plan.create-task-series'
+                || command.intent.kind === 'plan.update-task-series'
+                ? command.intent.payload.courseId
+                : existing!.course_id;
+            const sourceCourseId = existing?.course_id ?? courseId;
+            const courseStatement = this.database.prepare(`
+                SELECT count(*) AS count
+                FROM courses
+                JOIN terms ON terms.term_id = courses.term_id
+                JOIN plan_state ON plan_state.singleton = 1
+                WHERE courses.course_id IN (?, ?)
+                    AND courses.archived = 0
+                    AND terms.archived = 0
+                    AND plan_state.current_term_id = courses.term_id
+            `);
+            courseStatement.setReadBigInts(true);
+            const activeCurrentCourseCount = (courseStatement.get(courseId, sourceCourseId) as {
+                count: bigint;
+            }).count;
+            const requiredCourseCount = courseId === sourceCourseId ? 1n : 2n;
+            if (activeCurrentCourseCount !== requiredCourseCount) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Task requires an active Current Term Course');
+            }
+
+            const existingVersion = existing?.entity_version ?? 0n;
+            if (versions.revision === SQLITE_INTEGER_MAX
+                || versions.planVersion === SQLITE_INTEGER_MAX
+                || existingVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const taskSeriesId = command.intent.kind === 'plan.create-task-series'
+                ? randomUUID()
+                : command.intent.payload.taskSeriesId;
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const newTaskSeriesVersion = existingVersion + 1n;
+            if (command.intent.kind === 'plan.create-task-series') {
+                const deadline = taskDeadlineColumns(command.intent.payload.deadline);
+                this.database.prepare(`
+                    INSERT INTO task_series (
+                        task_series_id,
+                        course_id,
+                        retired,
+                        entity_version
+                    ) VALUES (?, ?, 0, 1)
+                `).run(taskSeriesId, courseId);
+                this.database.prepare(`
+                    INSERT INTO task_segments (
+                        task_segment_id,
+                        task_series_id,
+                        title,
+                        task_size,
+                        schedule_kind,
+                        deadline_kind,
+                        deadline_date,
+                        deadline_instant,
+                        deadline_display_zone
+                    ) VALUES (?, ?, ?, ?, 'once', ?, ?, ?, ?)
+                `).run(
+                    randomUUID(),
+                    taskSeriesId,
+                    command.intent.payload.title,
+                    command.intent.payload.size,
+                    ...deadline,
+                );
+            }
+            else if (command.intent.kind === 'plan.update-task-series') {
+                const deadline = taskDeadlineColumns(command.intent.payload.deadline);
+                this.database.prepare(`
+                    UPDATE task_series
+                    SET course_id = ?, entity_version = ?
+                    WHERE task_series_id = ? AND retired = 0
+                `).run(courseId, newTaskSeriesVersion, taskSeriesId);
+                this.database.prepare(`
+                    UPDATE task_segments
+                    SET
+                        title = ?,
+                        task_size = ?,
+                        deadline_kind = ?,
+                        deadline_date = ?,
+                        deadline_instant = ?,
+                        deadline_display_zone = ?
+                    WHERE task_series_id = ? AND schedule_kind = 'once'
+                `).run(
+                    command.intent.payload.title,
+                    command.intent.payload.size,
+                    ...deadline,
+                    taskSeriesId,
+                );
+            }
+            else if (command.intent.kind === 'plan.delete-task-series') {
+                this.database.prepare(`
+                    UPDATE task_series
+                    SET retired = 1, entity_version = ?
+                    WHERE task_series_id = ? AND retired = 0
+                `).run(newTaskSeriesVersion, taskSeriesId);
+            }
+            else {
+                this.database.prepare(`
+                    INSERT INTO task_occurrence_states (
+                        task_series_id,
+                        original_logical_anchor,
+                        status,
+                        entity_version
+                    ) VALUES (?, 'once', 'completed', 1)
+                `).run(taskSeriesId);
+                this.database.prepare(`
+                    UPDATE task_series
+                    SET entity_version = ?
+                    WHERE task_series_id = ? AND retired = 0
+                `).run(newTaskSeriesVersion, taskSeriesId);
+            }
+            this.database.prepare(`
+                UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
+            `).run(newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (?, ?, 1, 'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed')
+            `).run(command.commandId, command.intent.kind, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            const effectCode: ReceiptEffect['code'] = command.intent.kind === 'plan.create-task-series'
+                ? 'plan.task-series-created'
+                : command.intent.kind === 'plan.update-task-series'
+                    ? 'plan.task-series-updated'
+                    : command.intent.kind === 'plan.delete-task-series'
+                        ? 'plan.task-series-deleted'
+                        : 'plan.task-occurrence-completed';
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, ?, 'task-series', ?, ?)
+            `).run(command.commandId, effectCode, taskSeriesId, newTaskSeriesVersion);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
     private commitTermMutationSynchronously(
         command: TermMutationCommand,
         options: CommitOptions,
@@ -4639,7 +5118,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel7(stagingDatabase);
+        createSchemaLevel8(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -4671,7 +5150,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel7(validationDatabase);
+            validateSchemaLevel8(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -4680,7 +5159,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel7(activeDatabase);
+        const facts = validateSchemaLevel8(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -4753,7 +5232,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel7(validationDatabase);
+        const facts = validateSchemaLevel8(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -4803,7 +5282,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel7(activeDatabase);
+        const facts = validateSchemaLevel8(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -4844,7 +5323,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 3
                 && identity.schemaLevel !== 4
                 && identity.schemaLevel !== 5
-                && identity.schemaLevel !== 6)) {
+                && identity.schemaLevel !== 6
+                && identity.schemaLevel !== 7)) {
             closeBestEffort(source);
             return opened;
         }
@@ -4868,8 +5348,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 5) {
             validateSchemaLevel5(source);
         }
-        else {
+        else if (identity.schemaLevel === 6) {
             validateSchemaLevel6(source);
+        }
+        else {
+            validateSchemaLevel7(source);
         }
         const safetyDirectory = join(
             dataSlotsRoot,
@@ -4895,8 +5378,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 5) {
                 validateSchemaLevel5(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 6) {
                 validateSchemaLevel6(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel7(safetyDatabase);
             }
         }
         finally {
@@ -4943,10 +5429,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel5To6(maintenance);
                         validateSchemaLevel6(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 6) {
                         validateSchemaLevel6(maintenance);
                         migrateLevel6To7(maintenance);
                         validateSchemaLevel7(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel7(maintenance);
+                        migrateLevel7To8(maintenance);
+                        validateSchemaLevel8(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -4970,7 +5461,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel7(maintenance);
+            validateSchemaLevel8(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

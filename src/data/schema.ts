@@ -7,7 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 7;
+export const CURRENT_SCHEMA_LEVEL = 8;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -30,6 +30,8 @@ const courseIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'course_id');
 const meetingSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_series_id');
 const meetingSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_segment_id');
 const holidayRangeIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'holiday_range_id');
+const taskSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_series_id');
+const taskSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_segment_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -704,6 +706,88 @@ const LEVEL_7_HOLIDAY_DDL = `
 const LEVEL_7_DDL = LEVEL_6_DDL.replace(LEVEL_6_RECEIPT_DDL, LEVEL_7_RECEIPT_DDL)
     + LEVEL_7_HOLIDAY_DDL;
 
+const LEVEL_8_RECEIPT_DDL = LEVEL_7_RECEIPT_DDL
+    .replace(
+        "                'plan.delete-holiday-range'",
+        `                'plan.delete-holiday-range',
+                'plan.create-task-series',
+                'plan.update-task-series',
+                'plan.delete-task-series',
+                'plan.set-task-occurrence-status'`,
+    )
+    .replace(
+        `            OR (effect_code = 'plan.holiday-range-deleted' AND entity_kind = 'holiday-range')`,
+        `            OR (effect_code = 'plan.holiday-range-deleted' AND entity_kind = 'holiday-range')
+            OR (effect_code = 'plan.task-series-created' AND entity_kind = 'task-series')
+            OR (effect_code = 'plan.task-series-updated' AND entity_kind = 'task-series')
+            OR (effect_code = 'plan.task-series-deleted' AND entity_kind = 'task-series')
+            OR (effect_code = 'plan.task-occurrence-completed' AND entity_kind = 'task-series')`,
+    );
+
+const LEVEL_8_TASK_DDL = `
+    CREATE TABLE task_series (
+        task_series_id TEXT PRIMARY KEY CHECK (${taskSeriesIdCheck}),
+        course_id TEXT NOT NULL CHECK (${courseIdCheck}),
+        retired INTEGER NOT NULL CHECK (retired IN (0, 1)),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        FOREIGN KEY (course_id) REFERENCES courses(course_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX task_series_by_course ON task_series(course_id);
+
+    CREATE TABLE task_segments (
+        task_segment_id TEXT PRIMARY KEY CHECK (${taskSegmentIdCheck}),
+        task_series_id TEXT NOT NULL UNIQUE CHECK (${taskSeriesIdCheck}),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240 AND title = trim(title)),
+        task_size TEXT NOT NULL CHECK (task_size IN ('small', 'large')),
+        schedule_kind TEXT NOT NULL CHECK (schedule_kind = 'once'),
+        deadline_kind TEXT NOT NULL CHECK (deadline_kind IN ('date-only', 'timed', 'tba')),
+        deadline_date TEXT CHECK (
+            deadline_date IS NULL
+            OR (
+                length(deadline_date) = 10
+                AND substr(deadline_date, 5, 1) = '-'
+                AND substr(deadline_date, 8, 1) = '-'
+                AND deadline_date NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        deadline_instant TEXT,
+        deadline_display_zone TEXT CHECK (
+            deadline_display_zone IS NULL
+            OR length(deadline_display_zone) BETWEEN 1 AND 255
+        ),
+        CHECK (
+            (deadline_kind = 'date-only'
+                AND deadline_date IS NOT NULL
+                AND deadline_instant IS NULL
+                AND deadline_display_zone IS NULL)
+            OR (deadline_kind = 'timed'
+                AND deadline_date IS NULL
+                AND deadline_instant IS NOT NULL
+                AND deadline_display_zone IS NOT NULL)
+            OR (deadline_kind = 'tba'
+                AND deadline_date IS NULL
+                AND deadline_instant IS NULL
+                AND deadline_display_zone IS NULL)
+        ),
+        FOREIGN KEY (task_series_id) REFERENCES task_series(task_series_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX task_segments_by_series ON task_segments(task_series_id);
+
+    CREATE TABLE task_occurrence_states (
+        task_series_id TEXT NOT NULL CHECK (${taskSeriesIdCheck}),
+        original_logical_anchor TEXT NOT NULL CHECK (original_logical_anchor = 'once'),
+        status TEXT NOT NULL CHECK (status = 'completed'),
+        entity_version INTEGER NOT NULL CHECK (entity_version > 0),
+        PRIMARY KEY (task_series_id, original_logical_anchor),
+        FOREIGN KEY (task_series_id) REFERENCES task_series(task_series_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_8_DDL = LEVEL_7_DDL.replace(LEVEL_7_RECEIPT_DDL, LEVEL_8_RECEIPT_DDL)
+    + LEVEL_8_TASK_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -822,6 +906,29 @@ const TABLE_COLUMNS = {
         ['location_value', 'TEXT', 0, 0],
         ['entity_version', 'INTEGER', 1, 0],
     ],
+    task_series: [
+        ['task_series_id', 'TEXT', 1, 1],
+        ['course_id', 'TEXT', 1, 0],
+        ['retired', 'INTEGER', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
+    task_segments: [
+        ['task_segment_id', 'TEXT', 1, 1],
+        ['task_series_id', 'TEXT', 1, 0],
+        ['title', 'TEXT', 1, 0],
+        ['task_size', 'TEXT', 1, 0],
+        ['schedule_kind', 'TEXT', 1, 0],
+        ['deadline_kind', 'TEXT', 1, 0],
+        ['deadline_date', 'TEXT', 0, 0],
+        ['deadline_instant', 'TEXT', 0, 0],
+        ['deadline_display_zone', 'TEXT', 0, 0],
+    ],
+    task_occurrence_states: [
+        ['task_series_id', 'TEXT', 1, 1],
+        ['original_logical_anchor', 'TEXT', 1, 2],
+        ['status', 'TEXT', 1, 0],
+        ['entity_version', 'INTEGER', 1, 0],
+    ],
 } as const;
 
 const LEVEL_5_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly unknown[]>> = {
@@ -893,6 +1000,9 @@ const FOREIGN_KEYS = {
     meeting_series: [['course_id', 'courses', 'course_id']],
     meeting_segments: [['meeting_series_id', 'meeting_series', 'meeting_series_id']],
     meeting_occurrence_overrides: [['meeting_series_id', 'meeting_series', 'meeting_series_id']],
+    task_series: [['course_id', 'courses', 'course_id']],
+    task_segments: [['task_series_id', 'task_series', 'task_series_id']],
+    task_occurrence_states: [['task_series_id', 'task_series', 'task_series_id']],
 } as const;
 
 const LEVEL_1_TABLES = [
@@ -922,6 +1032,18 @@ const LEVEL_5_AND_6_TABLES = [
     'meeting_occurrence_overrides',
 ] as const;
 
+const LEVEL_7_TABLES = [
+    ...LEVEL_5_AND_6_TABLES,
+    'holiday_ranges',
+] as const;
+
+const LEVEL_8_TABLES = [
+    ...LEVEL_7_TABLES,
+    'task_series',
+    'task_segments',
+    'task_occurrence_states',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -942,7 +1064,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -957,7 +1079,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 5 || level === 6) {
         return LEVEL_5_AND_6_TABLES;
     }
-    return Object.keys(TABLE_COLUMNS) as CurrentTable[];
+    if (level === 7) {
+        return LEVEL_7_TABLES;
+    }
+    return LEVEL_8_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -990,7 +1115,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                         ? LEVEL_5_DDL
                         : level === 6
                             ? LEVEL_6_DDL
-                            : LEVEL_7_DDL;
+                            : level === 7
+                                ? LEVEL_7_DDL
+                                : LEVEL_8_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -1094,6 +1221,8 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable): void {
         meeting_series: ['meeting_series_by_course', 'course_id'],
         meeting_segments: ['meeting_segments_by_series', 'meeting_series_id'],
         holiday_ranges: ['holiday_ranges_by_term', 'term_id'],
+        task_series: ['task_series_by_course', 'course_id'],
+        task_segments: ['task_segments_by_series', 'task_series_id'],
     };
     const expectedIndex = indexByTable[table];
     const expectedIndexes = expectedIndex ? [[expectedIndex[0], 0, 'c', 0]] : [];
@@ -1276,6 +1405,27 @@ function validateLevel5MeetingFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Validates the one segment owned by every once-only Task series.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 8.
+ * @return {void}
+ */
+function validateLevel8TaskFacts(database: DatabaseSync): void {
+    const segmentlessSeries = database.prepare(`
+        SELECT count(*) AS count
+        FROM task_series
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM task_segments
+            WHERE task_segments.task_series_id = task_series.task_series_id
+        )
+    `);
+    segmentlessSeries.setReadBigInts(true);
+    if ((segmentlessSeries.get() as { count: bigint }).count !== 0n) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -1300,6 +1450,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 5) {
         validateLevel5MeetingFacts(database);
+    }
+    if (level >= 8) {
+        validateLevel8TaskFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -1837,6 +1990,53 @@ export function migrateLevel6To7(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Migrates level 7 to once-only Task storage while preserving durable receipts.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel7To8(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_7;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_7;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_7;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_8_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_7;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_7;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_7;
+
+        DROP TABLE receipt_effects_level_7;
+        DROP TABLE durable_followups_level_7;
+        DROP TABLE command_receipts_level_7;
+
+        ${LEVEL_8_TASK_DDL}
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 8;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -1868,12 +2068,21 @@ export function createSchemaLevel6(database: DatabaseSync): void {
 }
 
 /**
- * Creates the complete current level 7 schema in an empty database.
+ * Creates the retained level 7 schema in an empty database.
  * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
  * @return {void}
  */
 export function createSchemaLevel7(database: DatabaseSync): void {
     database.exec(LEVEL_7_DDL);
+}
+
+/**
+ * Creates the complete current level 8 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel8(database: DatabaseSync): void {
+    database.exec(LEVEL_8_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -1917,4 +2126,13 @@ export function validateSchemaLevel6(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel7(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 7);
+}
+
+/**
+ * Validates exact level 8 once-only Task storage and existing PLAN facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel8(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 8);
 }
