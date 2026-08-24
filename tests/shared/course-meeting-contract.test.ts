@@ -7,17 +7,19 @@ import test from 'node:test';
 
 import {
     createCourseWithMeetingDigestProjection,
+    normalizeAcceptedCreateCourseWithMeetingCommand,
     normalizeCreateCourseWithMeetingCommand,
 } from '../../src/shared/workspace-course-contract';
 
 const VALID_COMMAND = {
     commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     followUpId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    overlapDecision: 'review',
     expectedRevision: '1',
     expectedPlanVersion: '1',
     intent: {
         kind: 'plan.create-course-with-first-meeting',
-        intentSchemaVersion: 2,
+        intentSchemaVersion: 3,
         payload: {
             course: {
                 code: 'CSC108',
@@ -28,6 +30,27 @@ const VALID_COMMAND = {
                 credits: '3',
                 teachingRange: { kind: 'inherit-term' },
             },
+            meeting: {
+                type: 'LEC',
+                weekday: 'MON',
+                localStart: '09:00',
+                localEnd: '10:00',
+                endDayOffset: 0,
+                effectiveRange: { kind: 'inherit-course' },
+                location: { kind: 'known', value: 'BA 1170' },
+            },
+        },
+    },
+} as const;
+
+const LEGACY_SCHEMA_2_COMMAND = {
+    ...VALID_COMMAND,
+    overlapDecision: undefined,
+    intent: {
+        ...VALID_COMMAND.intent,
+        intentSchemaVersion: 2,
+        payload: {
+            ...VALID_COMMAND.intent.payload,
             meeting: {
                 type: 'LEC',
                 weekday: 'MON',
@@ -77,6 +100,40 @@ test('A-COURSE-001–004: CreateCourseWithFirstMeeting normalizes every persiste
         kind: 'known',
         value: 'BA 1170',
     });
+});
+
+test('Q-TIME-01: current Meeting commands require an explicit day offset and overlap decision', () => {
+    const command = {
+        ...VALID_COMMAND,
+        intent: {
+            ...VALID_COMMAND.intent,
+            payload: {
+                ...VALID_COMMAND.intent.payload,
+                meeting: {
+                    ...VALID_COMMAND.intent.payload.meeting,
+                    localStart: '23:30',
+                    localEnd: '01:00',
+                    endDayOffset: 1,
+                },
+            },
+        },
+    } as const;
+
+    assert.deepEqual(normalizeCreateCourseWithMeetingCommand(command), command);
+    const { overlapDecision: _overlapDecision, ...legacy } = LEGACY_SCHEMA_2_COMMAND;
+    assert.deepEqual(normalizeAcceptedCreateCourseWithMeetingCommand(legacy), legacy);
+    for (const meeting of [
+        { ...command.intent.payload.meeting, endDayOffset: 2 },
+        { ...command.intent.payload.meeting, endDayOffset: 0 },
+    ]) {
+        assert.throws(() => normalizeCreateCourseWithMeetingCommand({
+            ...command,
+            intent: {
+                ...command.intent,
+                payload: { ...command.intent.payload, meeting },
+            },
+        }), TypeError);
+    }
 });
 
 test('A-COURSE-003/TEST-PLAN-002: only LEC, TUT, and PRA meeting types are accepted', () => {
@@ -156,6 +213,26 @@ test('A-COURSE-004/Q-STATE-01: known location and TBA are distinct exact unions'
         },
     });
     assert.deepEqual(tba.intent.payload.meeting.location, { kind: 'tba' });
+    assert.deepEqual({
+        weekday: tba.intent.payload.meeting.weekday,
+        localStart: tba.intent.payload.meeting.localStart,
+        localEnd: tba.intent.payload.meeting.localEnd,
+        endDayOffset: tba.intent.payload.meeting.endDayOffset,
+    }, {
+        weekday: 'MON',
+        localStart: '09:00',
+        localEnd: '10:00',
+        endDayOffset: 0,
+    });
+
+    const { localStart: _localStart, ...meetingWithoutStart } = tba.intent.payload.meeting;
+    assert.throws(() => normalizeCreateCourseWithMeetingCommand({
+        ...tba,
+        intent: {
+            ...tba.intent,
+            payload: { ...tba.intent.payload, meeting: meetingWithoutStart },
+        },
+    }), TypeError);
 
     for (const location of [
         { kind: 'known', value: '' },
@@ -229,6 +306,7 @@ test('TEST-DATA-002: Course/Meeting digest excludes CommandId and includes all c
     assert.deepEqual(projection, {
         encoding: 'courseflow-canonical-json-v1',
         intent: VALID_COMMAND.intent,
+        overlapDecision: 'review',
         expectedRevision: '1',
         expectedEntityVersions: [{
             entityKind: 'plan-state',

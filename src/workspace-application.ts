@@ -33,6 +33,7 @@ import {
     type UpdateTermEndDateRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
+    type WorkspaceSetupProblem,
     type WorkspaceSetupProblemCode,
     type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
@@ -524,6 +525,16 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
+                if (committed.problem.code === 'decision-required'
+                    && committed.problem.details.reason === 'meeting-time-overlap') {
+                    return this.problem(
+                        'decision-required',
+                        '检测到课节时间重叠；确认继续后可按原时间保存。',
+                        requestId,
+                        'unchanged',
+                        committed.problem.details,
+                    );
+                }
                 const code = committed.problem.code === 'permission'
                     ? 'permission'
                     : committed.problem.code === 'conflict'
@@ -579,6 +590,16 @@ export class WorkspaceApplication {
                 status: this.dataState.store.status(),
             };
             if (!committed.ok) {
+                if (committed.problem.code === 'decision-required'
+                    && committed.problem.details.reason === 'meeting-time-overlap') {
+                    return this.problem(
+                        'decision-required',
+                        '检测到课节时间重叠；确认继续后可按原时间保存。',
+                        requestId,
+                        'unchanged',
+                        committed.problem.details,
+                    );
+                }
                 const code = committed.problem.code === 'permission'
                     ? 'permission'
                     : committed.problem.code === 'conflict'
@@ -771,6 +792,7 @@ export class WorkspaceApplication {
         message: string,
         requestId: string | null,
         dataEffect: 'unchanged' | 'unknown' = 'unchanged',
+        details?: NonNullable<WorkspaceSetupProblem['details']>,
     ): WorkspaceSetupOutcome {
         return {
             ok: false,
@@ -781,6 +803,7 @@ export class WorkspaceApplication {
                 appBuildId: this.appBuildId,
                 workspaceEpoch: this.workspaceEpoch,
                 dataEffect,
+                ...(details === undefined ? {} : { details }),
             },
         };
     }

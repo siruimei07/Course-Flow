@@ -52,11 +52,12 @@ function createCourseCommand() {
     return {
         commandId: COURSE_COMMAND_ID,
         followUpId: COURSE_FOLLOW_UP_ID,
+        overlapDecision: 'review' as const,
         expectedRevision: '1',
         expectedPlanVersion: '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting' as const,
-            intentSchemaVersion: 2 as const,
+            intentSchemaVersion: 3 as const,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -72,6 +73,7 @@ function createCourseCommand() {
                     weekday: 'MON' as const,
                     localStart: '09:00',
                     localEnd: '10:00',
+                    endDayOffset: 0 as const,
                     effectiveRange: { kind: 'inherit-course' as const },
                     location: { kind: 'known' as const, value: 'BA 1170' },
                 },

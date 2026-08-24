@@ -394,11 +394,12 @@ function SetupCourse(props: Readonly<{
             pendingCommand.current ??= normalizeCreateCourseWithMeetingCommand({
                 commandId: globalThis.crypto.randomUUID(),
                 followUpId: globalThis.crypto.randomUUID(),
+                overlapDecision: 'review',
                 expectedRevision: props.projection.workspaceRevision,
                 expectedPlanVersion: props.projection.planEntityVersion,
                 intent: {
                     kind: 'plan.create-course-with-first-meeting',
-                    intentSchemaVersion: 2,
+                    intentSchemaVersion: 3,
                     payload: {
                         course: {
                             code: draft.code,
@@ -414,6 +415,7 @@ function SetupCourse(props: Readonly<{
                             weekday: draft.weekday,
                             localStart: draft.localStart,
                             localEnd: draft.localEnd,
+                            endDayOffset: 0,
                             effectiveRange: draft.effectiveStartDate === currentTerm.startDate
                                 && draft.effectiveEndDate === currentTerm.endDate
                                 ? { kind: 'inherit-course' }
@@ -437,7 +439,32 @@ function SetupCourse(props: Readonly<{
 
         setSaving(true);
         setMessage('正在原子保存课程与首个课节…');
-        const outcome = await window.courseFlow.createCourseWithMeeting(pendingCommand.current);
+        let outcome = await window.courseFlow.createCourseWithMeeting(pendingCommand.current);
+        if (!outcome.ok
+            && outcome.problem.details?.reason === 'meeting-time-overlap') {
+            const conflicts = outcome.problem.details.warnings
+                .slice(0, 5)
+                .map(warning => (
+                    `${warning.proposed.courseCode} ${warning.proposed.startInstant}–`
+                    + `${warning.proposed.endInstant} / ${warning.existing.courseCode} `
+                    + `${warning.existing.startInstant}–${warning.existing.endInstant}`
+                ))
+                .join('\n');
+            const shouldContinue = globalThis.confirm(
+                `${outcome.problem.message}\n\n${conflicts}\n\n是否仍按原时间保存？`,
+            );
+            if (!shouldContinue) {
+                setSaving(false);
+                setMessage('已保留原输入，尚未保存。');
+                return;
+            }
+            pendingCommand.current = normalizeCreateCourseWithMeetingCommand({
+                ...pendingCommand.current,
+                overlapDecision: 'continue',
+            });
+            setMessage('正在按你的明确选择保存重叠课节…');
+            outcome = await window.courseFlow.createCourseWithMeeting(pendingCommand.current);
+        }
         if (!outcome.ok) {
             setSaving(false);
             setMessage(outcome.problem.message);

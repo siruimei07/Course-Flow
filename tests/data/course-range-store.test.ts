@@ -55,11 +55,12 @@ function makeCourseCommand(options: Readonly<{
     return normalizeCreateCourseWithMeetingCommand({
         commandId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         followUpId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        overlapDecision: 'review',
         expectedRevision: '1',
         expectedPlanVersion: '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting',
-            intentSchemaVersion: 2,
+            intentSchemaVersion: 3,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -75,6 +76,7 @@ function makeCourseCommand(options: Readonly<{
                     weekday: 'MON',
                     localStart: '09:00',
                     localEnd: '10:00',
+                    endDayOffset: 0,
                     effectiveRange: options.effectiveRange ?? { kind: 'inherit-course' },
                     location: { kind: 'known', value: 'BA 1170' },
                 },

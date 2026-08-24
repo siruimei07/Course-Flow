@@ -52,11 +52,12 @@ function makeCourseCommand(weekday: 'MON' | 'SAT' = 'MON'): CreateCourseWithMeet
     return normalizeCreateCourseWithMeetingCommand({
         commandId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
         followUpId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        overlapDecision: 'review',
         expectedRevision: '1',
         expectedPlanVersion: '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting',
-            intentSchemaVersion: 2,
+            intentSchemaVersion: 3,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -72,6 +73,7 @@ function makeCourseCommand(weekday: 'MON' | 'SAT' = 'MON'): CreateCourseWithMeet
                     weekday,
                     localStart: '09:00',
                     localEnd: '10:00',
+                    endDayOffset: 0,
                     effectiveRange: { kind: 'inherit-course' },
                     location: { kind: 'known', value: 'BA 1170' },
                 },
@@ -105,12 +107,13 @@ function makeChangeCommand(options: Readonly<{
         followUpId: options.followUpId ?? '88888888-8888-4888-8888-888888888888',
         confirmationToken: options.confirmationToken ?? null,
         impactWindow: options.impactWindow ?? null,
+        overlapDecision: 'review',
         expectedRevision: options.expectedRevision ?? '2',
         expectedPlanVersion: options.expectedPlanVersion ?? '2',
         expectedMeetingSeriesVersion: options.expectedMeetingSeriesVersion ?? '1',
         intent: {
             kind: 'plan.change-meeting-occurrence',
-            intentSchemaVersion: 1,
+            intentSchemaVersion: 2,
             payload: {
                 meetingSeriesId: options.meetingSeriesId,
                 originalLogicalAnchor: options.originalLogicalAnchor ?? '2026-09-28',
@@ -120,6 +123,7 @@ function makeChangeCommand(options: Readonly<{
                     weekday: options.weekday ?? 'TUE',
                     localStart,
                     localEnd: localStart === '11:00' ? '12:00' : '13:00',
+                    endDayOffset: 0,
                     location: { kind: 'tba' },
                 },
             },
@@ -383,6 +387,9 @@ test('TEST-PLAN-004/005: only-this persists one target override with receipt and
         weekday: 'TUE',
         localStart: '11:00',
         localEnd: '12:00',
+        endDayOffset: 0,
+        startInstant: '2026-09-29T15:00:00.000Z',
+        endInstant: '2026-09-29T16:00:00.000Z',
         location: { kind: 'tba' },
     });
     for (const anchor of ['2026-09-21', '2026-10-05']) {
@@ -440,6 +447,7 @@ test('TEST-PLAN-004/005: this-and-future splits one series without rewriting his
         weekday: 'MON',
         localStart: '09:00',
         localEnd: '10:00',
+        endDayOffset: 0,
         location: { kind: 'known', value: 'BA 1170' },
     });
     assert.notEqual(after.segments[1]?.segmentId, originalSegmentId);
@@ -451,6 +459,7 @@ test('TEST-PLAN-004/005: this-and-future splits one series without rewriting his
         weekday: 'TUE',
         localStart: '11:00',
         localEnd: '12:00',
+        endDayOffset: 0,
         location: { kind: 'tba' },
     });
     const historicalBefore = before.occurrences.filter(occurrence => (
@@ -766,6 +775,7 @@ test('ImpactPreview truncation flags require an actual matching occurrence outsi
             weekday: 'MON',
             localStart: '11:00',
             localEnd: '12:00',
+            endDayOffset: 0,
             location: { kind: 'tba' },
         },
         requestedWindow: { startDate: '2026-09-07', endDate: '2026-09-14' },

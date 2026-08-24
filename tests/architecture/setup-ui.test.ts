@@ -14,6 +14,14 @@ import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-con
 const repositoryRoot = process.cwd();
 const renderer = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
 const styles = readFileSync(path.join(repositoryRoot, 'src/renderer/styles.css'), 'utf8');
+const termSetup = renderer.slice(
+    renderer.indexOf('function SetupTerm'),
+    renderer.indexOf('function SetupCourse'),
+);
+const courseSetup = renderer.slice(
+    renderer.indexOf('function SetupCourse'),
+    renderer.indexOf('function SetupComplete'),
+);
 
 test('UI-SETUP-01 exposes the bounded Current Term then Course and first Meeting flow', () => {
     assert.match(renderer, /当前学期/);
@@ -44,6 +52,9 @@ test('UI-SETUP-01 exposes the bounded Current Term then Course and first Meeting
     assert.match(renderer, /待定/);
     assert.match(renderer, /保存课程与课节/);
     assert.match(renderer, /courseFlow\.createCourseWithMeeting/);
+    assert.doesNotMatch(termSetup, /overlapDecision/);
+    assert.match(courseSetup, /overlapDecision:\s*'review'/);
+    assert.match(courseSetup, /overlapDecision:\s*'continue'/);
     assert.match(renderer, /学期身份/);
     assert.match(renderer, /课程身份/);
     assert.match(renderer, /课节身份/);
@@ -104,6 +115,7 @@ test('UI-SETUP-01 reports completion only from writable DATA', () => {
                 weekday: 'MON',
                 localStart: '09:00',
                 localEnd: '10:00',
+                endDayOffset: 0,
                 effectiveRange: {
                     kind: 'inherit-course',
                     startDate: '2026-09-08',

@@ -79,11 +79,12 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
         {
             commandId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
             followUpId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+            overlapDecision: 'review',
             expectedRevision: '1',
             expectedPlanVersion: '1',
             intent: {
                 kind: 'plan.create-course-with-first-meeting',
-                intentSchemaVersion: 2,
+                intentSchemaVersion: 3,
                 payload: {
                     course: {
                         code: 'CSC108',
@@ -99,6 +100,7 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
                         weekday: 'MON',
                         localStart: '09:00',
                         localEnd: '10:00',
+                        endDayOffset: 0,
                         effectiveRange: { kind: 'inherit-course' },
                         location: { kind: 'known', value: 'BA 1170' },
                     },
@@ -139,12 +141,13 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
             followUpId: '88888888-8888-4888-8888-888888888888',
             confirmationToken: null,
             impactWindow: null,
+            overlapDecision: 'review',
             expectedRevision: '2',
             expectedPlanVersion: '2',
             expectedMeetingSeriesVersion: '1',
             intent: {
                 kind: 'plan.change-meeting-occurrence',
-                intentSchemaVersion: 1,
+                intentSchemaVersion: 2,
                 payload: {
                     meetingSeriesId,
                     originalLogicalAnchor: '2026-09-28',
@@ -154,6 +157,7 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
                         weekday: 'TUE',
                         localStart: '11:00',
                         localEnd: '12:00',
+                        endDayOffset: 0,
                         location: { kind: 'tba' },
                     },
                 },
@@ -196,12 +200,13 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
         followUpId: 'abababab-abab-4bab-8bab-abababababab',
         confirmationToken: null,
         impactWindow: null,
+        overlapDecision: 'review' as const,
         expectedRevision: '3',
         expectedPlanVersion: '3',
         expectedMeetingSeriesVersion: '2',
         intent: {
             kind: 'plan.change-meeting-occurrence' as const,
-            intentSchemaVersion: 1 as const,
+            intentSchemaVersion: 2 as const,
             payload: {
                 meetingSeriesId,
                 originalLogicalAnchor: '2026-10-12',
@@ -211,6 +216,7 @@ test('FLOW-01/02: Workspace exposes bounded occurrence query and scoped mutation
                     weekday: 'TUE' as const,
                     localStart: '13:00',
                     localEnd: '14:00',
+                    endDayOffset: 0 as const,
                     location: { kind: 'tba' as const },
                 },
             },

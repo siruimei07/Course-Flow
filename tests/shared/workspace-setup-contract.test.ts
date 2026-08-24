@@ -45,6 +45,7 @@ const COURSE = {
         weekday: 'MON',
         localStart: '09:00',
         localEnd: '10:00',
+        endDayOffset: 0,
         effectiveRange: {
             kind: 'inherit-course',
             startDate: TERM.startDate,

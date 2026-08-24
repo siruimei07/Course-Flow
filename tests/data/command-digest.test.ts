@@ -13,8 +13,8 @@ import {
 import {
     cancelMeetingOccurrenceDigestProjection,
     changeMeetingOccurrenceDigestProjection,
+    normalizeAcceptedChangeMeetingOccurrenceCommand,
     normalizeCancelMeetingOccurrenceCommand,
-    normalizeChangeMeetingOccurrenceCommand,
 } from '../../src/shared/workspace-course-contract';
 import {
     normalizeRecordSetupDecisionCommand,
@@ -55,7 +55,7 @@ const CANCEL_OCCURRENCE_GOLDEN_CANONICAL_TEXT = '{"durableFollowUps":'
     + '"originalLogicalAnchor":"2026-10-05"}}}';
 const CANCEL_OCCURRENCE_GOLDEN_SHA256 = 'bf9d443ecc67f4ce2572cf36d73118aad1c7b5b4e4bb1fb979d5bc0e876da34c';
 
-const CHANGE_OCCURRENCE_COMMAND = normalizeChangeMeetingOccurrenceCommand({
+const CHANGE_OCCURRENCE_COMMAND = normalizeAcceptedChangeMeetingOccurrenceCommand({
     commandId: '77777777-7777-4777-8777-777777777777',
     followUpId: '88888888-8888-4888-8888-888888888888',
     confirmationToken: '1'.repeat(64),
@@ -214,7 +214,7 @@ test('ADR-04: Meeting occurrence command digests match permanent golden vectors'
 test('ADR-04: future-change digest binds confirmation window and versions, not command identity', () => {
     assert.deepEqual(
         digestChangeMeetingOccurrence(CHANGE_OCCURRENCE_COMMAND),
-        digestChangeMeetingOccurrence(normalizeChangeMeetingOccurrenceCommand({
+        digestChangeMeetingOccurrence(normalizeAcceptedChangeMeetingOccurrenceCommand({
             ...CHANGE_OCCURRENCE_COMMAND,
             commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
         })),
@@ -228,7 +228,7 @@ test('ADR-04: future-change digest binds confirmation window and versions, not c
     ]) {
         assert.notDeepEqual(
             digestChangeMeetingOccurrence(CHANGE_OCCURRENCE_COMMAND),
-            digestChangeMeetingOccurrence(normalizeChangeMeetingOccurrenceCommand({
+            digestChangeMeetingOccurrence(normalizeAcceptedChangeMeetingOccurrenceCommand({
                 ...CHANGE_OCCURRENCE_COMMAND,
                 ...changed,
             })),

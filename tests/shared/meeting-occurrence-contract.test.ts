@@ -59,12 +59,13 @@ test('IF-PLAN-COMMAND: only-this occurrence changes normalize an exact versioned
         followUpId: '88888888-8888-4888-8888-888888888888',
         confirmationToken: null,
         impactWindow: null,
+        overlapDecision: 'review',
         expectedRevision: '2',
         expectedPlanVersion: '2',
         expectedMeetingSeriesVersion: '1',
         intent: {
             kind: 'plan.change-meeting-occurrence',
-            intentSchemaVersion: 1,
+            intentSchemaVersion: 2,
             payload: {
                 meetingSeriesId: MEETING_SERIES_ID,
                 originalLogicalAnchor: '2026-09-14',
@@ -74,6 +75,7 @@ test('IF-PLAN-COMMAND: only-this occurrence changes normalize an exact versioned
                     weekday: 'TUE',
                     localStart: '11:00',
                     localEnd: '12:00',
+                    endDayOffset: 0,
                     location: { kind: 'tba' },
                 },
             },
@@ -86,6 +88,40 @@ test('IF-PLAN-COMMAND: only-this occurrence changes normalize an exact versioned
         ...command,
         unexpected: true,
     }), TypeError);
+});
+
+test('Q-TIME-01/A-COURSE-006: current occurrence changes carry offset and overlap choice', () => {
+    const command = normalizeChangeMeetingOccurrenceCommand({
+        commandId: '77777777-7777-4777-8777-777777777777',
+        followUpId: '88888888-8888-4888-8888-888888888888',
+        confirmationToken: null,
+        impactWindow: null,
+        overlapDecision: 'review',
+        expectedRevision: '2',
+        expectedPlanVersion: '2',
+        expectedMeetingSeriesVersion: '1',
+        intent: {
+            kind: 'plan.change-meeting-occurrence',
+            intentSchemaVersion: 2,
+            payload: {
+                meetingSeriesId: MEETING_SERIES_ID,
+                originalLogicalAnchor: '2026-09-14',
+                scope: 'only-this',
+                replacement: {
+                    type: 'TUT',
+                    weekday: 'TUE',
+                    localStart: '23:30',
+                    localEnd: '01:00',
+                    endDayOffset: 1,
+                    location: { kind: 'tba' },
+                },
+            },
+        },
+    });
+
+    assert.equal(command.intent.intentSchemaVersion, 2);
+    assert.equal(command.intent.payload.replacement.endDayOffset, 1);
+    assert.equal(command.overlapDecision, 'review');
 });
 
 test('IF-PLAN-COMMAND: cancellation is an exact only-this occurrence intent', () => {

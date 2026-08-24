@@ -9,9 +9,9 @@ import {
     cancelMeetingOccurrenceDigestProjection,
     changeMeetingOccurrenceDigestProjection,
     createCourseWithMeetingDigestProjection,
+    type AcceptedChangeMeetingOccurrenceCommand,
     type AcceptedCreateCourseWithMeetingCommand,
     type CancelMeetingOccurrenceCommand,
-    type ChangeMeetingOccurrenceCommand,
 } from '../shared/workspace-course-contract';
 import {
     recordSetupDecisionDigestProjection,
@@ -45,10 +45,12 @@ export function digestCreateCourseWithMeeting(command: AcceptedCreateCourseWithM
 
 /**
  * Hashes the canonical scoped Meeting occurrence change receipt payload.
- * @param {ChangeMeetingOccurrenceCommand} command - Normalized occurrence change command.
+ * @param {AcceptedChangeMeetingOccurrenceCommand} command - Accepted occurrence change command.
  * @return {Uint8Array} SHA-256 digest bytes.
  */
-export function digestChangeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Uint8Array {
+export function digestChangeMeetingOccurrence(
+    command: AcceptedChangeMeetingOccurrenceCommand,
+): Uint8Array {
     const canonicalText = canonicalJson(changeMeetingOccurrenceDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }

@@ -67,7 +67,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
       workspaceData: {
         kind: 'ready',
         workspaceId,
-        schemaLevel: 5,
+        schemaLevel: 6,
         revision: '42',
       },
     },
@@ -82,7 +82,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     {
       kind: 'read-only',
       workspaceId,
-      schemaLevel: 5,
+      schemaLevel: 6,
       revision: '42',
       problem: {
         code: 'permission',
@@ -103,7 +103,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
         affectedCapabilities: ['workspace.read', 'workspace.write'],
         allowedActions: [],
         context: {},
-        details: { actualSchemaLevel: 2, requiredSchemaLevel: 5 },
+        details: { actualSchemaLevel: 2, requiredSchemaLevel: 6 },
       },
     },
     {
@@ -139,7 +139,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: Buffer.from('workspace-epoch') } },
     {
       ...validOutcome,
-      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 5, revision: '01' } },
+      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 6, revision: '01' } },
     },
     {
       ...validOutcome,
@@ -163,7 +163,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
             affectedCapabilities: ['workspace.read', 'workspace.write'],
             allowedActions: [],
             context: {},
-            details: { actualSchemaLevel: 5, requiredSchemaLevel: 5 },
+            details: { actualSchemaLevel: 6, requiredSchemaLevel: 6 },
           },
         },
       },
@@ -172,7 +172,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
       ...validOutcome,
       value: {
         ...validOutcome.value,
-        workspaceData: { kind: 'read-only', workspaceId, schemaLevel: 5, revision: 42n, problem: {} },
+        workspaceData: { kind: 'read-only', workspaceId, schemaLevel: 6, revision: 42n, problem: {} },
       },
     },
     { ...validOutcome, value: { ...validOutcome.value, extra: true } },

@@ -4,6 +4,11 @@
 
 import type { CanonicalValue } from './canonical-json';
 import {
+    isCanonicalInstant,
+    resolveMeetingOccurrenceTime,
+    type MeetingEndDayOffset,
+} from './meeting-time';
+import {
     isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
 } from './workspace-data-contract';
@@ -52,8 +57,11 @@ export type MeetingRuleReplacement = Readonly<{
     weekday: MeetingWeekday;
     localStart: string;
     localEnd: string;
+    endDayOffset: MeetingEndDayOffset;
     location: MeetingLocation;
 }>;
+
+type LegacyMeetingRuleReplacement = Readonly<Omit<MeetingRuleReplacement, 'endDayOffset'>>;
 
 export type MeetingSegmentProjection = Readonly<{
     segmentId: string;
@@ -63,6 +71,7 @@ export type MeetingSegmentProjection = Readonly<{
     weekday: MeetingWeekday;
     localStart: string;
     localEnd: string;
+    endDayOffset: MeetingEndDayOffset;
     location: MeetingLocation;
 }>;
 
@@ -76,7 +85,40 @@ export type MeetingOccurrenceProjection = Readonly<{
     weekday: MeetingWeekday;
     localStart: string;
     localEnd: string;
+    endDayOffset: MeetingEndDayOffset;
+    startInstant: string;
+    endInstant: string;
     location: MeetingLocation;
+}>;
+
+export type MeetingOverlapWarning = Readonly<{
+    code: 'meeting-time-overlap';
+    proposed: Readonly<{
+        commandId: string;
+        courseId: string | null;
+        courseCode: string;
+        meetingSeriesId: string | null;
+        meetingType: MeetingTypeCode;
+        occurrenceId: Readonly<{
+            meetingSeriesId: string | null;
+            originalLogicalAnchor: string;
+        }>;
+        startInstant: string;
+        endInstant: string;
+    }>;
+    existing: Readonly<{
+        courseId: string;
+        courseCode: string;
+        meetingSeriesId: string;
+        meetingType: MeetingTypeCode;
+        occurrenceId: MeetingOccurrenceId;
+        startInstant: string;
+        endInstant: string;
+    }>;
+    overlap: Readonly<{
+        startInstant: string;
+        endInstant: string;
+    }>;
 }>;
 
 export type MeetingOccurrenceImpactOccurrenceProjection = Readonly<
@@ -87,6 +129,7 @@ export type MeetingSeriesDetailProjection = Readonly<{
     workspaceRevision: string;
     planEntityVersion: string;
     requestedWindow: MeetingOccurrenceWindow;
+    termZone: string;
     meetingSeriesId: string;
     courseId: string;
     entityVersion: string;
@@ -150,7 +193,7 @@ export type MeetingOccurrenceImpactProjection = Readonly<{
     confirmationToken: string;
 }>;
 
-export type ChangeMeetingOccurrenceCommand = Readonly<{
+export type LegacyChangeMeetingOccurrenceCommand = Readonly<{
     commandId: string;
     followUpId: string;
     confirmationToken: string | null;
@@ -165,10 +208,35 @@ export type ChangeMeetingOccurrenceCommand = Readonly<{
             meetingSeriesId: string;
             originalLogicalAnchor: string;
             scope: 'only-this' | 'this-and-future';
+            replacement: LegacyMeetingRuleReplacement;
+        }>;
+    }>;
+}>;
+
+export type ChangeMeetingOccurrenceCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    confirmationToken: string | null;
+    impactWindow: MeetingOccurrenceWindow | null;
+    overlapDecision: 'review' | 'continue';
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedMeetingSeriesVersion: string;
+    intent: Readonly<{
+        kind: 'plan.change-meeting-occurrence';
+        intentSchemaVersion: 2;
+        payload: Readonly<{
+            meetingSeriesId: string;
+            originalLogicalAnchor: string;
+            scope: 'only-this' | 'this-and-future';
             replacement: MeetingRuleReplacement;
         }>;
     }>;
 }>;
+
+export type AcceptedChangeMeetingOccurrenceCommand =
+    | LegacyChangeMeetingOccurrenceCommand
+    | ChangeMeetingOccurrenceCommand;
 
 export type CancelMeetingOccurrenceCommand = Readonly<{
     commandId: string;
@@ -192,6 +260,7 @@ export type MeetingSeriesProjection = Readonly<{
     weekday: MeetingWeekday;
     localStart: string;
     localEnd: string;
+    endDayOffset: MeetingEndDayOffset;
     effectiveRange: MeetingEffectiveRangeProjection;
     location: MeetingLocation;
     entityVersion: string;
@@ -242,7 +311,7 @@ export type LegacyCreateCourseWithMeetingCommand = Readonly<{
     }>;
 }>;
 
-export type CreateCourseWithMeetingCommand = Readonly<{
+export type LegacyCreateCourseWithMeetingCommandV2 = Readonly<{
     commandId: string;
     followUpId: string;
     expectedRevision: string;
@@ -272,8 +341,41 @@ export type CreateCourseWithMeetingCommand = Readonly<{
     }>;
 }>;
 
+export type CreateCourseWithMeetingCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    overlapDecision: 'review' | 'continue';
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    intent: Readonly<{
+        kind: 'plan.create-course-with-first-meeting';
+        intentSchemaVersion: 3;
+        payload: Readonly<{
+            course: Readonly<{
+                code: string;
+                name: string;
+                section: string | null;
+                instructor: string | null;
+                color: CourseColor | null;
+                credits: string | null;
+                teachingRange: CourseTeachingRangeIntent;
+            }>;
+            meeting: Readonly<{
+                type: MeetingTypeCode;
+                weekday: MeetingWeekday;
+                localStart: string;
+                localEnd: string;
+                endDayOffset: MeetingEndDayOffset;
+                effectiveRange: MeetingEffectiveRangeIntent;
+                location: MeetingLocation;
+            }>;
+        }>;
+    }>;
+}>;
+
 export type AcceptedCreateCourseWithMeetingCommand =
     | LegacyCreateCourseWithMeetingCommand
+    | LegacyCreateCourseWithMeetingCommandV2
     | CreateCourseWithMeetingCommand;
 
 const COURSE_COLORS = new Set<CourseColor>([
@@ -301,6 +403,7 @@ const CONFIRMATION_TOKEN_PATTERN = /^[0-9a-f]{64}$/;
 const SQLITE_INTEGER_MAX = 9223372036854775807n;
 const MILLISECONDS_PER_DAY = 86_400_000;
 export const MAX_MEETING_OCCURRENCE_WINDOW_DAYS = 366;
+export const MAX_MEETING_OVERLAP_WARNINGS = 4_096;
 const MAX_MEETING_OCCURRENCE_ITEMS = MAX_MEETING_OCCURRENCE_WINDOW_DAYS + 1;
 const MAX_MEETING_SEGMENT_ITEMS = MAX_MEETING_OCCURRENCE_WINDOW_DAYS + 13;
 const MEETING_WEEKDAY_NUMBERS: Readonly<Record<MeetingWeekday, number>> = Object.freeze({
@@ -465,6 +568,7 @@ function canonicalMeetingRuleReplacement(value: unknown): MeetingRuleReplacement
         'weekday',
         'localStart',
         'localEnd',
+        'endDayOffset',
         'location',
     ])) {
         return null;
@@ -476,7 +580,8 @@ function canonicalMeetingRuleReplacement(value: unknown): MeetingRuleReplacement
         || typeof value.localEnd !== 'string'
         || !LOCAL_TIME_PATTERN.test(value.localStart)
         || !LOCAL_TIME_PATTERN.test(value.localEnd)
-        || value.localEnd <= value.localStart
+        || (value.endDayOffset !== 0 && value.endDayOffset !== 1)
+        || (value.endDayOffset === 0 && value.localEnd <= value.localStart)
         || location === null) {
         return null;
     }
@@ -485,7 +590,30 @@ function canonicalMeetingRuleReplacement(value: unknown): MeetingRuleReplacement
         weekday: value.weekday as MeetingWeekday,
         localStart: value.localStart,
         localEnd: value.localEnd,
+        endDayOffset: value.endDayOffset,
         location,
+    };
+}
+
+/**
+ * Canonicalizes the published same-day replacement shape for receipt replay.
+ * @param {unknown} value - Candidate legacy replacement DTO.
+ * @return {LegacyMeetingRuleReplacement | null} Canonical legacy replacement, or null.
+ */
+function canonicalLegacyMeetingRuleReplacement(value: unknown): LegacyMeetingRuleReplacement | null {
+    if (!hasExactDataKeys(value, ['type', 'weekday', 'localStart', 'localEnd', 'location'])) {
+        return null;
+    }
+    const current = canonicalMeetingRuleReplacement({ ...value, endDayOffset: 0 });
+    if (current === null) {
+        return null;
+    }
+    return {
+        type: current.type,
+        weekday: current.weekday,
+        localStart: current.localStart,
+        localEnd: current.localEnd,
+        location: current.location,
     };
 }
 
@@ -497,11 +625,19 @@ function canonicalMeetingRuleReplacement(value: unknown): MeetingRuleReplacement
 function isCanonicalMeetingRuleReplacement(value: unknown): value is MeetingRuleReplacement {
     const canonical = canonicalMeetingRuleReplacement(value);
     return canonical !== null
-        && hasExactDataKeys(value, ['type', 'weekday', 'localStart', 'localEnd', 'location'])
+        && hasExactDataKeys(value, [
+            'type',
+            'weekday',
+            'localStart',
+            'localEnd',
+            'endDayOffset',
+            'location',
+        ])
         && value.type === canonical.type
         && value.weekday === canonical.weekday
         && value.localStart === canonical.localStart
         && value.localEnd === canonical.localEnd
+        && value.endDayOffset === canonical.endDayOffset
         && isCanonicalLocation(value.location);
 }
 
@@ -551,11 +687,105 @@ export function isMeetingOccurrenceWindow(value: unknown): value is MeetingOccur
 }
 
 /**
- * Normalizes an exact occurrence change before DATA evaluates its edit scope.
- * @param {unknown} value - Untrusted command DTO.
- * @return {ChangeMeetingOccurrenceCommand} Canonical versioned occurrence change.
+ * Validates one exact user-facing Meeting overlap warning.
+ * @param {unknown} value - Untrusted warning DTO.
+ * @return {boolean} Whether object identities and every Instant window are coherent.
  */
-export function normalizeChangeMeetingOccurrenceCommand(value: unknown): ChangeMeetingOccurrenceCommand {
+export function isMeetingOverlapWarning(value: unknown): value is MeetingOverlapWarning {
+    if (!hasExactDataKeys(value, ['code', 'proposed', 'existing', 'overlap'])
+        || value.code !== 'meeting-time-overlap'
+        || !hasExactDataKeys(value.proposed, [
+            'commandId',
+            'courseId',
+            'courseCode',
+            'meetingSeriesId',
+            'meetingType',
+            'occurrenceId',
+            'startInstant',
+            'endInstant',
+        ])
+        || !hasExactDataKeys(value.existing, [
+            'courseId',
+            'courseCode',
+            'meetingSeriesId',
+            'meetingType',
+            'occurrenceId',
+            'startInstant',
+            'endInstant',
+        ])
+        || !hasExactDataKeys(value.proposed.occurrenceId, [
+            'meetingSeriesId',
+            'originalLogicalAnchor',
+        ])
+        || !hasExactDataKeys(value.existing.occurrenceId, [
+            'meetingSeriesId',
+            'originalLogicalAnchor',
+        ])
+        || !hasExactDataKeys(value.overlap, ['startInstant', 'endInstant'])) {
+        return false;
+    }
+    const proposed = value.proposed as Record<string, unknown>;
+    const existing = value.existing as Record<string, unknown>;
+    const overlap = value.overlap as Record<string, unknown>;
+    const proposedOccurrenceId = proposed.occurrenceId as Record<string, unknown>;
+    const existingOccurrenceId = existing.occurrenceId as Record<string, unknown>;
+    const proposedStart = proposed.startInstant;
+    const proposedEnd = proposed.endInstant;
+    const existingStart = existing.startInstant;
+    const existingEnd = existing.endInstant;
+    const overlapStart = overlap.startInstant;
+    const overlapEnd = overlap.endInstant;
+    return isCanonicalUuid(proposed.commandId)
+        && (proposed.courseId === null || isCanonicalUuid(proposed.courseId))
+        && typeof proposed.courseCode === 'string'
+        && proposed.courseCode.length > 0
+        && proposed.courseCode.length <= 32
+        && proposed.courseCode === proposed.courseCode.trim()
+        && (proposed.meetingSeriesId === null || isCanonicalUuid(proposed.meetingSeriesId))
+        && (proposed.courseId === null) === (proposed.meetingSeriesId === null)
+        && MEETING_TYPES.has(proposed.meetingType as MeetingTypeCode)
+        && proposedOccurrenceId.meetingSeriesId === proposed.meetingSeriesId
+        && isCanonicalLocalDate(proposedOccurrenceId.originalLogicalAnchor)
+        && isCanonicalUuid(existing.courseId)
+        && typeof existing.courseCode === 'string'
+        && existing.courseCode.length > 0
+        && existing.courseCode.length <= 32
+        && existing.courseCode === existing.courseCode.trim()
+        && isCanonicalUuid(existing.meetingSeriesId)
+        && MEETING_TYPES.has(existing.meetingType as MeetingTypeCode)
+        && existingOccurrenceId.meetingSeriesId === existing.meetingSeriesId
+        && isCanonicalLocalDate(existingOccurrenceId.originalLogicalAnchor)
+        && typeof proposedStart === 'string'
+        && typeof proposedEnd === 'string'
+        && typeof existingStart === 'string'
+        && typeof existingEnd === 'string'
+        && typeof overlapStart === 'string'
+        && typeof overlapEnd === 'string'
+        && isCanonicalInstant(proposedStart)
+        && isCanonicalInstant(proposedEnd)
+        && isCanonicalInstant(existingStart)
+        && isCanonicalInstant(existingEnd)
+        && isCanonicalInstant(overlapStart)
+        && isCanonicalInstant(overlapEnd)
+        && proposedStart < proposedEnd
+        && existingStart < existingEnd
+        && overlapStart < overlapEnd
+        && overlapStart >= proposedStart
+        && overlapStart >= existingStart
+        && overlapEnd <= proposedEnd
+        && overlapEnd <= existingEnd
+        && overlapStart === (proposedStart > existingStart ? proposedStart : existingStart)
+        && overlapEnd === (proposedEnd < existingEnd ? proposedEnd : existingEnd);
+}
+
+/**
+ * Decodes the published schema-1 occurrence change for receipt replay.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {LegacyChangeMeetingOccurrenceCommand} Canonical legacy occurrence change.
+ */
+export function normalizeLegacyChangeMeetingOccurrenceCommand(
+    value: unknown,
+): LegacyChangeMeetingOccurrenceCommand {
     if (!hasExactDataKeys(value, [
         'commandId',
         'followUpId',
@@ -588,7 +818,7 @@ export function normalizeChangeMeetingOccurrenceCommand(value: unknown): ChangeM
     }
 
     const payload = value.intent.payload;
-    const replacement = canonicalMeetingRuleReplacement(payload.replacement);
+    const replacement = canonicalLegacyMeetingRuleReplacement(payload.replacement);
     if (!isCanonicalUuid(payload.meetingSeriesId)
         || !isCanonicalLocalDate(payload.originalLogicalAnchor)
         || (payload.scope !== 'only-this' && payload.scope !== 'this-and-future')
@@ -621,6 +851,105 @@ export function normalizeChangeMeetingOccurrenceCommand(value: unknown): ChangeM
             },
         },
     };
+}
+
+/**
+ * Normalizes an exact occurrence change before DATA evaluates its edit scope.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {ChangeMeetingOccurrenceCommand} Canonical current occurrence change.
+ */
+export function normalizeChangeMeetingOccurrenceCommand(value: unknown): ChangeMeetingOccurrenceCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'confirmationToken',
+        'impactWindow',
+        'overlapDecision',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedMeetingSeriesVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || (value.confirmationToken !== null
+            && (typeof value.confirmationToken !== 'string'
+                || !CONFIRMATION_TOKEN_PATTERN.test(value.confirmationToken)))
+        || (value.impactWindow !== null && !isMeetingOccurrenceWindow(value.impactWindow))
+        || (value.overlapDecision !== 'review' && value.overlapDecision !== 'continue')
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedMeetingSeriesVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.change-meeting-occurrence'
+        || value.intent.intentSchemaVersion !== 2
+        || !hasExactDataKeys(value.intent.payload, [
+            'meetingSeriesId',
+            'originalLogicalAnchor',
+            'scope',
+            'replacement',
+        ])) {
+        throw new TypeError('ChangeMeetingOccurrenceCommand has invalid fields');
+    }
+
+    const payload = value.intent.payload;
+    const replacement = canonicalMeetingRuleReplacement(payload.replacement);
+    if (!isCanonicalUuid(payload.meetingSeriesId)
+        || !isCanonicalLocalDate(payload.originalLogicalAnchor)
+        || (payload.scope !== 'only-this' && payload.scope !== 'this-and-future')
+        || replacement === null
+        || (payload.scope === 'only-this'
+            && (value.confirmationToken !== null || value.impactWindow !== null))
+        || (payload.scope === 'this-and-future'
+            && ((value.confirmationToken === null) !== (value.impactWindow === null)))) {
+        throw new TypeError('ChangeMeetingOccurrenceCommand has invalid occurrence facts');
+    }
+
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        confirmationToken: value.confirmationToken,
+        impactWindow: value.impactWindow === null
+            ? null
+            : Object.freeze({ ...value.impactWindow }),
+        overlapDecision: value.overlapDecision,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        expectedMeetingSeriesVersion: value.expectedMeetingSeriesVersion,
+        intent: {
+            kind: 'plan.change-meeting-occurrence',
+            intentSchemaVersion: 2,
+            payload: {
+                meetingSeriesId: payload.meetingSeriesId,
+                originalLogicalAnchor: payload.originalLogicalAnchor,
+                scope: payload.scope,
+                replacement,
+            },
+        },
+    };
+}
+
+/**
+ * Accepts current occurrence changes and the published legacy form needed for replay.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {AcceptedChangeMeetingOccurrenceCommand} Canonical accepted occurrence change.
+ */
+export function normalizeAcceptedChangeMeetingOccurrenceCommand(
+    value: unknown,
+): AcceptedChangeMeetingOccurrenceCommand {
+    if (hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'confirmationToken',
+        'impactWindow',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedMeetingSeriesVersion',
+        'intent',
+    ])) {
+        return normalizeLegacyChangeMeetingOccurrenceCommand(value);
+    }
+    return normalizeChangeMeetingOccurrenceCommand(value);
 }
 
 /**
@@ -755,6 +1084,7 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
         'weekday',
         'localStart',
         'localEnd',
+        'endDayOffset',
         'effectiveRange',
         'location',
         'entityVersion',
@@ -770,7 +1100,8 @@ function isMeetingSeriesProjection(value: unknown): value is MeetingSeriesProjec
         || typeof value.localEnd !== 'string'
         || !LOCAL_TIME_PATTERN.test(value.localStart)
         || !LOCAL_TIME_PATTERN.test(value.localEnd)
-        || value.localEnd <= value.localStart
+        || (value.endDayOffset !== 0 && value.endDayOffset !== 1)
+        || (value.endDayOffset === 0 && value.localEnd <= value.localStart)
         || !isResolvedDateRange(value.effectiveRange, 'inherit-course')
         || !isCanonicalLocation(value.location)
         || !isCanonicalUnsignedSqliteInteger(value.entityVersion)) {
@@ -791,7 +1122,8 @@ function hasValidMeetingRuleFields(value: Record<string, unknown>): boolean {
         && typeof value.localEnd === 'string'
         && LOCAL_TIME_PATTERN.test(value.localStart)
         && LOCAL_TIME_PATTERN.test(value.localEnd)
-        && value.localEnd > value.localStart
+        && (value.endDayOffset === 0 || value.endDayOffset === 1)
+        && (value.endDayOffset === 1 || value.localEnd > value.localStart)
         && isCanonicalLocation(value.location);
 }
 
@@ -809,6 +1141,7 @@ function isMeetingSegmentProjection(value: unknown): value is MeetingSegmentProj
         'weekday',
         'localStart',
         'localEnd',
+        'endDayOffset',
         'location',
     ])
         && isCanonicalUuid(value.segmentId)
@@ -835,6 +1168,9 @@ function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurren
         'weekday',
         'localStart',
         'localEnd',
+        'endDayOffset',
+        'startInstant',
+        'endInstant',
         'location',
     ])
         || !hasExactDataKeys(value.occurrenceId, ['meetingSeriesId', 'originalLogicalAnchor'])
@@ -843,6 +1179,9 @@ function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurren
         || !isCanonicalUuid(value.segmentId)
         || !isCanonicalLocalDate(value.date)
         || !hasValidMeetingRuleFields(value)
+        || !isCanonicalInstant(value.startInstant)
+        || !isCanonicalInstant(value.endInstant)
+        || value.endInstant <= value.startInstant
         || projectedMeetingOccurrenceDate(
             value.occurrenceId.originalLogicalAnchor,
             value.weekday as MeetingWeekday,
@@ -871,6 +1210,9 @@ function isMeetingOccurrenceImpactOccurrenceProjection(
         'weekday',
         'localStart',
         'localEnd',
+        'endDayOffset',
+        'startInstant',
+        'endInstant',
         'location',
     ])
         || !hasExactDataKeys(value.occurrenceId, ['meetingSeriesId', 'originalLogicalAnchor'])
@@ -878,6 +1220,9 @@ function isMeetingOccurrenceImpactOccurrenceProjection(
         || !isCanonicalLocalDate(value.occurrenceId.originalLogicalAnchor)
         || !isCanonicalLocalDate(value.date)
         || !hasValidMeetingRuleFields(value)
+        || !isCanonicalInstant(value.startInstant)
+        || !isCanonicalInstant(value.endInstant)
+        || value.endInstant <= value.startInstant
         || projectedMeetingOccurrenceDate(
             value.occurrenceId.originalLogicalAnchor,
             value.weekday as MeetingWeekday,
@@ -890,6 +1235,32 @@ function isMeetingOccurrenceImpactOccurrenceProjection(
 }
 
 /**
+ * Checks that projected Instants are derived from the supplied TermZone and local rule fields.
+ * @param {MeetingOccurrenceProjection} occurrence - Canonical occurrence projection.
+ * @param {string} termZone - Explicit TermZone from the owning series detail.
+ * @return {boolean} Whether both projected Instants match the explicit ZoneRules result.
+ */
+function hasResolvedOccurrenceTime(
+    occurrence: MeetingOccurrenceProjection,
+    termZone: string,
+): boolean {
+    try {
+        const resolved = resolveMeetingOccurrenceTime({
+            termZone,
+            date: occurrence.date,
+            localStart: occurrence.localStart,
+            localEnd: occurrence.localEnd,
+            endDayOffset: occurrence.endDayOffset,
+        });
+        return occurrence.startInstant === resolved.startInstant
+            && occurrence.endInstant === resolved.endInstant;
+    }
+    catch {
+        return false;
+    }
+}
+
+/**
  * Validates a bounded, path-free Meeting series detail projection crossing Workspace IPC.
  * @param {unknown} value - Untrusted Workspace outcome projection.
  * @return {boolean} Whether the detail DTO and segment/occurrence relations are exact.
@@ -899,6 +1270,7 @@ export function isMeetingSeriesDetailProjection(value: unknown): value is Meetin
         'workspaceRevision',
         'planEntityVersion',
         'requestedWindow',
+        'termZone',
         'meetingSeriesId',
         'courseId',
         'entityVersion',
@@ -908,6 +1280,8 @@ export function isMeetingSeriesDetailProjection(value: unknown): value is Meetin
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
         || !isMeetingOccurrenceWindow(value.requestedWindow)
+        || typeof value.termZone !== 'string'
+        || value.termZone.length === 0
         || !isCanonicalUuid(value.meetingSeriesId)
         || !isCanonicalUuid(value.courseId)
         || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
@@ -928,6 +1302,7 @@ export function isMeetingSeriesDetailProjection(value: unknown): value is Meetin
         `${occurrence.occurrenceId.meetingSeriesId}:${occurrence.occurrenceId.originalLogicalAnchor}`
     ));
     const requestedWindow = value.requestedWindow as MeetingOccurrenceWindow;
+    const termZone = value.termZone as string;
     return segmentIds.size === segments.length
         && segments.every((segment, index) => {
             if (index === 0) {
@@ -949,7 +1324,8 @@ export function isMeetingSeriesDetailProjection(value: unknown): value is Meetin
                     - Date.parse(`${segment.logicalStartAnchor}T00:00:00.000Z`))
                     % (7 * MILLISECONDS_PER_DAY) === 0
                 && occurrence.date >= requestedWindow.startDate
-                && occurrence.date <= requestedWindow.endDate;
+                && occurrence.date <= requestedWindow.endDate
+                && hasResolvedOccurrenceTime(occurrence, termZone);
         });
 }
 
@@ -1179,9 +1555,11 @@ export function isCourseProjection(value: unknown): value is CourseProjection {
 }
 
 /**
- * Normalizes an untrusted Course and first Meeting command before domain or DATA work.
+ * Decodes the published schema-2 Course command for receipt replay.
  */
-export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateCourseWithMeetingCommand {
+export function normalizeLegacyCreateCourseWithMeetingCommandV2(
+    value: unknown,
+): LegacyCreateCourseWithMeetingCommandV2 {
     if (!hasExactDataKeys(value, [
         'commandId',
         'followUpId',
@@ -1275,6 +1653,110 @@ export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateC
 }
 
 /**
+ * Normalizes an untrusted Course and first Meeting command before domain or DATA work.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {CreateCourseWithMeetingCommand} Canonical current Course creation command.
+ */
+export function normalizeCreateCourseWithMeetingCommand(value: unknown): CreateCourseWithMeetingCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'overlapDecision',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || (value.overlapDecision !== 'review' && value.overlapDecision !== 'continue')
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.create-course-with-first-meeting'
+        || value.intent.intentSchemaVersion !== 3
+        || !hasExactDataKeys(value.intent.payload, ['course', 'meeting'])
+        || !hasExactDataKeys(value.intent.payload.course, [
+            'code',
+            'name',
+            'section',
+            'instructor',
+            'color',
+            'credits',
+            'teachingRange',
+        ])
+        || !hasExactDataKeys(value.intent.payload.meeting, [
+            'type',
+            'weekday',
+            'localStart',
+            'localEnd',
+            'endDayOffset',
+            'effectiveRange',
+            'location',
+        ])) {
+        throw new TypeError('CreateCourseWithMeetingCommand has invalid fields');
+    }
+
+    const course = value.intent.payload.course;
+    const meeting = value.intent.payload.meeting;
+    const code = canonicalText(course.code, 32);
+    const name = canonicalText(course.name, 120);
+    const section = canonicalOptionalText(course.section, 64);
+    const instructor = canonicalOptionalText(course.instructor, 120);
+    const color = course.color === null
+        ? null
+        : COURSE_COLORS.has(course.color as CourseColor)
+            ? course.color as CourseColor
+            : undefined;
+    const credits = canonicalCredits(course.credits);
+    const teachingRange = canonicalCourseTeachingRange(course.teachingRange);
+    const effectiveRange = canonicalMeetingEffectiveRange(meeting.effectiveRange);
+    const location = canonicalLocation(meeting.location);
+    if (code === null
+        || name === null
+        || section === undefined
+        || instructor === undefined
+        || color === undefined
+        || credits === undefined
+        || teachingRange === null
+        || effectiveRange === null
+        || !MEETING_TYPES.has(meeting.type as MeetingTypeCode)
+        || !MEETING_WEEKDAYS.has(meeting.weekday as MeetingWeekday)
+        || typeof meeting.localStart !== 'string'
+        || typeof meeting.localEnd !== 'string'
+        || !LOCAL_TIME_PATTERN.test(meeting.localStart)
+        || !LOCAL_TIME_PATTERN.test(meeting.localEnd)
+        || (meeting.endDayOffset !== 0 && meeting.endDayOffset !== 1)
+        || (meeting.endDayOffset === 0 && meeting.localEnd <= meeting.localStart)
+        || location === null) {
+        throw new TypeError('CreateCourseWithMeetingCommand has invalid Course or Meeting facts');
+    }
+
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        overlapDecision: value.overlapDecision,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        intent: {
+            kind: 'plan.create-course-with-first-meeting',
+            intentSchemaVersion: 3,
+            payload: {
+                course: { code, name, section, instructor, color, credits, teachingRange },
+                meeting: {
+                    type: meeting.type as MeetingTypeCode,
+                    weekday: meeting.weekday as MeetingWeekday,
+                    localStart: meeting.localStart,
+                    localEnd: meeting.localEnd,
+                    endDayOffset: meeting.endDayOffset,
+                    effectiveRange,
+                    location,
+                },
+            },
+        },
+    };
+}
+
+/**
  * Decodes the published schema-1 command only so migrated receipts remain replayable.
  */
 export function normalizeLegacyCreateCourseWithMeetingCommand(
@@ -1313,7 +1795,7 @@ export function normalizeLegacyCreateCourseWithMeetingCommand(
 
     const legacyCourse = value.intent.payload.course;
     const legacyMeeting = value.intent.payload.meeting;
-    const normalized = normalizeCreateCourseWithMeetingCommand({
+    const normalized = normalizeLegacyCreateCourseWithMeetingCommandV2({
         commandId: value.commandId,
         followUpId: value.followUpId,
         expectedRevision: value.expectedRevision,
@@ -1391,8 +1873,10 @@ export function normalizeAcceptedCreateCourseWithMeetingCommand(
         'intent',
     ])
         && hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
-        && value.intent.intentSchemaVersion === 1) {
-        return normalizeLegacyCreateCourseWithMeetingCommand(value);
+        && (value.intent.intentSchemaVersion === 1 || value.intent.intentSchemaVersion === 2)) {
+        return value.intent.intentSchemaVersion === 1
+            ? normalizeLegacyCreateCourseWithMeetingCommand(value)
+            : normalizeLegacyCreateCourseWithMeetingCommandV2(value);
     }
     return normalizeCreateCourseWithMeetingCommand(value);
 }
@@ -1403,7 +1887,7 @@ export function normalizeAcceptedCreateCourseWithMeetingCommand(
 export function createCourseWithMeetingDigestProjection(
     command: AcceptedCreateCourseWithMeetingCommand,
 ): CanonicalValue {
-    return {
+    const projection: Record<string, CanonicalValue> = {
         encoding: 'courseflow-canonical-json-v1',
         intent: command.intent,
         expectedRevision: command.expectedRevision,
@@ -1418,17 +1902,21 @@ export function createCourseWithMeetingDigestProjection(
             kind: 'backup-needed-through',
         }],
     };
+    if ('overlapDecision' in command) {
+        projection.overlapDecision = command.overlapDecision;
+    }
+    return projection;
 }
 
 /**
  * Builds the canonical receipt digest projection for a scoped Meeting occurrence change.
- * @param {ChangeMeetingOccurrenceCommand} command - Normalized occurrence change command.
+ * @param {AcceptedChangeMeetingOccurrenceCommand} command - Accepted occurrence change command.
  * @return {CanonicalValue} Canonical payload covered by the durable receipt digest.
  */
 export function changeMeetingOccurrenceDigestProjection(
-    command: ChangeMeetingOccurrenceCommand,
+    command: AcceptedChangeMeetingOccurrenceCommand,
 ): CanonicalValue {
-    return {
+    const projection: Record<string, CanonicalValue> = {
         encoding: 'courseflow-canonical-json-v1',
         intent: command.intent,
         confirmationToken: command.confirmationToken,
@@ -1452,6 +1940,10 @@ export function changeMeetingOccurrenceDigestProjection(
             kind: 'backup-needed-through',
         }],
     };
+    if ('overlapDecision' in command) {
+        projection.overlapDecision = command.overlapDecision;
+    }
+    return projection;
 }
 
 /**

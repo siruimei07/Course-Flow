@@ -126,7 +126,7 @@
 | `HolidayRange` | Term 内一个命名、包含起止日的连续区间 |
 | `Course` | Term 内课程身份、展示字段、教学范围、归档状态和可选学分 |
 | `MeetingSeries` | 课程的一条周期课节身份；由一个或多个不重叠规则段表达历史演进 |
-| `MeetingSegment` | 在明确生效范围内的类型、星期、当地开始/结束时间、地点和其他课节字段 |
+| `MeetingSegment` | 在明确生效范围内的类型、星期、当地开始/结束时间、结束日偏移、地点和其他课节字段 |
 | `TaskSeries` | 与 Course 关联的一次性或每周任务身份；由规则段表达未来修改 |
 | `TaskSegment` | 规模、截止语义、重复范围、是否跟随教学周及其他任务字段 |
 | `Occurrence` | 从系列、段、范围、假期和覆盖事实确定性派生的单次实例 |
@@ -1037,7 +1037,7 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 
 Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDetail`、`TaskList/TaskDetail/TaskSeriesDetail`、`TodayProjection`、`WeekProjection`、`CalendarWindowProjection`、`AgendaProjection`、`TbaProjection`、`PlanImpactProjection`。
 
-`CreateCourseWithFirstMeeting` 是 `WP-R2-03` 的原子 setup 变体：在已有 Current Term 中一次创建 Course 与首个 MeetingSeries；它不表示 Meeting 拥有 instructor override，也不扩展 occurrence、规则分段或多个 meeting 的生命周期语义。
+`CreateCourseWithFirstMeeting` 是 `WP-R2-03` 的原子 setup 变体：在已有 Current Term 中一次创建 Course 与首个 MeetingSeries。当前命令显式携带 `endDayOffset` 和 `overlapDecision=review|continue`；旧 schema 命令只用于持久回执重放。它不表示 Meeting 拥有 instructor override，也不扩展 occurrence、规则分段或多个 meeting 的生命周期语义。
 
 ### 6.3 ATTEND
 
@@ -1258,7 +1258,7 @@ planned -> prepared -> armed -> awaiting-target-build
 1. Shell 保留当前 draft，并在需要时调用 preview。
 2. Workspace 验证 confirmationToken、CommandId、expected entity versions 和 capability。
 3. 语义主模块验证 Intent、产生 ChangeSet/warnings/ReferenceImpact；其他模块只贡献影响或 follow-up。
-4. 任何 validation/conflict/decision-required 在此返回，正式数据 unchanged，draft 保留。
+4. 任何 validation/conflict/decision-required 在此返回，正式数据 unchanged，draft 保留；时间重叠的 decision-required 携带双方稳定对象与 Instant 窗口，只有同版本的明确 continue 才可按原时间重新提交。
 5. Workspace 将领域 ChangeSet、CommandReceipt、DurableFollowUp/backup watermark 交给 DATA。
 6. DATA 原子逻辑提交并推进 revision R+1；失败则不推进、不唤醒备份。
 7. 提交后发出 PostCommitChange；通知失败不影响已记录 follow-up。
@@ -1492,7 +1492,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-PLAN-001` | Term/Course/Meeting/Task 范围与最多一个 Current Term 不变量 |
-| `TEST-PLAN-002` | 正常周、LEC/TUT/PRA code+全称、Course instructor 引用、较短课程/规则范围和时间重叠 warning |
+| `TEST-PLAN-002` | 正常周、LEC/TUT/PRA code+全称、Course instructor 引用、较短课程/规则范围、精确时间边界、TBA 地点仍占时间格、带双方对象/Instant 的重叠 warning，以及明确 continue 后不移动或删除课节 |
 | `TEST-PLAN-003` | HolidayRange 抑制周期课节和 followTeachingWeek 任务，但保留一次性事项 |
 | `TEST-PLAN-004` | only-this override 不影响其他实例；this-and-future 分段保留历史 |
 | `TEST-PLAN-005` | OccurrenceId 在重算、视图、重启与不改变逻辑实例的编辑后稳定 |

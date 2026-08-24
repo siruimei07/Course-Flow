@@ -45,11 +45,12 @@ function makeCourseCommand(options: Readonly<{
     return normalizeCreateCourseWithMeetingCommand({
         commandId: options.commandId ?? COURSE_COMMAND_ID,
         followUpId: options.followUpId ?? COURSE_FOLLOW_UP_ID,
+        overlapDecision: 'review',
         expectedRevision: options.expectedRevision ?? '1',
         expectedPlanVersion: options.expectedPlanVersion ?? '1',
         intent: {
             kind: 'plan.create-course-with-first-meeting',
-            intentSchemaVersion: 2,
+            intentSchemaVersion: 3,
             payload: {
                 course: {
                     code: 'CSC108',
@@ -65,6 +66,7 @@ function makeCourseCommand(options: Readonly<{
                     weekday: 'MON',
                     localStart: '09:00',
                     localEnd: '10:00',
+                    endDayOffset: 0,
                     effectiveRange: options.effectiveStartDate || options.effectiveEndDate
                         ? {
                             kind: 'explicit',
@@ -153,6 +155,7 @@ test('A-COURSE-001–004/FLOW-01: Course and first Meeting commit atomically in 
             weekday: 'MON',
             localStart: '09:00',
             localEnd: '10:00',
+            endDayOffset: 0,
             effectiveRange: {
                 kind: 'inherit-course',
                 startDate: '2026-09-08',

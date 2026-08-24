@@ -5,8 +5,10 @@
 import {
     isCourseProjection,
     isMeetingOccurrenceImpactProjection,
+    isMeetingOverlapWarning,
     isMeetingOccurrenceWindow,
     isMeetingSeriesDetailProjection,
+    MAX_MEETING_OVERLAP_WARNINGS,
     normalizeCancelMeetingOccurrenceCommand,
     normalizeChangeMeetingOccurrenceCommand,
     normalizeMeetingOccurrenceImpactDraft,
@@ -19,6 +21,7 @@ import {
     type MeetingOccurrenceWindow,
     type MeetingOccurrenceImpactDraft,
     type MeetingOccurrenceImpactProjection,
+    type MeetingOverlapWarning,
 } from './workspace-course-contract';
 import {
     BOOTSTRAP_PROTOCOL_VERSION,
@@ -161,6 +164,10 @@ export type WorkspaceSetupProblem = Readonly<{
     appBuildId: string;
     workspaceEpoch: string;
     dataEffect: 'unchanged' | 'unknown';
+    details?: Readonly<{
+        reason: 'meeting-time-overlap';
+        warnings: readonly MeetingOverlapWarning[];
+    }>;
 }>;
 
 export type WorkspaceSetupOutcome =
@@ -695,15 +702,26 @@ export function isWorkspaceSetupOutcome(
 
     if (value.ok === false) {
         const problem = value.problem;
+        const problemKeys = [
+            'code',
+            'message',
+            'requestId',
+            'appBuildId',
+            'workspaceEpoch',
+            'dataEffect',
+        ];
+        const hasOverlapDetails = hasExactDataKeys(problem, [...problemKeys, 'details']);
+        const overlapDetailsAreValid = hasOverlapDetails
+            && problem.code === 'decision-required'
+            && hasExactDataKeys(problem.details, ['reason', 'warnings'])
+            && problem.details.reason === 'meeting-time-overlap'
+            && Array.isArray(problem.details.warnings)
+            && problem.details.warnings.length > 0
+            && problem.details.warnings.length <= MAX_MEETING_OVERLAP_WARNINGS
+            && problem.details.warnings.length === Object.keys(problem.details.warnings).length
+            && problem.details.warnings.every(isMeetingOverlapWarning);
         return hasExactDataKeys(value, ['ok', 'problem'])
-            && hasExactDataKeys(problem, [
-                'code',
-                'message',
-                'requestId',
-                'appBuildId',
-                'workspaceEpoch',
-                'dataEffect',
-            ])
+            && (hasExactDataKeys(problem, problemKeys) || overlapDetailsAreValid)
             && [
                 'invalid-request',
                 'build-mismatch',
