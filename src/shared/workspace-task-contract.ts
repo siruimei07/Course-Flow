@@ -674,7 +674,7 @@ function hasTaskOccurrenceFacts(value: unknown, expectedKeys: readonly string[])
     return true;
 }
 
-function isTaskOccurrenceProjection(value: unknown): value is TaskOccurrenceProjection {
+export function isTaskOccurrenceProjection(value: unknown): value is TaskOccurrenceProjection {
     return hasTaskOccurrenceFacts(value, [
         'occurrenceId',
         'title',

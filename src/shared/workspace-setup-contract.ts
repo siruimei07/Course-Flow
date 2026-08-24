@@ -42,6 +42,10 @@ import {
     type UpdateHolidayRangeCommand,
 } from './workspace-holiday-contract';
 import {
+    isPlanProjection,
+    type PlanProjection,
+} from './workspace-plan-contract';
+import {
     isTaskOccurrenceWindow,
     isTaskOccurrenceImpactProjection,
     isTaskProjection,
@@ -97,6 +101,10 @@ export type InitializeWorkspaceRequest = WorkspaceRequestBase & Readonly<{
 
 export type SetupQueryRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.setup.query';
+}>;
+
+export type PlanQueryRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.plan.query';
 }>;
 
 export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
@@ -227,6 +235,7 @@ export type CancelMeetingOccurrenceRequest = WorkspaceRequestBase & Readonly<{
 export type WorkspaceSetupRequest =
     | InitializeWorkspaceRequest
     | SetupQueryRequest
+    | PlanQueryRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
     | CreateHolidayRangeRequest
@@ -335,6 +344,18 @@ export type WorkspaceSetupOutcome =
             workspaceEpoch: string;
             dataMode: 'ready' | 'read-only';
             projection: SetupProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.plan-projection';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: PlanProjection;
         }>;
     }>
     | Readonly<{
@@ -488,6 +509,27 @@ export function makeSetupQueryRequest(
 ): SetupQueryRequest {
     return {
         kind: 'workspace.setup.query',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+    };
+}
+
+/**
+ * Builds the exact unified PLAN projection query.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @return {PlanQueryRequest} Exact Workspace request.
+ */
+export function makePlanQueryRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+): PlanQueryRequest {
+    return {
+        kind: 'workspace.plan.query',
         protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
         appBuildId,
         requestId,
@@ -967,7 +1009,9 @@ export function isWorkspaceSetupRequest(
         return false;
     }
 
-    if (value.kind === 'workspace.initialize' || value.kind === 'workspace.setup.query') {
+    if (value.kind === 'workspace.initialize'
+        || value.kind === 'workspace.setup.query'
+        || value.kind === 'workspace.plan.query') {
         return hasExactDataKeys(value, [
             'kind',
             'protocolVersion',
@@ -1376,6 +1420,19 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isSetupProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.plan-projection') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isPlanProjection(outcome.projection);
     }
     if (outcome.kind === 'workspace.meeting-series-projection') {
         return hasExactDataKeys(outcome, [

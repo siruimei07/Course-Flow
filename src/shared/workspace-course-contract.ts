@@ -1157,7 +1157,7 @@ function isMeetingSegmentProjection(value: unknown): value is MeetingSegmentProj
  * @param {unknown} value - Untrusted occurrence projection.
  * @return {boolean} Whether identity, status, date, and rule fields are coherent.
  */
-function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurrenceProjection {
+export function isMeetingOccurrenceProjection(value: unknown): value is MeetingOccurrenceProjection {
     if (!hasExactDataKeys(value, [
         'occurrenceId',
         'segmentId',

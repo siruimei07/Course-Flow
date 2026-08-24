@@ -54,9 +54,15 @@ import {
     normalizeUpdateHolidayRangeCommand,
     type CreateHolidayRangeCommand,
     type DeleteHolidayRangeCommand,
+    type HolidayRangeProjection,
     type HolidayRangeCommand,
     type UpdateHolidayRangeCommand,
 } from '../shared/workspace-holiday-contract';
+import {
+    type PlanMeetingSource,
+    type PlanProjectionSource,
+    type PlanTaskSource,
+} from '../shared/workspace-plan-contract';
 import {
     localDateInTermZone,
     normalizeCreateTermCommand,
@@ -67,6 +73,7 @@ import {
     type ReconcileWorkspaceLifecycleCommand,
     type RestoreTermAsCurrentCommand,
     type SetupProjection,
+    type TermProjection,
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import {
@@ -2319,6 +2326,150 @@ class SqliteDataStoreImplementation {
     }
 
     /**
+     * Reads all facts required for Today, Week, TBA, next-Task, and Term progress from one snapshot.
+     * @param {ReadSnapshotOptions} options - Optional deterministic snapshot seam.
+     * @return {PlanProjectionSource} Current-Term facts bound to one revision.
+     */
+    public readPlanProjectionSource(options: ReadSnapshotOptions = {}): PlanProjectionSource {
+        this.requireOpen();
+        try {
+            this.database.exec('BEGIN');
+            const stateStatement = this.database.prepare(`
+                SELECT workspace_state.revision, plan_state.current_term_id, plan_state.plan_entity_version
+                FROM workspace_state
+                JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+                WHERE workspace_state.singleton = 1
+            `);
+            stateStatement.setReadBigInts(true);
+            const state = stateStatement.get() as {
+                revision: bigint;
+                current_term_id: string | null;
+                plan_entity_version: bigint;
+            };
+            options.failpoint?.('read.after-revision');
+            if (state.current_term_id === null) {
+                throw new TypeError('Current Term does not exist');
+            }
+
+            const termStatement = this.database.prepare(`
+                SELECT term_id, name, start_date, end_date, time_zone, archived, entity_version
+                FROM terms
+                WHERE term_id = ?
+            `);
+            termStatement.setReadBigInts(true);
+            const termRow = termStatement.get(state.current_term_id) as {
+                term_id: string;
+                name: string;
+                start_date: string;
+                end_date: string;
+                time_zone: string;
+                archived: bigint;
+                entity_version: bigint;
+            } | undefined;
+            if (!termRow) {
+                throw new Error('Current Term reference does not resolve');
+            }
+            const term: TermProjection = Object.freeze({
+                termId: termRow.term_id,
+                name: termRow.name,
+                startDate: termRow.start_date,
+                endDate: termRow.end_date,
+                timeZone: termRow.time_zone,
+                archived: termRow.archived === 1n,
+                entityVersion: termRow.entity_version.toString(),
+            });
+            const requestedWindow = Object.freeze({
+                startDate: term.startDate,
+                endDate: term.endDate,
+            });
+
+            const taskSeriesRows = this.database.prepare(`
+                SELECT task_series.task_series_id, courses.course_id, courses.code
+                FROM task_series
+                JOIN courses ON courses.course_id = task_series.course_id
+                WHERE courses.term_id = ? AND courses.archived = 0 AND task_series.retired = 0
+                ORDER BY courses.course_id, task_series.task_series_id
+            `).all(term.termId) as Array<{
+                task_series_id: string;
+                course_id: string;
+                code: string;
+            }>;
+            const taskSources: PlanTaskSource[] = [];
+            for (const row of taskSeriesRows) {
+                const detail = this.readTaskSeriesDetail(row.task_series_id, requestedWindow);
+                for (const occurrence of detail.occurrences) {
+                    taskSources.push(Object.freeze({
+                        courseId: row.course_id,
+                        courseCode: row.code,
+                        occurrence,
+                    }));
+                }
+            }
+
+            const meetingSeriesRows = this.database.prepare(`
+                SELECT meeting_series.meeting_series_id, courses.course_id, courses.code
+                FROM meeting_series
+                JOIN courses ON courses.course_id = meeting_series.course_id
+                WHERE courses.term_id = ? AND courses.archived = 0 AND meeting_series.retired = 0
+                ORDER BY courses.course_id, meeting_series.meeting_series_id
+            `).all(term.termId) as Array<{
+                meeting_series_id: string;
+                course_id: string;
+                code: string;
+            }>;
+            const meetingSources: PlanMeetingSource[] = [];
+            for (const row of meetingSeriesRows) {
+                const detail = this.readMeetingSeriesDetail(row.meeting_series_id, requestedWindow);
+                for (const occurrence of detail.occurrences) {
+                    meetingSources.push(Object.freeze({
+                        courseId: row.course_id,
+                        courseCode: row.code,
+                        occurrence,
+                    }));
+                }
+            }
+
+            const holidayStatement = this.database.prepare(`
+                SELECT holiday_range_id, name, start_date, end_date, entity_version
+                FROM holiday_ranges
+                WHERE term_id = ? AND tombstoned = 0
+                ORDER BY start_date, holiday_range_id
+            `);
+            holidayStatement.setReadBigInts(true);
+            const holidayRows = holidayStatement.all(term.termId) as Array<{
+                holiday_range_id: string;
+                name: string;
+                start_date: string;
+                end_date: string;
+                entity_version: bigint;
+            }>;
+            const holidayRanges: readonly HolidayRangeProjection[] = Object.freeze(
+                holidayRows.map(row => Object.freeze({
+                    holidayRangeId: row.holiday_range_id,
+                    termId: term.termId,
+                    name: row.name,
+                    startDate: row.start_date,
+                    endDate: row.end_date,
+                    entityVersion: row.entity_version.toString(),
+                })),
+            );
+            this.database.exec('COMMIT');
+            return Object.freeze({
+                workspaceRevision: state.revision.toString(),
+                planEntityVersion: state.plan_entity_version.toString(),
+                term,
+                taskSources: Object.freeze(taskSources),
+                meetingSources: Object.freeze(meetingSources),
+                holidayRanges,
+            });
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
+    /**
      * Reads active named ranges for deterministic Meeting suppression inside the current snapshot.
      * @param {string} termId - Owning Term identity.
      * @return {readonly StoredHolidayRange[]} Inclusive active ranges in deterministic order.
@@ -2349,7 +2500,7 @@ class SqliteDataStoreImplementation {
         const requestedWindow = normalizeTaskOccurrenceWindow(candidateWindow);
 
         try {
-            this.database.exec('BEGIN');
+            this.database.exec('SAVEPOINT read_task_series_detail');
             const seriesStatement = this.database.prepare(`
                 SELECT
                     task_series.course_id,
@@ -2594,7 +2745,7 @@ class SqliteDataStoreImplementation {
                     occurrences: Object.freeze(occurrences),
                 });
             }
-            this.database.exec('COMMIT');
+            this.database.exec('RELEASE SAVEPOINT read_task_series_detail');
             return projection;
         }
         catch (error) {
@@ -2968,7 +3119,7 @@ class SqliteDataStoreImplementation {
         const expandedWindowEnd = addClampedLocalDateDays(requestedWindow.endDate, 6);
 
         try {
-            this.database.exec('BEGIN');
+            this.database.exec('SAVEPOINT read_meeting_series_detail');
             const seriesStatement = this.database.prepare(`
                 SELECT
                     meeting_series.course_id,
@@ -3175,7 +3326,7 @@ class SqliteDataStoreImplementation {
                     }));
                 }
             }
-            this.database.exec('COMMIT');
+            this.database.exec('RELEASE SAVEPOINT read_meeting_series_detail');
 
             return Object.freeze({
                 workspaceRevision: series.revision.toString(),

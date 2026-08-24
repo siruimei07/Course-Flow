@@ -10,8 +10,13 @@ import {
     isWorkspaceSetupRequest,
     makeChangeTaskOccurrenceRequest,
     makeCreateCourseWithMeetingRequest,
+    makePlanQueryRequest,
     makeTaskSeriesQueryRequest,
 } from '../../src/shared/workspace-setup-contract';
+import {
+    buildPlanProjection,
+    createPlanEvaluationContext,
+} from '../../src/shared/workspace-plan-contract';
 
 const APP_BUILD_ID = 'development:1234567890abcdef1234567890abcdef12345678';
 const REQUEST_ID = 'request';
@@ -138,6 +143,53 @@ const TASK_SERIES_DETAIL = {
         overrideKind: 'none',
     }],
 } as const;
+
+const PLAN_PROJECTION = buildPlanProjection({
+    workspaceRevision: '2',
+    planEntityVersion: '2',
+    term: TERM,
+    taskSources: [{
+        courseId: COURSE.courseId,
+        courseCode: COURSE.code,
+        occurrence: {
+            occurrenceId: {
+                taskSeriesId: TASK_SERIES_ID,
+                originalLogicalAnchor: 'once',
+            },
+            title: 'Submit design review',
+            size: 'small',
+            deadline: { kind: 'date-only', date: '2026-09-07' },
+            segmentId: '88888888-8888-4888-8888-888888888888',
+            status: 'pending',
+            reportedProgress: null,
+            displayProgress: null,
+            overrideKind: 'none',
+        },
+    }],
+    meetingSources: [{
+        courseId: COURSE.courseId,
+        courseCode: COURSE.code,
+        occurrence: {
+            occurrenceId: {
+                meetingSeriesId: COURSE.meetings[0].meetingSeriesId,
+                originalLogicalAnchor: '2026-09-07',
+            },
+            segmentId: '99999999-9999-4999-8999-999999999999',
+            date: '2026-09-07',
+            status: 'scheduled',
+            overrideKind: null,
+            type: 'LEC',
+            weekday: 'MON',
+            localStart: '09:00',
+            localEnd: '10:00',
+            endDayOffset: 0,
+            startInstant: '2026-09-07T13:00:00.000Z',
+            endInstant: '2026-09-07T14:00:00.000Z',
+            location: { kind: 'tba' },
+        },
+    }],
+    holidayRanges: [],
+}, createPlanEvaluationContext('2026-09-07T13:30:00.000Z', TERM.timeZone));
 
 function outcomeWithCourse(course: unknown): unknown {
     return {
@@ -301,6 +353,50 @@ test('A-TASK-004/TEST-PLAN-003: bounded Task series query validates its request 
             projection: {
                 ...TASK_SERIES_DETAIL,
                 taskSeriesId: COURSE.courseId,
+            },
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+});
+
+test('A-VIEW-001–006/TEST-WORKSPACE-001: unified PLAN query validates its exact envelope', () => {
+    const request = makePlanQueryRequest(REQUEST_ID, APP_BUILD_ID, WORKSPACE_EPOCH);
+    assert.deepEqual(request, {
+        kind: 'workspace.plan.query',
+        protocolVersion: 2,
+        appBuildId: APP_BUILD_ID,
+        requestId: REQUEST_ID,
+        workspaceEpoch: WORKSPACE_EPOCH,
+    });
+    assert.equal(isWorkspaceSetupRequest(request, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupRequest(
+        { ...request, requestedWindow: TASK_WINDOW },
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+    ), false);
+
+    const outcome = {
+        ok: true,
+        value: {
+            kind: 'workspace.plan-projection',
+            protocolVersion: 2,
+            appBuildId: APP_BUILD_ID,
+            requestId: REQUEST_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            dataMode: 'ready',
+            projection: PLAN_PROJECTION,
+        },
+    } as const;
+    assert.equal(isWorkspaceSetupOutcome(outcome, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupOutcome({
+        ...outcome,
+        value: {
+            ...outcome.value,
+            projection: {
+                ...PLAN_PROJECTION,
+                evaluationContext: {
+                    ...PLAN_PROJECTION.evaluationContext,
+                    applicableDate: '2026-09-08',
+                },
             },
         },
     }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);

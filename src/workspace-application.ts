@@ -37,6 +37,7 @@ import {
     type DeleteTaskOccurrenceOrSeriesRequest,
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
+    type PlanQueryRequest,
     type SetTaskOccurrenceStatusRequest,
     type SetTaskProgressRequest,
     type TaskOccurrenceImpactRequest,
@@ -52,6 +53,10 @@ import {
     type WorkspaceSetupProblemCode,
     type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
+import {
+    buildPlanProjection,
+    createPlanEvaluationContext,
+} from './shared/workspace-plan-contract';
 import {
     localDateInTermZone,
     normalizeReconcileWorkspaceLifecycleCommand,
@@ -164,6 +169,7 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.task.change-occurrence'
                         || requestKind === 'workspace.task.delete-occurrence-or-series'
                         || requestKind === 'workspace.task.undo-occurrence-state'
+                        || requestKind === 'workspace.plan.query'
                         || requestKind === 'workspace.task-series.query'
                         || requestKind === 'workspace.task-occurrence.preview'
                         || requestKind === 'workspace.course.create-with-first-meeting'
@@ -181,6 +187,8 @@ export class WorkspaceApplication {
                 return this.initialize(request.requestId);
             case 'workspace.setup.query':
                 return this.querySetup(request.requestId);
+            case 'workspace.plan.query':
+                return this.queryPlan(request.requestId);
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
             case 'workspace.term.update-end-date':
@@ -319,6 +327,42 @@ export class WorkspaceApplication {
         }
         catch {
             return this.problem('recovery-required', '无法读取一致的 setup 数据。', requestId);
+        }
+    }
+
+    /**
+     * Produces all current Today and Week facts from one revision and one Clock evaluation.
+     * @param {string} requestId - Request correlation identity.
+     * @return {WorkspaceSetupOutcome} Unified PLAN projection or structured problem.
+     */
+    private queryPlan(requestId: PlanQueryRequest['requestId']): WorkspaceSetupOutcome {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的计划数据。', requestId);
+        }
+
+        try {
+            const evaluatedAt = (this.options.clock ?? SYSTEM_CLOCK).now();
+            const source = this.dataState.store.readPlanProjectionSource();
+            const context = createPlanEvaluationContext(evaluatedAt, source.term.timeZone);
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.plan-projection',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: buildPlanProjection(source, context, 'unavailable'),
+                },
+            };
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'workspace-unavailable' : 'recovery-required';
+            return this.problem(code, '无法读取一致的 Today 与 Week 计划数据。', requestId);
         }
     }
 

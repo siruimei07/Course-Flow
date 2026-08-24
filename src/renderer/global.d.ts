@@ -43,6 +43,7 @@ declare global {
       query(): Promise<BootstrapOutcome>;
       initialize(): Promise<WorkspaceSetupOutcome>;
       querySetup(): Promise<WorkspaceSetupOutcome>;
+      queryPlan(): Promise<WorkspaceSetupOutcome>;
       createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
       createHolidayRange(command: CreateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;

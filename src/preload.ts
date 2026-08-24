@@ -27,6 +27,7 @@ import {
   makeInitializeWorkspaceRequest,
   makeMeetingOccurrenceImpactRequest,
   makeMeetingSeriesQueryRequest,
+  makePlanQueryRequest,
   makeTaskSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
   makeDeleteHolidayRangeRequest,
@@ -143,6 +144,16 @@ function initializeWorkspace(): Promise<WorkspaceSetupOutcome> {
 function querySetup(): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeSetupQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Queries the unified Today and Week PLAN projection.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function queryPlan(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makePlanQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
   ));
 }
 
@@ -415,6 +426,7 @@ contextBridge.exposeInMainWorld(
     query: queryWorkspaceStatus,
     initialize: initializeWorkspace,
     querySetup,
+    queryPlan,
     createTerm,
     updateTermEndDate,
     createHolidayRange,
