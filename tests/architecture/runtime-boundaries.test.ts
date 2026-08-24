@@ -602,16 +602,22 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
       'updateTask',
       'deleteTask',
       'completeTask',
+      'setTaskOccurrenceStatus',
+      'setTaskProgress',
+      'changeTaskOccurrence',
+      'deleteTaskOccurrenceOrSeries',
+      'undoTaskOccurrenceState',
       'restoreTermAsCurrent',
       'createCourseWithMeeting',
       'queryMeetingSeries',
       'queryTaskSeries',
+      'previewTaskOccurrence',
       'previewMeetingOccurrence',
       'changeMeetingOccurrence',
       'cancelMeetingOccurrence',
     ],
   );
-  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1];
+  const expectedParameterCounts = [0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1];
   exposedObject.properties.forEach((property, index) => {
     const method = publicMethod(state, preload, property);
     assert.ok(method, 'each exposed setup capability must resolve to a function body');
@@ -662,6 +668,24 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
     [],
     'preload must not alias IPC or use it outside the two fixed-channel invocations',
   );
+});
+
+test('Main classifies every known Task occurrence request as a setup validation failure', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath).getText();
+  const validationMarker = ")\n          ? 'validation'";
+
+  for (const kind of [
+    'workspace.task.set-occurrence-status',
+    'workspace.task.set-progress',
+    'workspace.task.change-occurrence',
+    'workspace.task.delete-occurrence-or-series',
+    'workspace.task.undo-occurrence-state',
+    'workspace.task-occurrence.preview',
+  ]) {
+    assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
+    assert.ok(main.indexOf(`kind === '${kind}'`) < main.indexOf(validationMarker), `${kind} must be validation`);
+  }
 });
 
 test('BrowserWindow keeps every required security preference explicit', async () => {

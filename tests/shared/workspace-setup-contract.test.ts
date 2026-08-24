@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
     isWorkspaceSetupOutcome,
     isWorkspaceSetupRequest,
+    makeChangeTaskOccurrenceRequest,
     makeCreateCourseWithMeetingRequest,
     makeTaskSeriesQueryRequest,
 } from '../../src/shared/workspace-setup-contract';
@@ -75,6 +76,9 @@ const TASK = {
         originalLogicalAnchor: 'once',
     },
     status: 'pending',
+    reportedProgress: null,
+    displayProgress: null,
+    overrideKind: 'none',
     entityVersion: '1',
 } as const;
 const TASK_SERIES_ID = '77777777-7777-4777-8777-777777777777';
@@ -101,16 +105,37 @@ const TASK_SERIES_DETAIL = {
         followTeachingWeek: true,
     },
     entityVersion: '1',
+    segments: [{
+        segmentId: '88888888-8888-4888-8888-888888888888',
+        logicalStartAnchor: '2026-09-05',
+        logicalEndAnchor: '2026-11-28',
+        replacement: {
+            title: 'Submit weekly design review',
+            size: 'small',
+            weekday: 'SAT',
+            localDeadlineTime: '23:59',
+            followTeachingWeek: true,
+        },
+    }],
+    overrides: [],
+    historicalStates: [],
     occurrences: [{
         occurrenceId: {
             taskSeriesId: TASK_SERIES_ID,
             originalLogicalAnchor: '2026-09-05',
         },
+        title: 'Submit weekly design review',
+        size: 'small',
         deadline: {
             kind: 'timed',
             instant: '2026-09-06T03:59:00.000Z',
             timeZone: 'America/Toronto',
         },
+        segmentId: '88888888-8888-4888-8888-888888888888',
+        status: 'pending',
+        reportedProgress: null,
+        displayProgress: null,
+        overrideKind: 'none',
     }],
 } as const;
 
@@ -279,6 +304,138 @@ test('A-TASK-004/TEST-PLAN-003: bounded Task series query validates its request 
             },
         },
     }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+});
+
+test('A-TASK-006: Workspace accepts a future Task change only with its preview binding', () => {
+    const request = makeChangeTaskOccurrenceRequest(
+        REQUEST_ID,
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+        {
+            commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            followUpId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+            confirmationToken: '1'.repeat(64),
+            impactWindow: { startDate: '2026-09-05', endDate: '2026-12-05' },
+            expectedRevision: '2',
+            expectedPlanVersion: '2',
+            expectedTaskSeriesVersion: '1',
+            intent: {
+                kind: 'plan.change-task-occurrence',
+                intentSchemaVersion: 1,
+                payload: {
+                    taskSeriesId: TASK_SERIES_ID,
+                    originalLogicalAnchor: '2026-09-05',
+                    scope: 'this-and-future',
+                    replacement: {
+                        title: 'Updated weekly review',
+                        size: 'small',
+                        weekday: 'SAT',
+                        localDeadlineTime: '22:00',
+                        followTeachingWeek: true,
+                    },
+                },
+            },
+        },
+    );
+
+    assert.equal(isWorkspaceSetupRequest(request, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupRequest({ ...request, command: {
+        ...request.command,
+        confirmationToken: null,
+    } }, APP_BUILD_ID, WORKSPACE_EPOCH), false);
+});
+
+test('A-TASK-008/TEST-WORKSPACE-002: committed state receipts carry one exact Undo capability', () => {
+    const outcome = {
+        ok: true,
+        value: {
+            kind: 'workspace.command-outcome',
+            protocolVersion: 2,
+            appBuildId: APP_BUILD_ID,
+            requestId: REQUEST_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            outcome: {
+                kind: 'committed',
+                revision: '3',
+                effects: [{
+                    code: 'plan.task-occurrence-status-set',
+                    entity: { kind: 'task-series', id: TASK_SERIES_ID, version: '2' },
+                }],
+                pendingFollowUps: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+                undoCapability: {
+                    token: '1'.repeat(64),
+                    taskSeriesId: TASK_SERIES_ID,
+                    originalLogicalAnchor: '2026-09-05',
+                    committedRevision: '3',
+                    validThroughTaskSeriesVersion: '2',
+                },
+            },
+        },
+    } as const;
+
+    assert.equal(isWorkspaceSetupOutcome(outcome, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupOutcome({
+        ...outcome,
+        value: {
+            ...outcome.value,
+            outcome: {
+                ...outcome.value.outcome,
+                undoCapability: { ...outcome.value.outcome.undoCapability, token: 'expired' },
+            },
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+
+    for (const undoCapability of [
+        { ...outcome.value.outcome.undoCapability, committedRevision: '2' },
+        {
+            ...outcome.value.outcome.undoCapability,
+            taskSeriesId: COURSE.courseId,
+        },
+        {
+            ...outcome.value.outcome.undoCapability,
+            validThroughTaskSeriesVersion: '3',
+        },
+    ]) {
+        assert.equal(isWorkspaceSetupOutcome({
+            ...outcome,
+            value: {
+                ...outcome.value,
+                outcome: { ...outcome.value.outcome, undoCapability },
+            },
+        }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+    }
+
+    for (const code of [
+        'plan.task-series-updated',
+        'plan.task-occurrence-changed',
+        'plan.task-occurrence-deleted',
+        'plan.task-occurrence-state-undone',
+    ] as const) {
+        assert.equal(isWorkspaceSetupOutcome({
+            ...outcome,
+            value: {
+                ...outcome.value,
+                outcome: {
+                    ...outcome.value.outcome,
+                    effects: [{ ...outcome.value.outcome.effects[0], code }],
+                },
+            },
+        }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
+    }
+
+    assert.equal(isWorkspaceSetupOutcome({
+        ...outcome,
+        value: {
+            ...outcome.value,
+            outcome: {
+                ...outcome.value.outcome,
+                effects: [{
+                    ...outcome.value.outcome.effects[0],
+                    code: 'plan.task-progress-set',
+                }],
+            },
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
 });
 
 test('TEST-DATA-005: Workspace boundary preserves writer-busy retry semantics', () => {

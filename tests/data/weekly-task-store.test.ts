@@ -3,9 +3,11 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import {
@@ -21,7 +23,9 @@ import {
 import {
     normalizeCompleteTaskCommand,
     normalizeCreateTaskCommand,
+    normalizeDeleteTaskOccurrenceOrSeriesCommand,
     normalizeDeleteTaskCommand,
+    normalizeSetTaskOccurrenceStatusCommand,
     normalizeUpdateTaskCommand,
     type TaskSeriesDetailProjection,
 } from '../../src/shared/workspace-task-contract';
@@ -426,24 +430,79 @@ test('A-TASK-010: shortening a Term cannot strand a weekly Task outside an inher
     assert.deepEqual(readTaskDetail(store, taskSeriesId, window).occurrences.map(occurrence => (
         occurrence.occurrenceId.originalLogicalAnchor
     )), ['2026-09-05', '2026-09-12', '2026-09-19', '2026-09-26']);
-    const deleted = await store.commit(normalizeDeleteTaskCommand({
-        commandId: '14141414-1414-4414-8414-141414141414',
-        followUpId: '15151515-1515-4515-8515-151515151515',
-        expectedRevision: '3',
-        expectedPlanVersion: '3',
-        expectedTaskSeriesVersion: '1',
+    for (const [anchor, status] of [
+        ['2026-09-05', 'completed'],
+        ['2026-09-12', 'skipped'],
+    ] as const) {
+        const detail = readTaskDetail(store, taskSeriesId, window);
+        const state = await store.commit(normalizeSetTaskOccurrenceStatusCommand({
+            commandId: randomUUID(),
+            followUpId: randomUUID(),
+            expectedRevision: detail.workspaceRevision,
+            expectedPlanVersion: detail.planEntityVersion,
+            expectedTaskSeriesVersion: detail.entityVersion,
+            intent: {
+                kind: 'plan.set-task-occurrence-status',
+                intentSchemaVersion: 2,
+                payload: {
+                    taskSeriesId,
+                    originalLogicalAnchor: anchor,
+                    status,
+                },
+            },
+        }));
+        assert.equal(state.ok, true);
+    }
+    const unconfirmedDelete = await store.commit(normalizeDeleteTaskCommand({
+        commandId: '18181818-1818-4818-8818-181818181818',
+        followUpId: '19191919-1919-4919-8919-191919191919',
+        expectedRevision: '5',
+        expectedPlanVersion: '5',
+        expectedTaskSeriesVersion: '3',
         intent: {
             kind: 'plan.delete-task-series',
             intentSchemaVersion: 1,
             payload: { taskSeriesId },
         },
     }));
+    assert.equal(unconfirmedDelete.ok, false);
+    if (unconfirmedDelete.ok) {
+        throw new Error('Expected legacy whole-series delete to require an impact preview');
+    }
+    assert.equal(unconfirmedDelete.problem.code, 'decision-required');
+    assert.equal(unconfirmedDelete.problem.dataEffect, 'unchanged');
+    const deletePreview = store.previewTaskOccurrenceChange({
+        scope: 'whole-series',
+        taskSeriesId,
+        action: 'delete',
+        requestedWindow: window,
+    });
+    assert.equal(deletePreview.historicalStateCount, '2');
+    assert.deepEqual(deletePreview.warnings, [{ code: 'terminal-history-retained' }]);
+    const deleted = await store.commit(normalizeDeleteTaskOccurrenceOrSeriesCommand({
+        commandId: '14141414-1414-4414-8414-141414141414',
+        followUpId: '15151515-1515-4515-8515-151515151515',
+        confirmationToken: deletePreview.confirmationToken,
+        impactWindow: deletePreview.requestedWindow,
+        expectedRevision: deletePreview.basedOnRevision,
+        expectedPlanVersion: deletePreview.planEntityVersion,
+        expectedTaskSeriesVersion: deletePreview.taskSeriesVersion,
+        intent: {
+            kind: 'plan.delete-task-occurrence-or-series',
+            intentSchemaVersion: 1,
+            payload: { taskSeriesId, scope: 'whole-series' },
+        },
+    }));
     assert.equal(deleted.ok, true);
+    if (!deleted.ok) {
+        throw new Error('Expected confirmed whole-series Task deletion');
+    }
+    assert.equal(deleted.value.effects[0]?.code, 'plan.task-series-deleted');
     await assert.rejects(store.commit(normalizeUpdateTermEndDateCommand({
         commandId: '16161616-1616-4616-8616-161616161616',
         followUpId: '17171717-1717-4717-8717-171717171717',
-        expectedRevision: '4',
-        expectedPlanVersion: '4',
+        expectedRevision: '6',
+        expectedPlanVersion: '6',
         expectedTermVersion: '1',
         intent: {
             kind: 'plan.update-term-end-date',
@@ -458,9 +517,24 @@ test('A-TASK-010: shortening a Term cannot strand a weekly Task outside an inher
     if (reopened.kind !== 'ready') {
         throw new Error('Expected ready DATA');
     }
-    assert.equal(reopened.store.status().revision, '4');
+    assert.equal(reopened.store.status().revision, '6');
     assert.deepEqual(reopened.store.readSetupProjection().tasks, []);
     await reopened.store.close();
+    const persisted = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), { readOnly: true });
+    try {
+        assert.deepEqual(persisted.prepare(`
+            SELECT original_logical_anchor, status
+            FROM task_occurrence_states
+            WHERE task_series_id = ?
+            ORDER BY original_logical_anchor
+        `).all(taskSeriesId).map(row => ({ ...row })), [
+            { original_logical_anchor: '2026-09-05', status: 'completed' },
+            { original_logical_anchor: '2026-09-12', status: 'skipped' },
+        ]);
+    }
+    finally {
+        persisted.close();
+    }
 });
 
 test('A-TASK-004: whole-series edits convert pending once and weekly schedules '

@@ -43,21 +43,37 @@ import {
 } from './workspace-holiday-contract';
 import {
     isTaskOccurrenceWindow,
+    isTaskOccurrenceImpactProjection,
     isTaskProjection,
     isTaskSeriesDetailProjection,
+    normalizeChangeTaskOccurrenceCommand,
     normalizeCompleteTaskCommand,
     normalizeCreateTaskCommand,
+    normalizeDeleteTaskOccurrenceOrSeriesCommand,
     normalizeDeleteTaskCommand,
+    normalizeSetTaskOccurrenceStatusCommand,
+    normalizeSetTaskProgressCommand,
+    normalizeTaskOccurrenceImpactDraft,
+    normalizeUndoTaskOccurrenceStateCommand,
     normalizeUpdateTaskCommand,
+    type ChangeTaskOccurrenceCommand,
     type CompleteTaskCommand,
     type CreateTaskCommand,
+    type DeleteTaskOccurrenceOrSeriesCommand,
     type DeleteTaskCommand,
+    type SetTaskOccurrenceStatusCommand,
+    type SetTaskProgressCommand,
+    type TaskOccurrenceImpactDraft,
+    type TaskOccurrenceImpactProjection,
     type TaskOccurrenceWindow,
     type TaskProjection,
     type TaskSeriesDetailProjection,
+    type TaskUndoCapability,
+    type UndoTaskOccurrenceStateCommand,
     type UpdateTaskCommand,
 } from './workspace-task-contract';
 import {
+    isCanonicalLocalDate,
     normalizeCreateTermCommand,
     normalizeUpdateTermEndDateCommand,
     type CreateTermCommand,
@@ -128,6 +144,31 @@ export type CompleteTaskRequest = WorkspaceRequestBase & Readonly<{
     command: CompleteTaskCommand;
 }>;
 
+export type SetTaskOccurrenceStatusRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.set-occurrence-status';
+    command: SetTaskOccurrenceStatusCommand;
+}>;
+
+export type SetTaskProgressRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.set-progress';
+    command: SetTaskProgressCommand;
+}>;
+
+export type ChangeTaskOccurrenceRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.change-occurrence';
+    command: ChangeTaskOccurrenceCommand;
+}>;
+
+export type DeleteTaskOccurrenceOrSeriesRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.delete-occurrence-or-series';
+    command: DeleteTaskOccurrenceOrSeriesCommand;
+}>;
+
+export type UndoTaskOccurrenceStateRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task.undo-occurrence-state';
+    command: UndoTaskOccurrenceStateCommand;
+}>;
+
 export type RestoreTermAsCurrentRequestCommand = Readonly<{
     commandId: string;
     followUpId: string;
@@ -163,6 +204,11 @@ export type TaskSeriesQueryRequest = WorkspaceRequestBase & Readonly<{
     requestedWindow: TaskOccurrenceWindow;
 }>;
 
+export type TaskOccurrenceImpactRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task-occurrence.preview';
+    draft: TaskOccurrenceImpactDraft;
+}>;
+
 export type MeetingOccurrenceImpactRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.meeting-occurrence.preview';
     draft: MeetingOccurrenceImpactDraft;
@@ -190,10 +236,16 @@ export type WorkspaceSetupRequest =
     | UpdateTaskRequest
     | DeleteTaskRequest
     | CompleteTaskRequest
+    | SetTaskOccurrenceStatusRequest
+    | SetTaskProgressRequest
+    | ChangeTaskOccurrenceRequest
+    | DeleteTaskOccurrenceOrSeriesRequest
+    | UndoTaskOccurrenceStateRequest
     | RestoreTermAsCurrentRequest
     | CreateCourseWithMeetingRequest
     | MeetingSeriesQueryRequest
     | TaskSeriesQueryRequest
+    | TaskOccurrenceImpactRequest
     | MeetingOccurrenceImpactRequest
     | ChangeMeetingOccurrenceRequest
     | CancelMeetingOccurrenceRequest;
@@ -213,7 +265,12 @@ type WorkspaceCommandEffect = Readonly<{
         | 'plan.task-series-created'
         | 'plan.task-series-updated'
         | 'plan.task-series-deleted'
-        | 'plan.task-occurrence-completed';
+        | 'plan.task-occurrence-completed'
+        | 'plan.task-occurrence-status-set'
+        | 'plan.task-progress-set'
+        | 'plan.task-occurrence-changed'
+        | 'plan.task-occurrence-deleted'
+        | 'plan.task-occurrence-state-undone';
     entity: Readonly<{
         kind: 'term' | 'course' | 'meeting-series' | 'holiday-range' | 'task-series';
         id: string;
@@ -226,6 +283,7 @@ export type WorkspaceCommandResult = Readonly<{
     revision: string;
     effects: readonly [WorkspaceCommandEffect, ...WorkspaceCommandEffect[]];
     pendingFollowUps: readonly [string];
+    undoCapability?: TaskUndoCapability | null;
 }>;
 
 export type WorkspaceSetupProblemCode =
@@ -312,6 +370,18 @@ export type WorkspaceSetupOutcome =
             workspaceEpoch: string;
             dataMode: 'ready' | 'read-only';
             projection: TaskSeriesDetailProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.task-occurrence-impact';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: TaskOccurrenceImpactProjection;
         }>;
     }>
     | Readonly<{
@@ -625,6 +695,86 @@ export function makeCompleteTaskRequest(
     };
 }
 
+export function makeSetTaskOccurrenceStatusRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: SetTaskOccurrenceStatusCommand,
+): SetTaskOccurrenceStatusRequest {
+    return {
+        kind: 'workspace.task.set-occurrence-status',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeSetTaskOccurrenceStatusCommand(command),
+    };
+}
+
+export function makeSetTaskProgressRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: SetTaskProgressCommand,
+): SetTaskProgressRequest {
+    return {
+        kind: 'workspace.task.set-progress',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeSetTaskProgressCommand(command),
+    };
+}
+
+export function makeChangeTaskOccurrenceRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ChangeTaskOccurrenceCommand,
+): ChangeTaskOccurrenceRequest {
+    return {
+        kind: 'workspace.task.change-occurrence',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeChangeTaskOccurrenceCommand(command),
+    };
+}
+
+export function makeDeleteTaskOccurrenceOrSeriesRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: DeleteTaskOccurrenceOrSeriesCommand,
+): DeleteTaskOccurrenceOrSeriesRequest {
+    return {
+        kind: 'workspace.task.delete-occurrence-or-series',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeDeleteTaskOccurrenceOrSeriesCommand(command),
+    };
+}
+
+export function makeUndoTaskOccurrenceStateRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: UndoTaskOccurrenceStateCommand,
+): UndoTaskOccurrenceStateRequest {
+    return {
+        kind: 'workspace.task.undo-occurrence-state',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeUndoTaskOccurrenceStateCommand(command),
+    };
+}
+
 export function makeRestoreTermAsCurrentRequest(
     requestId: string,
     appBuildId: string,
@@ -714,6 +864,22 @@ export function makeTaskSeriesQueryRequest(
         workspaceEpoch,
         taskSeriesId,
         requestedWindow: Object.freeze({ ...requestedWindow }),
+    };
+}
+
+export function makeTaskOccurrenceImpactRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    draft: TaskOccurrenceImpactDraft,
+): TaskOccurrenceImpactRequest {
+    return {
+        kind: 'workspace.task-occurrence.preview',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        draft: normalizeTaskOccurrenceImpactDraft(draft),
     };
 }
 
@@ -836,6 +1002,25 @@ export function isWorkspaceSetupRequest(
             && isCanonicalUuid(value.taskSeriesId)
             && isTaskOccurrenceWindow(value.requestedWindow);
     }
+    if (value.kind === 'workspace.task-occurrence.preview') {
+        if (!hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'draft',
+        ])) {
+            return false;
+        }
+        try {
+            normalizeTaskOccurrenceImpactDraft(value.draft);
+            return true;
+        }
+        catch {
+            return false;
+        }
+    }
     if (value.kind === 'workspace.meeting-occurrence.preview') {
         if (!hasExactDataKeys(value, [
             'kind',
@@ -865,6 +1050,11 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.task.update'
             && value.kind !== 'workspace.task.delete'
             && value.kind !== 'workspace.task.complete'
+            && value.kind !== 'workspace.task.set-occurrence-status'
+            && value.kind !== 'workspace.task.set-progress'
+            && value.kind !== 'workspace.task.change-occurrence'
+            && value.kind !== 'workspace.task.delete-occurrence-or-series'
+            && value.kind !== 'workspace.task.undo-occurrence-state'
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
             && value.kind !== 'workspace.meeting-occurrence.cancel')
@@ -909,6 +1099,21 @@ export function isWorkspaceSetupRequest(
         }
         else if (value.kind === 'workspace.task.complete') {
             normalizeCompleteTaskCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.set-occurrence-status') {
+            normalizeSetTaskOccurrenceStatusCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.set-progress') {
+            normalizeSetTaskProgressCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.change-occurrence') {
+            normalizeChangeTaskOccurrenceCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.delete-occurrence-or-series') {
+            normalizeDeleteTaskOccurrenceOrSeriesCommand(value.command);
+        }
+        else if (value.kind === 'workspace.task.undo-occurrence-state') {
+            normalizeUndoTaskOccurrenceStateCommand(value.command);
         }
         else if (value.kind === 'workspace.course.create-with-first-meeting') {
             normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
@@ -1008,13 +1213,35 @@ function isSetupProjection(value: unknown): boolean {
 
 function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResult {
     if (!hasExactDataKeys(value, ['kind', 'revision', 'effects', 'pendingFollowUps'])
-        || value.kind !== 'committed'
+        && !hasExactDataKeys(value, ['kind', 'revision', 'effects', 'pendingFollowUps', 'undoCapability'])) {
+        return false;
+    }
+    if (value.kind !== 'committed'
         || !isCanonicalUnsignedSqliteInteger(value.revision)
         || !Array.isArray(value.effects)
         || (value.effects.length !== 1 && value.effects.length !== 2)
         || !Array.isArray(value.pendingFollowUps)
         || value.pendingFollowUps.length !== 1
         || !isCanonicalUuid(value.pendingFollowUps[0])) {
+        return false;
+    }
+
+    const undoCapability = 'undoCapability' in value ? value.undoCapability : null;
+    if (undoCapability !== null
+        && (!hasExactDataKeys(undoCapability, [
+            'token',
+            'taskSeriesId',
+            'originalLogicalAnchor',
+            'committedRevision',
+            'validThroughTaskSeriesVersion',
+        ])
+            || typeof undoCapability.token !== 'string'
+            || !/^[0-9a-f]{64}$/.test(undoCapability.token)
+            || !isCanonicalUuid(undoCapability.taskSeriesId)
+            || (undoCapability.originalLogicalAnchor !== 'once'
+                && !isCanonicalLocalDate(undoCapability.originalLogicalAnchor))
+            || !isCanonicalUnsignedSqliteInteger(undoCapability.committedRevision)
+            || !isCanonicalUnsignedSqliteInteger(undoCapability.validThroughTaskSeriesVersion))) {
         return false;
     }
 
@@ -1028,8 +1255,8 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
         && effect.entity.kind === entityKind
         && isCanonicalUuid(effect.entity.id)
         && isCanonicalUnsignedSqliteInteger(effect.entity.version);
-    if (value.effects.length === 1) {
-        return isEffect(value.effects[0], 'plan.term-created-current', 'term')
+    const effectsAreValid = value.effects.length === 1
+        ? isEffect(value.effects[0], 'plan.term-created-current', 'term')
             || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
             || isEffect(value.effects[0], 'plan.term-restored-current', 'term')
             || isEffect(value.effects[0], 'plan.meeting-occurrence-changed', 'meeting-series')
@@ -1040,10 +1267,30 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
             || isEffect(value.effects[0], 'plan.task-series-created', 'task-series')
             || isEffect(value.effects[0], 'plan.task-series-updated', 'task-series')
             || isEffect(value.effects[0], 'plan.task-series-deleted', 'task-series')
-            || isEffect(value.effects[0], 'plan.task-occurrence-completed', 'task-series');
+            || isEffect(value.effects[0], 'plan.task-occurrence-completed', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-occurrence-status-set', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-progress-set', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-occurrence-changed', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-occurrence-deleted', 'task-series')
+            || isEffect(value.effects[0], 'plan.task-occurrence-state-undone', 'task-series')
+        : isEffect(value.effects[0], 'plan.course-created', 'course')
+            && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
+    if (!effectsAreValid || undoCapability === null) {
+        return effectsAreValid;
     }
-    return isEffect(value.effects[0], 'plan.course-created', 'course')
-        && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
+
+    const reversibleEffect = value.effects.length === 1
+        ? value.effects[0] as WorkspaceCommandEffect
+        : null;
+    return reversibleEffect !== null
+        && [
+            'plan.task-occurrence-completed',
+            'plan.task-occurrence-status-set',
+            'plan.task-progress-set',
+        ].includes(reversibleEffect.code)
+        && undoCapability.committedRevision === value.revision
+        && undoCapability.taskSeriesId === reversibleEffect.entity.id
+        && undoCapability.validThroughTaskSeriesVersion === reversibleEffect.entity.version;
 }
 
 export function isWorkspaceSetupOutcome(
@@ -1155,6 +1402,19 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isTaskSeriesDetailProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.task-occurrence-impact') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isTaskOccurrenceImpactProjection(outcome.projection);
     }
     if (outcome.kind === 'workspace.meeting-occurrence-impact') {
         return hasExactDataKeys(outcome, [

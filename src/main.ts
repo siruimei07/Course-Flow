@@ -80,6 +80,12 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
           || kind === 'workspace.course.create-with-first-meeting'
           || kind === 'workspace.meeting-series.query'
           || kind === 'workspace.task-series.query'
+          || kind === 'workspace.task.set-occurrence-status'
+          || kind === 'workspace.task.set-progress'
+          || kind === 'workspace.task.change-occurrence'
+          || kind === 'workspace.task.delete-occurrence-or-series'
+          || kind === 'workspace.task.undo-occurrence-state'
+          || kind === 'workspace.task-occurrence.preview'
           || kind === 'workspace.meeting-occurrence.preview'
           || kind === 'workspace.meeting-occurrence.change'
           || kind === 'workspace.meeting-occurrence.cancel')

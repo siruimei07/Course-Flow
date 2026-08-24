@@ -14,11 +14,14 @@ import {
     createSchemaLevel7,
     createSchemaLevel8,
     createSchemaLevel9,
+    createSchemaLevel10,
     CURRENT_SCHEMA_LEVEL,
     migrateLevel7To8,
+    migrateLevel9To10,
     SchemaValidationError,
     validateSchemaLevel8,
     validateSchemaLevel9,
+    validateSchemaLevel10,
 } from '../../src/data/schema';
 import {
     openWorkspaceData,
@@ -149,6 +152,44 @@ function createLevel8WorkspaceWithTask(dataSlotsRoot: string): void {
 }
 
 /**
+ * Creates a valid on-disk level 9 Workspace for level 10 migration interruption tests.
+ * @param {string} dataSlotsRoot - Temporary DATA slots root.
+ * @return {void}
+ */
+function createLevel9WorkspaceWithTask(dataSlotsRoot: string): void {
+    const activeDirectory = join(dataSlotsRoot, 'active');
+    mkdirSync(activeDirectory);
+    const database = new DatabaseSync(join(activeDirectory, 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec('BEGIN IMMEDIATE');
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        insertOnceTask(
+            database,
+            TASK_SERIES_ID,
+            TASK_SEGMENT_ID,
+            'date-only',
+            '2026-10-15',
+            null,
+            null,
+        );
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, entity_version
+            ) VALUES (?, 'once', 'completed', 2)
+        `).run(TASK_SERIES_ID);
+        database.exec('COMMIT');
+    }
+    finally {
+        database.close();
+    }
+}
+
+/**
  * Verifies the exact level 8 facts that migration safety and rollback must retain.
  * @param {DatabaseSync} database - Read-only level 8 database.
  * @return {void}
@@ -240,7 +281,7 @@ test('ADR-04: level 8 stores once-only Task facts with an exact deadline union',
         database.exec('PRAGMA user_version = 8');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 9);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
         assert.equal(
             Number((database.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version),
             8,
@@ -399,7 +440,7 @@ test('ADR-04: level 9 distinguishes weekly Task segments from once facts', () =>
         database.exec('PRAGMA user_version = 9');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 9);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
         insertOnceTask(
             database,
             TASK_SERIES_ID,
@@ -661,6 +702,9 @@ test('ADR-04: level 9 rejects a weekly boundary whose TermZone Instant is not ca
             ) VALUES (?, ?, 'Boundary weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
                 '9999-12-31', 'FRI', '23:59', '9999-12-31', 1)
         `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel9To10(database);
+        database.exec('COMMIT');
     }
     finally {
         database.close();
@@ -701,6 +745,9 @@ test('ADR-04: level 9 rejects a noncanonical weekly TermZone alias before core r
             ) VALUES (?, ?, 'Alias weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
                 '2026-09-01', 'TUE', '09:00', '2026-12-15', 1)
         `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel9To10(database);
+        database.exec('COMMIT');
     }
     finally {
         database.close();
@@ -731,8 +778,8 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 9,
-        revision: '2',
+        schemaLevel: 10,
+        revision: '3',
     });
     await opened.store.close();
 
@@ -740,9 +787,9 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
         readOnly: true,
     });
     try {
-        assert.deepEqual(validateSchemaLevel9(activeDatabase), {
+        assert.deepEqual(validateSchemaLevel10(activeDatabase), {
             workspaceId: WORKSPACE_ID,
-            revision: 2n,
+            revision: 3n,
         });
         assert.deepEqual({ ...activeDatabase.prepare(`
             SELECT schedule_kind, deadline_kind, deadline_date, weekly_start_date, follow_teaching_week
@@ -755,11 +802,12 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
             follow_teaching_week: null,
         });
         assert.deepEqual({ ...activeDatabase.prepare(`
-            SELECT original_logical_anchor, status, entity_version
+            SELECT original_logical_anchor, status, self_reported_progress, entity_version
             FROM task_occurrence_states WHERE task_series_id = ?
         `).get(TASK_SERIES_ID) }, {
             original_logical_anchor: 'once',
             status: 'completed',
+            self_reported_progress: null,
             entity_version: 2,
         });
         assert.deepEqual({ ...activeDatabase.prepare(`
@@ -806,7 +854,7 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
             SELECT backup_needed_through, backup_succeeded_through
             FROM protection_watermarks WHERE singleton = 1
         `).get() }, {
-            backup_needed_through: 2,
+            backup_needed_through: 3,
             backup_succeeded_through: 0,
         });
     }
@@ -865,5 +913,461 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 before-commit failure rolls back every 
     }
     finally {
         safetyDatabase.close();
+    }
+});
+
+test('ADR-04: level 10 stores Task occurrence overrides, state, and one-time Undo facts', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel10(database);
+        database.exec('PRAGMA user_version = 10');
+        insertTaskParents(database);
+
+        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
+        assert.deepEqual(validateSchemaLevel10(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 0n,
+        });
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 2)
+        `).run(TASK_SERIES_ID, COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, logical_start_anchor,
+                logical_end_anchor
+            ) VALUES (?, ?, 'One-time assignment', 'large', 'once', 'date-only', '2026-10-15',
+                NULL, NULL, 'once', 'once')
+        `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES ('55555555-5555-4555-8555-555555555555', ?, 0, 1)
+        `).run(COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, logical_start_anchor,
+                logical_end_anchor, weekly_start_date, weekly_weekday, weekly_local_deadline_time,
+                weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES ('66666666-6666-4666-8666-666666666666',
+                '55555555-5555-4555-8555-555555555555', 'Weekly assignment', 'large', 'weekly',
+                NULL, NULL, NULL, NULL, '2026-09-07', '2026-09-07', '2026-09-01', 'MON', '17:30',
+                '2026-12-14', 1)
+        `).run();
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, logical_start_anchor,
+                logical_end_anchor, weekly_start_date, weekly_weekday, weekly_local_deadline_time,
+                weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES ('77777777-7777-4777-8777-777777777777',
+                '55555555-5555-4555-8555-555555555555', 'Updated weekly assignment', 'large',
+                'weekly', NULL, NULL, NULL, NULL, '2026-09-14', '2026-12-14', '2026-09-01', 'MON',
+                '17:30', '2026-12-14', 1)
+        `).run();
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, logical_start_anchor,
+                logical_end_anchor, weekly_start_date, weekly_weekday, weekly_local_deadline_time,
+                weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES ('88888888-8888-4888-8888-888888888888',
+                '55555555-5555-4555-8555-555555555555', 'Duplicate start', 'large', 'weekly',
+                NULL, NULL, NULL, NULL, '2026-09-14', '2026-12-14', '2026-09-01', 'MON', '17:30',
+                '2026-12-14', 1)
+        `).run());
+
+        database.prepare(`
+            INSERT INTO task_occurrence_overrides (
+                task_series_id, original_logical_anchor, override_kind, replacement_title,
+                replacement_task_size, replacement_deadline_kind, replacement_deadline_date,
+                replacement_deadline_instant, replacement_deadline_display_zone, entity_version
+            ) VALUES (?, '2026-09-07', 'deleted', NULL, NULL, NULL, NULL, NULL, NULL, 1)
+        `).run('55555555-5555-4555-8555-555555555555');
+        database.prepare(`
+            INSERT INTO task_occurrence_overrides (
+                task_series_id, original_logical_anchor, override_kind, replacement_title,
+                replacement_task_size, replacement_deadline_kind, replacement_deadline_date,
+                replacement_deadline_instant, replacement_deadline_display_zone, entity_version
+            ) VALUES (?, '2026-09-14', 'replaced', 'Replacement', 'large', 'timed', NULL,
+                '2026-09-14T21:30:00.000Z', 'America/Toronto', 1)
+        `).run('55555555-5555-4555-8555-555555555555');
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_occurrence_overrides (
+                task_series_id, original_logical_anchor, override_kind, replacement_title,
+                replacement_task_size, replacement_deadline_kind, replacement_deadline_date,
+                replacement_deadline_instant, replacement_deadline_display_zone, entity_version
+            ) VALUES (?, '2026-09-21', 'deleted', 'Unexpected replacement', NULL, NULL, NULL,
+                NULL, NULL, 1)
+        `).run('55555555-5555-4555-8555-555555555555'));
+
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, self_reported_progress, entity_version
+            ) VALUES (?, 'once', 'pending', 75, 2)
+        `).run(TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, self_reported_progress, entity_version
+            ) VALUES (?, '2026-09-07', 'completed', 75, 1)
+        `).run('55555555-5555-4555-8555-555555555555');
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, self_reported_progress, entity_version
+            ) VALUES (?, '2026-09-14', 'skipped', NULL, 2)
+        `).run('55555555-5555-4555-8555-555555555555');
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, self_reported_progress, entity_version
+            ) VALUES (?, '2026-09-21', 'pending', 101, 3)
+        `).run('55555555-5555-4555-8555-555555555555'));
+
+        database.exec('BEGIN IMMEDIATE');
+        try {
+            assert.throws(() => database.prepare(`
+                INSERT INTO task_state_history (
+                    undo_token, originating_command_id, task_series_id, original_logical_anchor,
+                    before_row_present, before_status, before_self_reported_progress, after_state_version,
+                    consumed
+                ) VALUES ('dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+                    'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', ?, 'once', 0, NULL, NULL, 2, 0)
+            `).run(TASK_SERIES_ID));
+        }
+        finally {
+            database.exec('ROLLBACK');
+        }
+
+        database.exec(`
+            UPDATE workspace_state SET revision = 1 WHERE singleton = 1;
+            UPDATE plan_state SET plan_entity_version = 2 WHERE singleton = 1;
+            UPDATE protection_watermarks SET backup_needed_through = 1 WHERE singleton = 1;
+        `);
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES (?, 'plan.set-task-progress', 1, 'courseflow-canonical-json-v1', 'sha256',
+                zeroblob(32), 1, 'committed')
+        `).run('99999999-9999-4999-8999-999999999999');
+        database.prepare(`
+            INSERT INTO receipt_effects (
+                command_id, effect_order, effect_code, entity_kind, entity_id, entity_version
+            ) VALUES (?, 0, 'plan.task-progress-set', 'task-series', ?, 2)
+        `).run('99999999-9999-4999-8999-999999999999', TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO durable_followups (
+                follow_up_id, originating_command_id, owner, kind, prerequisite_revision, state,
+                follow_up_version
+            ) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ?, 'protect',
+                'backup-needed-through', 1, 'pending', 0)
+        `).run('99999999-9999-4999-8999-999999999999');
+        database.prepare(`
+            INSERT INTO task_state_history (
+                undo_token, originating_command_id, task_series_id, original_logical_anchor,
+                before_row_present, before_status, before_self_reported_progress, after_state_version,
+                consumed
+            ) VALUES ('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', ?, ?, 'once',
+                1, 'pending', 50, 2, 0)
+        `).run('99999999-9999-4999-8999-999999999999', TASK_SERIES_ID);
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_state_history (
+                undo_token, originating_command_id, task_series_id, original_logical_anchor,
+                before_row_present, before_status, before_self_reported_progress, after_state_version,
+                consumed
+            ) VALUES ('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', ?, ?, 'once',
+                0, 'pending', NULL, 2, 0)
+        `).run('99999999-9999-4999-8999-999999999999', TASK_SERIES_ID));
+        assert.deepEqual(validateSchemaLevel10(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 1n,
+        });
+
+        database.prepare(`
+            DELETE FROM receipt_effects WHERE command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            INSERT INTO receipt_effects (
+                command_id, effect_order, effect_code, entity_kind, entity_id, entity_version
+            ) VALUES (?, 0, 'plan.task-progress-set', 'task-series', ?, 2)
+        `).run('99999999-9999-4999-8999-999999999999', TASK_SERIES_ID);
+
+        database.prepare(`
+            DELETE FROM durable_followups WHERE originating_command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            INSERT INTO durable_followups (
+                follow_up_id, originating_command_id, owner, kind, prerequisite_revision, state,
+                follow_up_version
+            ) VALUES ('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', ?, 'protect',
+                'backup-needed-through', 1, 'pending', 0)
+        `).run('99999999-9999-4999-8999-999999999999');
+
+        database.prepare(`
+            UPDATE receipt_effects SET entity_id = ? WHERE command_id = ?
+        `).run(
+            '55555555-5555-4555-8555-555555555555',
+            '99999999-9999-4999-8999-999999999999',
+        );
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            UPDATE receipt_effects SET entity_id = ? WHERE command_id = ?
+        `).run(TASK_SERIES_ID, '99999999-9999-4999-8999-999999999999');
+
+        database.prepare(`
+            UPDATE receipt_effects SET effect_code = 'plan.task-occurrence-state-undone'
+            WHERE command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            UPDATE receipt_effects SET effect_code = 'plan.task-progress-set' WHERE command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+
+        database.prepare(`
+            UPDATE task_state_history SET after_state_version = 3 WHERE originating_command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            UPDATE task_state_history SET after_state_version = 2 WHERE originating_command_id = ?
+        `).run('99999999-9999-4999-8999-999999999999');
+
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES (?, 'plan.undo-task-occurrence-state', 1, 'courseflow-canonical-json-v1', 'sha256',
+                zeroblob(32), 2, 'committed')
+        `).run('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+        database.prepare(`
+            INSERT INTO task_state_history (
+                undo_token, originating_command_id, task_series_id, original_logical_anchor,
+                before_row_present, before_status, before_self_reported_progress, after_state_version,
+                consumed
+            ) VALUES ('ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', ?, ?, 'once',
+                1, 'pending', 50, 2, 0)
+        `).run('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', TASK_SERIES_ID);
+        assert.throws(
+            () => validateSchemaLevel10(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+        database.prepare(`
+            DELETE FROM task_state_history WHERE originating_command_id = ?
+        `).run('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+        database.prepare(`
+            DELETE FROM command_receipts WHERE command_id = ?
+        `).run('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee');
+        assert.deepEqual(validateSchemaLevel10(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 1n,
+        });
+    }
+    finally {
+        database.close();
+    }
+});
+
+test('ADR-04: level 9 to 10 migration retains Task facts and derives weekly segment anchors', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        insertOnceTask(
+            database,
+            TASK_SERIES_ID,
+            TASK_SEGMENT_ID,
+            'date-only',
+            '2026-10-15',
+            null,
+            null,
+        );
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, entity_version
+            ) VALUES (?, 'once', 'completed', 2)
+        `).run(TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES ('55555555-5555-4555-8555-555555555555', ?, 0, 1)
+        `).run(COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES ('66666666-6666-4666-8666-666666666666',
+                '55555555-5555-4555-8555-555555555555', 'Weekly assignment', 'small', 'weekly',
+                NULL, NULL, NULL, NULL, '2026-09-01', 'MON', '17:30', '2026-12-14', 1)
+        `).run();
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES ('77777777-7777-4777-8777-777777777777', 'plan.create-task-series', 1,
+                'courseflow-canonical-json-v1', 'sha256', zeroblob(32), 1, 'committed')
+        `).run();
+        database.prepare(`
+            INSERT INTO receipt_effects (
+                command_id, effect_order, effect_code, entity_kind, entity_id, entity_version
+            ) VALUES ('77777777-7777-4777-8777-777777777777', 0, 'plan.task-series-created',
+                'task-series', ?, 1)
+        `).run(TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO durable_followups (
+                follow_up_id, originating_command_id, owner, kind, prerequisite_revision, state,
+                follow_up_version
+            ) VALUES ('88888888-8888-4888-8888-888888888888',
+                '77777777-7777-4777-8777-777777777777', 'protect', 'backup-needed-through', 1,
+                'pending', 0)
+        `).run();
+
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel9To10(database);
+        database.exec('COMMIT');
+
+        assert.deepEqual(validateSchemaLevel10(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 1n,
+        });
+        assert.deepEqual({ ...database.prepare(`
+            SELECT task_segment_id, logical_start_anchor, logical_end_anchor
+            FROM task_segments WHERE task_series_id = ?
+        `).get(TASK_SERIES_ID) }, {
+            task_segment_id: TASK_SEGMENT_ID,
+            logical_start_anchor: 'once',
+            logical_end_anchor: 'once',
+        });
+        assert.deepEqual({ ...database.prepare(`
+            SELECT logical_start_anchor, logical_end_anchor
+            FROM task_segments WHERE task_series_id = '55555555-5555-4555-8555-555555555555'
+        `).get() }, {
+            logical_start_anchor: '2026-09-07',
+            logical_end_anchor: '2026-12-14',
+        });
+        assert.deepEqual({ ...database.prepare(`
+            SELECT status, self_reported_progress, entity_version
+            FROM task_occurrence_states WHERE task_series_id = ?
+        `).get(TASK_SERIES_ID) }, {
+            status: 'completed',
+            self_reported_progress: null,
+            entity_version: 2,
+        });
+        assert.equal(
+            (database.prepare('SELECT count(*) AS count FROM command_receipts').get() as { count: number }).count,
+            1,
+        );
+        assert.equal(
+            (database.prepare('SELECT count(*) AS count FROM receipt_effects').get() as { count: number }).count,
+            1,
+        );
+        assert.equal(
+            (database.prepare('SELECT count(*) AS count FROM durable_followups').get() as { count: number }).count,
+            1,
+        );
+    }
+    finally {
+        database.close();
+    }
+});
+
+test('ADR-04/TEST-DATA-006: level 9 to 10 interruption rolls back and restarts deterministically', async t => {
+    for (const failpoint of ['migration.after-safety-copy', 'migration.before-level-commit'] as const) {
+        const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-task-level-10-rollback-'));
+        t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
+        createLevel9WorkspaceWithTask(dataSlotsRoot);
+
+        const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+            migrationFailpoint(point) {
+                if (point === failpoint) {
+                    throw new Error(point);
+                }
+            },
+        });
+        assert.equal(interrupted.kind, 'recovery');
+
+        const activeDatabase = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+            readOnly: true,
+        });
+        try {
+            assert.equal(
+                (activeDatabase.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+                9,
+            );
+            assert.deepEqual(validateSchemaLevel9(activeDatabase), {
+                workspaceId: WORKSPACE_ID,
+                revision: 0n,
+            });
+            assert.deepEqual({ ...activeDatabase.prepare(`
+                SELECT status, entity_version
+                FROM task_occurrence_states
+                WHERE task_series_id = ? AND original_logical_anchor = 'once'
+            `).get(TASK_SERIES_ID) }, {
+                status: 'completed',
+                entity_version: 2,
+            });
+            assert.equal(
+                (activeDatabase.prepare(`
+                    SELECT count(*) AS count
+                    FROM sqlite_schema
+                    WHERE type = 'table' AND name = 'task_occurrence_overrides'
+                `).get() as { count: number }).count,
+                0,
+            );
+        }
+        finally {
+            activeDatabase.close();
+        }
+
+        const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+        assert.equal(migrated.kind, 'ready');
+        if (migrated.kind !== 'ready') {
+            throw new Error('Expected deterministic level 10 migration retry');
+        }
+        assert.equal(migrated.store.status().schemaLevel, 10);
+        assert.equal(
+            migrated.store.readTaskSeriesDetail(TASK_SERIES_ID, {
+                startDate: '2026-10-01',
+                endDate: '2026-10-31',
+            }).occurrences[0]?.status,
+            'completed',
+        );
+        await migrated.store.close();
+
+        const restarted = openWorkspaceData(dataSlotsRoot);
+        assert.equal(restarted.kind, 'ready');
+        if (restarted.kind !== 'ready') {
+            throw new Error('Expected migrated level 10 Workspace to restart');
+        }
+        assert.equal(restarted.store.status().schemaLevel, 10);
+        await restarted.store.close();
     }
 });

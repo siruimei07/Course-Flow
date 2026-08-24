@@ -15,6 +15,12 @@ import {
   makeCreateCourseWithMeetingRequest,
   makeCreateHolidayRangeRequest,
   makeCreateTaskRequest,
+  makeSetTaskOccurrenceStatusRequest,
+  makeSetTaskProgressRequest,
+  makeChangeTaskOccurrenceRequest,
+  makeDeleteTaskOccurrenceOrSeriesRequest,
+  makeUndoTaskOccurrenceStateRequest,
+  makeTaskOccurrenceImpactRequest,
   makeCreateTermRequest,
   makeCancelMeetingOccurrenceRequest,
   makeChangeMeetingOccurrenceRequest,
@@ -47,8 +53,14 @@ import type {
 import type {
   CompleteTaskCommand,
   CreateTaskCommand,
+  ChangeTaskOccurrenceCommand,
   DeleteTaskCommand,
+  DeleteTaskOccurrenceOrSeriesCommand,
+  SetTaskOccurrenceStatusCommand,
+  SetTaskProgressCommand,
   UpdateTaskCommand,
+  UndoTaskOccurrenceStateCommand,
+  TaskOccurrenceImpactDraft,
   TaskOccurrenceWindow,
 } from './shared/workspace-task-contract';
 import type {
@@ -223,6 +235,65 @@ function completeTask(command: CompleteTaskCommand): Promise<WorkspaceSetupOutco
   ));
 }
 
+/**
+ * Sets one Task occurrence status through the bounded Workspace channel.
+ * @param {SetTaskOccurrenceStatusCommand} command - Versioned occurrence status command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function setTaskOccurrenceStatus(command: SetTaskOccurrenceStatusCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeSetTaskOccurrenceStatusRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Sets one Task occurrence's self-reported progress through the bounded Workspace channel.
+ * @param {SetTaskProgressCommand} command - Versioned Task progress command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function setTaskProgress(command: SetTaskProgressCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeSetTaskProgressRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Changes one Task occurrence or a confirmed future sequence through Workspace.
+ * @param {ChangeTaskOccurrenceCommand} command - Versioned Task occurrence change command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function changeTaskOccurrence(command: ChangeTaskOccurrenceCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeChangeTaskOccurrenceRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Deletes one Task occurrence, future occurrences, or a Task series through Workspace.
+ * @param {DeleteTaskOccurrenceOrSeriesCommand} command - Versioned Task occurrence deletion command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function deleteTaskOccurrenceOrSeries(
+  command: DeleteTaskOccurrenceOrSeriesCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeDeleteTaskOccurrenceOrSeriesRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Uses one Task occurrence Undo capability through the bounded Workspace channel.
+ * @param {UndoTaskOccurrenceStateCommand} command - Versioned Task occurrence Undo command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function undoTaskOccurrenceState(
+  command: UndoTaskOccurrenceStateCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeUndoTaskOccurrenceStateRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 function restoreTermAsCurrent(
   command: RestoreTermAsCurrentRequestCommand,
 ): Promise<WorkspaceSetupOutcome> {
@@ -287,6 +358,19 @@ function queryTaskSeries(
 }
 
 /**
+ * Requests one version-bound Task future-occurrence impact preview.
+ * @param {TaskOccurrenceImpactDraft} draft - Exact proposed Task future change.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function previewTaskOccurrence(
+  draft: TaskOccurrenceImpactDraft,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeTaskOccurrenceImpactRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, draft)
+  ));
+}
+
+/**
  * Requests a version-bound whole-rule impact preview.
  * @param {MeetingOccurrenceImpactDraft} draft - Exact proposed future rule.
  * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
@@ -340,10 +424,16 @@ contextBridge.exposeInMainWorld(
     updateTask,
     deleteTask,
     completeTask,
+    setTaskOccurrenceStatus,
+    setTaskProgress,
+    changeTaskOccurrence,
+    deleteTaskOccurrenceOrSeries,
+    undoTaskOccurrenceState,
     restoreTermAsCurrent,
     createCourseWithMeeting,
     queryMeetingSeries,
     queryTaskSeries,
+    previewTaskOccurrence,
     previewMeetingOccurrence,
     changeMeetingOccurrence,
     cancelMeetingOccurrence,

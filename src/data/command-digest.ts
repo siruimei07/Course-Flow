@@ -36,13 +36,23 @@ import {
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import {
+    changeTaskOccurrenceDigestProjection,
     completeTaskDigestProjection,
     createTaskDigestProjection,
+    deleteTaskOccurrenceOrSeriesDigestProjection,
     deleteTaskDigestProjection,
+    setTaskOccurrenceStatusDigestProjection,
+    setTaskProgressDigestProjection,
+    undoTaskOccurrenceStateDigestProjection,
     updateTaskDigestProjection,
+    type ChangeTaskOccurrenceCommand,
     type CompleteTaskCommand,
     type CreateTaskCommand,
+    type DeleteTaskOccurrenceOrSeriesCommand,
     type DeleteTaskCommand,
+    type SetTaskOccurrenceStatusCommand,
+    type SetTaskProgressCommand,
+    type UndoTaskOccurrenceStateCommand,
     type UpdateTaskCommand,
 } from '../shared/workspace-task-contract';
 
@@ -145,5 +155,32 @@ export function digestDeleteTask(command: DeleteTaskCommand): Uint8Array {
 
 export function digestCompleteTask(command: CompleteTaskCommand): Uint8Array {
     const canonicalText = canonicalJson(completeTaskDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestSetTaskOccurrenceStatus(command: SetTaskOccurrenceStatusCommand): Uint8Array {
+    const canonicalText = canonicalJson(setTaskOccurrenceStatusDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestSetTaskProgress(command: SetTaskProgressCommand): Uint8Array {
+    const canonicalText = canonicalJson(setTaskProgressDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestChangeTaskOccurrence(command: ChangeTaskOccurrenceCommand): Uint8Array {
+    const canonicalText = canonicalJson(changeTaskOccurrenceDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestDeleteTaskOccurrenceOrSeries(
+    command: DeleteTaskOccurrenceOrSeriesCommand,
+): Uint8Array {
+    const canonicalText = canonicalJson(deleteTaskOccurrenceOrSeriesDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+export function digestUndoTaskOccurrenceState(command: UndoTaskOccurrenceStateCommand): Uint8Array {
+    const canonicalText = canonicalJson(undoTaskOccurrenceStateDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }

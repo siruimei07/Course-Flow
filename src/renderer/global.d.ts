@@ -18,9 +18,15 @@ import type {
 } from '../shared/workspace-holiday-contract';
 import type {
   CompleteTaskCommand,
+  ChangeTaskOccurrenceCommand,
   CreateTaskCommand,
   DeleteTaskCommand,
+  DeleteTaskOccurrenceOrSeriesCommand,
+  SetTaskOccurrenceStatusCommand,
+  SetTaskProgressCommand,
+  TaskOccurrenceImpactDraft,
   UpdateTaskCommand,
+  UndoTaskOccurrenceStateCommand,
   TaskOccurrenceWindow,
 } from '../shared/workspace-task-contract';
 import type {
@@ -46,6 +52,13 @@ declare global {
       updateTask(command: UpdateTaskCommand): Promise<WorkspaceSetupOutcome>;
       deleteTask(command: DeleteTaskCommand): Promise<WorkspaceSetupOutcome>;
       completeTask(command: CompleteTaskCommand): Promise<WorkspaceSetupOutcome>;
+      setTaskOccurrenceStatus(command: SetTaskOccurrenceStatusCommand): Promise<WorkspaceSetupOutcome>;
+      setTaskProgress(command: SetTaskProgressCommand): Promise<WorkspaceSetupOutcome>;
+      changeTaskOccurrence(command: ChangeTaskOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
+      deleteTaskOccurrenceOrSeries(
+        command: DeleteTaskOccurrenceOrSeriesCommand,
+      ): Promise<WorkspaceSetupOutcome>;
+      undoTaskOccurrenceState(command: UndoTaskOccurrenceStateCommand): Promise<WorkspaceSetupOutcome>;
       restoreTermAsCurrent(command: RestoreTermAsCurrentRequestCommand): Promise<WorkspaceSetupOutcome>;
       createCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Promise<WorkspaceSetupOutcome>;
       queryMeetingSeries(
@@ -56,6 +69,7 @@ declare global {
         taskSeriesId: string,
         requestedWindow: TaskOccurrenceWindow,
       ): Promise<WorkspaceSetupOutcome>;
+      previewTaskOccurrence(draft: TaskOccurrenceImpactDraft): Promise<WorkspaceSetupOutcome>;
       previewMeetingOccurrence(draft: MeetingOccurrenceImpactDraft): Promise<WorkspaceSetupOutcome>;
       changeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
       cancelMeetingOccurrence(command: CancelMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;

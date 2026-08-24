@@ -130,7 +130,8 @@
 | `TaskSeries` | 与 Course 关联的一次性或每周任务身份；由规则段表达未来修改 |
 | `TaskSegment` | 规模、截止语义、重复范围、是否跟随教学周及其他任务字段 |
 | `Occurrence` | 从系列、段、范围、假期和覆盖事实确定性派生的单次实例 |
-| `OccurrenceOverride` | “仅本次”的修改、取消或状态事实；不得修改相邻实例 |
+| `OccurrenceOverride` | “仅本次”的修改、取消或删除事实；不得修改相邻实例，也不得代替独立的 `TaskOccurrenceState` |
+| `TaskOccurrenceState` | 单个任务实例的 pending/completed/skipped 与 large 可选自报进度事实；删除不属于状态 |
 | `GradeTaskRef` | `none`、`task-series(TaskSeriesId)` 或 `task-occurrence(TaskOccurrenceId)`；只能由用户显式建立，标题相同不构成关联 |
 | `GradeProjection` | `CourseGradeProjection` 的版本化只读导出，携带 CourseId、input revision、GradeScaleVersionId、result source、coverage、warnings 与估算标识 |
 | `FinalCourseOutcome` | 仅在存在 calculated-final、manual-final 或 user-attested school-record 时导出其值、来源、provenance、credits 与绑定模板；current-estimate 不能冒充最终结果 |
@@ -439,6 +440,8 @@ Follow-up 必须具有稳定 ID、所有者、前置 revision、状态、重试/
 ### 4.6 `IF-IMPACT-PREVIEW`
 
 模块向 Workspace 返回自身 ReferenceImpact 与可选 ResolutionChoice；Workspace 只组合，不自行猜测模块内部级联语义。执行时每个模块重新验证 preview 前提。
+
+Task 的范围删除及 this-and-future 修改预览必须返回稳定受影响对象、当前与修改后实例、数量、effects、warnings、choices、recoverability 和 unresolved references。确认令牌绑定 revision、实体版本、scope、anchor、窗口与草稿；执行时任何一项 stale 都不得写入事实。
 
 ### 4.7 接口注册表
 
@@ -1033,7 +1036,7 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 | Course | `CreateCourse`、`CreateCourseWithFirstMeeting`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
 | Meeting | `CreateMeetingSeries`、`UpdateMeetingSeries`、`ChangeMeetingOccurrence(scope=only-this|this-and-future)`、`CancelMeetingOccurrence`、`DeleteMeetingSeries` |
 | Task | `CreateTaskSeries`、`UpdateTaskSeries`、`ChangeTaskOccurrence(scope=only-this|this-and-future)`、`DeleteTaskOccurrenceOrSeries` |
-| Task state | `SetTaskOccurrenceStatus(pending|completed|skipped)`、`SetTaskProgress` |
+| Task state | `SetTaskOccurrenceStatus(pending|completed|skipped)`、`SetTaskProgress`、`UndoTaskOccurrenceState(UndoToken)` |
 
 Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDetail`、`TaskList/TaskDetail/TaskSeriesDetail`、`TodayProjection`、`WeekProjection`、`CalendarWindowProjection`、`AgendaProjection`、`TbaProjection`、`PlanImpactProjection`。
 
@@ -1614,8 +1617,8 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `A-COURSE-002–004` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | TIME、STATE、ACCESS | PLAN-001/002/007 |
 | `A-COURSE-005–007` | PLAN | IF-PLAN-COMMAND/IMPACT | 01、02 | CONSIST、TRUTH、TIME | PLAN-002/004/005 |
 | `A-TASK-001–003` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | STATE、TRUTH | PLAN-001/006 |
-| `A-TASK-004–007` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | CONSIST、TIME | PLAN-003–006 |
-| `A-TASK-008–010` | PLAN | IF-PLAN-COMMAND/QUERY、IF-WORKSPACE | 01、02 | STATE、TRUTH、DIAG | PLAN-004/006/008、SHELL-003 |
+| `A-TASK-004、007、010` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | CONSIST、TIME | PLAN-003/006 |
+| `A-TASK-005–006、008–009` | PLAN / WORKSPACE / SHELL | IF-PLAN-COMMAND/QUERY/IMPACT、IF-WORKSPACE | 01、02 | STATE、TRUTH、PROTECT、DIAG | PLAN-004/006/008、WORKSPACE-002/006、SHELL-003、FLOW-01-COMMIT |
 | `A-VIEW-001–004` | PLAN / WORKSPACE / SHELL | IF-PLAN-QUERY、IF-WORKSPACE | 02 | CONSIST、TIME、STATE、ACCESS | PLAN-006/008、WORKSPACE-001、FLOW-02 |
 | `A-VIEW-005–006` | PLAN / ATTEND / WORKSPACE | IF-PLAN-QUERY、IF-ATTEND-QUERY | 02、06 | CONSIST、TIME、ISOLATE | PLAN-008、ATTEND-003/004 |
 | `A-CALENDAR-001–003` | PLAN / WORKSPACE / SHELL | IF-PLAN-QUERY、IF-WORKSPACE | 02 | CONSIST、TIME、ACCESS、RESPOND | PLAN-003/006/008、FLOW-02 |

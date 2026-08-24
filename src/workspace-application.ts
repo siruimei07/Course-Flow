@@ -26,6 +26,7 @@ import {
     isWorkspaceSetupRequest,
     type CancelMeetingOccurrenceRequest,
     type ChangeMeetingOccurrenceRequest,
+    type ChangeTaskOccurrenceRequest,
     type CompleteTaskRequest,
     type CreateHolidayRangeRequest,
     type CreateCourseWithMeetingRequest,
@@ -33,13 +34,18 @@ import {
     type CreateTermRequest,
     type DeleteHolidayRangeRequest,
     type DeleteTaskRequest,
+    type DeleteTaskOccurrenceOrSeriesRequest,
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
+    type SetTaskOccurrenceStatusRequest,
+    type SetTaskProgressRequest,
+    type TaskOccurrenceImpactRequest,
     type RestoreTermAsCurrentRequest,
     type UpdateTermEndDateRequest,
     type UpdateHolidayRangeRequest,
     type UpdateTaskRequest,
     type TaskSeriesQueryRequest,
+    type UndoTaskOccurrenceStateRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblem,
@@ -153,7 +159,13 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.task.update'
                         || requestKind === 'workspace.task.delete'
                         || requestKind === 'workspace.task.complete'
+                        || requestKind === 'workspace.task.set-occurrence-status'
+                        || requestKind === 'workspace.task.set-progress'
+                        || requestKind === 'workspace.task.change-occurrence'
+                        || requestKind === 'workspace.task.delete-occurrence-or-series'
+                        || requestKind === 'workspace.task.undo-occurrence-state'
                         || requestKind === 'workspace.task-series.query'
+                        || requestKind === 'workspace.task-occurrence.preview'
                         || requestKind === 'workspace.course.create-with-first-meeting'
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
@@ -189,6 +201,16 @@ export class WorkspaceApplication {
                 return this.commitTask(request.requestId, request.command);
             case 'workspace.task.complete':
                 return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.set-occurrence-status':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.set-progress':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.change-occurrence':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.delete-occurrence-or-series':
+                return this.commitTask(request.requestId, request.command);
+            case 'workspace.task.undo-occurrence-state':
+                return this.commitTask(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
             case 'workspace.meeting-series.query':
@@ -203,6 +225,8 @@ export class WorkspaceApplication {
                     request.taskSeriesId,
                     request.requestedWindow,
                 );
+            case 'workspace.task-occurrence.preview':
+                return this.previewTaskOccurrence(request.requestId, request.draft);
             case 'workspace.meeting-occurrence.preview':
                 return this.previewMeetingOccurrence(request.requestId, request.draft);
             case 'workspace.meeting-occurrence.change':
@@ -410,6 +434,43 @@ export class WorkspaceApplication {
         catch (error) {
             const code = error instanceof TypeError ? 'validation' : 'recovery-required';
             return this.problem(code, '无法预览课节规则影响。', requestId);
+        }
+    }
+
+    /**
+     * Routes a future Task split/delete draft to the DATA preview owner without committing facts.
+     * @param {string} requestId - Request correlation identity.
+     * @param {TaskOccurrenceImpactRequest['draft']} draft - Exact future Task change or deletion.
+     * @return {Promise<WorkspaceSetupOutcome>} Impact projection or structured problem.
+     */
+    private async previewTaskOccurrence(
+        requestId: string,
+        draft: TaskOccurrenceImpactRequest['draft'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的任务规则数据。', requestId);
+        }
+
+        try {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.task-occurrence-impact',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: this.dataState.store.previewTaskOccurrenceChange(draft),
+                },
+            };
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法预览任务规则影响。', requestId);
         }
     }
 
@@ -644,7 +705,10 @@ export class WorkspaceApplication {
      * Commits one bounded one-time Task transition and recovers uncertain receipts.
      * @param {string} requestId - Workspace request correlation identity.
      * @param {CreateTaskRequest['command'] | UpdateTaskRequest['command']
-     *     | DeleteTaskRequest['command'] | CompleteTaskRequest['command']} command - Task command.
+     *     | DeleteTaskRequest['command'] | CompleteTaskRequest['command']
+     *     | SetTaskOccurrenceStatusRequest['command'] | SetTaskProgressRequest['command']
+     *     | ChangeTaskOccurrenceRequest['command'] | DeleteTaskOccurrenceOrSeriesRequest['command']
+     *     | UndoTaskOccurrenceStateRequest['command']} command - Task command.
      * @return {Promise<WorkspaceSetupOutcome>} Committed result or structured problem.
      */
     private async commitTask(
@@ -653,7 +717,12 @@ export class WorkspaceApplication {
             | CreateTaskRequest['command']
             | UpdateTaskRequest['command']
             | DeleteTaskRequest['command']
-            | CompleteTaskRequest['command'],
+            | CompleteTaskRequest['command']
+            | SetTaskOccurrenceStatusRequest['command']
+            | SetTaskProgressRequest['command']
+            | ChangeTaskOccurrenceRequest['command']
+            | DeleteTaskOccurrenceOrSeriesRequest['command']
+            | UndoTaskOccurrenceStateRequest['command'],
     ): Promise<WorkspaceSetupOutcome> {
         if (!this.dataState.store) {
             const code = this.dataState.status.kind === 'recovery'
@@ -667,7 +736,19 @@ export class WorkspaceApplication {
                 ? 'plan.task-series-updated' as const
                 : command.intent.kind === 'plan.delete-task-series'
                     ? 'plan.task-series-deleted' as const
-                    : 'plan.task-occurrence-completed' as const;
+                    : command.intent.kind === 'plan.set-task-progress'
+                        ? 'plan.task-progress-set' as const
+                        : command.intent.kind === 'plan.change-task-occurrence'
+                            ? 'plan.task-occurrence-changed' as const
+                        : command.intent.kind === 'plan.delete-task-occurrence-or-series'
+                                ? command.intent.payload.scope === 'whole-series'
+                                    ? 'plan.task-series-deleted' as const
+                                    : 'plan.task-occurrence-deleted' as const
+                                : command.intent.kind === 'plan.undo-task-occurrence-state'
+                                    ? 'plan.task-occurrence-state-undone' as const
+                                    : command.intent.intentSchemaVersion === 1
+                                        ? 'plan.task-occurrence-completed' as const
+                                        : 'plan.task-occurrence-status-set' as const;
 
         try {
             const committed = await this.dataState.store.commit(command, this.options.commitOptions);
@@ -924,7 +1005,12 @@ export class WorkspaceApplication {
             | 'plan.task-series-created'
             | 'plan.task-series-updated'
             | 'plan.task-series-deleted'
-            | 'plan.task-occurrence-completed',
+            | 'plan.task-occurrence-completed'
+            | 'plan.task-occurrence-status-set'
+            | 'plan.task-progress-set'
+            | 'plan.task-occurrence-changed'
+            | 'plan.task-occurrence-deleted'
+            | 'plan.task-occurrence-state-undone',
     ): WorkspaceSetupOutcome {
         const effect = committed.effects[0];
         if (committed.effects.length !== 1
@@ -949,6 +1035,9 @@ export class WorkspaceApplication {
                 },
             }],
             pendingFollowUps: [committed.pendingFollowUps[0]],
+            ...(committed.undoCapability === undefined
+                ? {}
+                : { undoCapability: committed.undoCapability }),
         };
         return {
             ok: true,

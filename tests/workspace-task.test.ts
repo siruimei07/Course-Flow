@@ -11,14 +11,19 @@ import test from 'node:test';
 import { WorkspaceApplication } from '../src/workspace-application';
 import { makeBootstrapRequest } from '../src/shared/bootstrap-contract';
 import {
+    makeChangeTaskOccurrenceRequest,
     makeCompleteTaskRequest,
     makeCreateCourseWithMeetingRequest,
     makeCreateTaskRequest,
     makeCreateTermRequest,
-    makeDeleteTaskRequest,
+    makeDeleteTaskOccurrenceOrSeriesRequest,
     makeInitializeWorkspaceRequest,
+    makeSetTaskOccurrenceStatusRequest,
+    makeSetTaskProgressRequest,
     makeSetupQueryRequest,
+    makeTaskOccurrenceImpactRequest,
     makeTaskSeriesQueryRequest,
+    makeUndoTaskOccurrenceStateRequest,
     makeUpdateTaskRequest,
 } from '../src/shared/workspace-setup-contract';
 
@@ -206,7 +211,14 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
     if (!boundedDetail.ok || boundedDetail.value.kind !== 'workspace.task-series-projection') {
         throw new Error('Expected bounded Task series projection');
     }
-    assert.deepEqual(boundedDetail.value.projection, {
+    const {
+        segments,
+        overrides,
+        historicalStates,
+        occurrences,
+        ...boundedTaskFacts
+    } = boundedDetail.value.projection;
+    assert.deepEqual(boundedTaskFacts, {
         workspaceRevision: '3',
         planEntityVersion: '3',
         requestedWindow: { startDate: '2026-10-01', endDate: '2026-10-31' },
@@ -217,12 +229,35 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
         size: 'small',
         schedule: { deadline: { kind: 'date-only', date: '2026-10-12' }, kind: 'once' },
         entityVersion: '1',
-        occurrences: [{
-            occurrenceId: { taskSeriesId, originalLogicalAnchor: 'once' },
-            deadline: { kind: 'date-only', date: '2026-10-12' },
-            status: 'pending',
-        }],
     });
+    assert.equal(segments.length, 1);
+    const [segment] = segments;
+    assert.deepEqual(segment && {
+        logicalStartAnchor: segment.logicalStartAnchor,
+        logicalEndAnchor: segment.logicalEndAnchor,
+        replacement: segment.replacement,
+    }, {
+        logicalStartAnchor: 'once',
+        logicalEndAnchor: 'once',
+        replacement: {
+            title: 'Submit design review',
+            size: 'small',
+            deadline: { kind: 'date-only', date: '2026-10-12' },
+        },
+    });
+    assert.deepEqual(overrides, []);
+    assert.deepEqual(historicalStates, []);
+    assert.deepEqual(occurrences, [{
+        occurrenceId: { taskSeriesId, originalLogicalAnchor: 'once' },
+        title: 'Submit design review',
+        size: 'small',
+        deadline: { kind: 'date-only', date: '2026-10-12' },
+        segmentId: segment?.segmentId,
+        status: 'pending',
+        reportedProgress: null,
+        displayProgress: null,
+        overrideKind: 'none',
+    }]);
 
     const replayed = await application.handle(makeCreateTaskRequest(
         'replay-task',
@@ -271,6 +306,9 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
         deadline: { kind: 'date-only', date: '2026-10-12' },
         occurrenceId: { taskSeriesId, originalLogicalAnchor: 'once' },
         status: 'pending',
+        reportedProgress: null,
+        displayProgress: null,
+        overrideKind: 'none',
         entityVersion: '1',
     });
 
@@ -402,7 +440,12 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
             },
         },
     ));
-    assert.equal(tba.ok, true);
+    assert.equal(tba.ok, false);
+    if (tba.ok) {
+        throw new Error('Expected terminal Task history edit rejection');
+    }
+    assert.equal(tba.problem.code, 'validation');
+    assert.equal(tba.problem.dataEffect, 'unchanged');
     const tbaProjection = await restarted.handle(makeSetupQueryRequest(
         'query-task-tba',
         APP_BUILD_ID,
@@ -410,25 +453,50 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
     ));
     assert.equal(tbaProjection.ok, true);
     if (!tbaProjection.ok || tbaProjection.value.kind !== 'workspace.setup-projection') {
-        throw new Error('Expected TBA Task projection');
+        throw new Error('Expected unchanged terminal Task projection');
     }
-    assert.deepEqual(tbaProjection.value.projection.tasks[0]?.deadline, { kind: 'tba' });
+    assert.deepEqual(tbaProjection.value.projection.tasks[0]?.deadline, {
+        kind: 'timed',
+        instant: '2026-10-13T03:59:00.000Z',
+        timeZone: 'America/Toronto',
+    });
     assert.deepEqual(tbaProjection.value.projection.tasks[0]?.occurrenceId, initialTask.occurrenceId);
 
-    const deleted = await restarted.handle(makeDeleteTaskRequest(
+    const deletePreview = await restarted.handle(makeTaskOccurrenceImpactRequest(
+        'preview-delete-task',
+        APP_BUILD_ID,
+        restartedBootstrap.workspaceEpoch,
+        {
+            scope: 'whole-series',
+            taskSeriesId,
+            action: 'delete',
+            requestedWindow: { startDate: '2026-10-01', endDate: '2026-10-31' },
+        },
+    ));
+    assert.equal(deletePreview.ok, true, JSON.stringify(deletePreview));
+    if (!deletePreview.ok || deletePreview.value.kind !== 'workspace.task-occurrence-impact') {
+        throw new Error('Expected whole-series Task deletion preview');
+    }
+    assert.deepEqual(deletePreview.value.projection.recoverability, {
+        kind: 'permanent',
+        reason: 'task-deletion-has-no-undo',
+    });
+    const deleted = await restarted.handle(makeDeleteTaskOccurrenceOrSeriesRequest(
         'delete-task',
         APP_BUILD_ID,
         restartedBootstrap.workspaceEpoch,
         {
             commandId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
             followUpId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-            expectedRevision: '6',
-            expectedPlanVersion: '6',
-            expectedTaskSeriesVersion: '4',
+            confirmationToken: deletePreview.value.projection.confirmationToken,
+            impactWindow: deletePreview.value.projection.requestedWindow,
+            expectedRevision: deletePreview.value.projection.basedOnRevision,
+            expectedPlanVersion: deletePreview.value.projection.planEntityVersion,
+            expectedTaskSeriesVersion: deletePreview.value.projection.taskSeriesVersion,
             intent: {
-                kind: 'plan.delete-task-series',
+                kind: 'plan.delete-task-occurrence-or-series',
                 intentSchemaVersion: 1,
-                payload: { taskSeriesId },
+                payload: { taskSeriesId, scope: 'whole-series' },
             },
         },
     ));
@@ -692,7 +760,33 @@ test('TEST-PLAN-001/FLOW-01: Task writes reject invalid scope and unavailable DA
     await t.test('read-only and recovery-required', async (caseTest) => {
         const dataSlotsRoot = createTempDataSlots(caseTest);
         const writable = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
-        const { courseId } = await initializePlan(writable);
+        const { courseId, epoch } = await initializePlan(writable);
+        const created = await writable.handle(makeCreateTaskRequest(
+            'create-task-before-read-only',
+            APP_BUILD_ID,
+            epoch,
+            {
+                commandId: 'abababab-abab-4bab-8bab-abababababab',
+                followUpId: 'bcbcbcbc-bcbc-4cbc-8cbc-bcbcbcbcbcbc',
+                expectedRevision: '2',
+                expectedPlanVersion: '2',
+                intent: {
+                    kind: 'plan.create-task-series',
+                    intentSchemaVersion: 1,
+                    payload: {
+                        courseId,
+                        title: 'Read-only occurrence',
+                        size: 'large',
+                        deadline: { kind: 'date-only', date: '2026-10-12' },
+                    },
+                },
+            },
+        ));
+        assert.equal(created.ok, true);
+        if (!created.ok || created.value.kind !== 'workspace.command-outcome') {
+            throw new Error('Expected Task before read-only reopen');
+        }
+        const taskSeriesId = created.value.outcome.effects[0]!.entity.id;
         await writable.close();
 
         const readOnly = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, { readOnly: true });
@@ -725,6 +819,50 @@ test('TEST-PLAN-001/FLOW-01: Task writes reject invalid scope and unavailable DA
         }
         assert.equal(readOnlyOutcome.problem.code, 'permission');
         assert.equal(readOnlyOutcome.problem.dataEffect, 'unchanged');
+        const readOnlyStatus = await readOnly.handle(makeSetTaskOccurrenceStatusRequest(
+            'complete-task-read-only',
+            APP_BUILD_ID,
+            readOnlyBootstrap.workspaceEpoch,
+            {
+                commandId: 'dededede-dede-4ede-8ede-dededededede',
+                followUpId: 'f0f0f0f0-f0f0-40f0-80f0-f0f0f0f0f0f0',
+                expectedRevision: '3',
+                expectedPlanVersion: '3',
+                expectedTaskSeriesVersion: '1',
+                intent: {
+                    kind: 'plan.set-task-occurrence-status',
+                    intentSchemaVersion: 2,
+                    payload: {
+                        taskSeriesId,
+                        originalLogicalAnchor: 'once',
+                        status: 'completed',
+                    },
+                },
+            },
+        ));
+        assert.equal(readOnlyStatus.ok, false);
+        if (readOnlyStatus.ok) {
+            throw new Error('Expected read-only Task occurrence rejection');
+        }
+        assert.equal(readOnlyStatus.problem.code, 'permission');
+        assert.equal(readOnlyStatus.problem.dataEffect, 'unchanged');
+        const readOnlyPreview = await readOnly.handle(makeTaskOccurrenceImpactRequest(
+            'preview-task-read-only',
+            APP_BUILD_ID,
+            readOnlyBootstrap.workspaceEpoch,
+            {
+                scope: 'whole-series',
+                taskSeriesId,
+                action: 'delete',
+                requestedWindow: { startDate: '2026-10-01', endDate: '2026-10-31' },
+            },
+        ));
+        assert.equal(readOnlyPreview.ok, true, JSON.stringify(readOnlyPreview));
+        if (!readOnlyPreview.ok || readOnlyPreview.value.kind !== 'workspace.task-occurrence-impact') {
+            throw new Error('Expected read-only Task impact preview');
+        }
+        assert.equal(readOnlyPreview.value.dataMode, 'read-only');
+        assert.equal(readOnlyPreview.value.projection.basedOnRevision, '3');
         await readOnly.close();
 
         const corruptRoot = createTempDataSlots(caseTest);
@@ -745,6 +883,50 @@ test('TEST-PLAN-001/FLOW-01: Task writes reject invalid scope and unavailable DA
         }
         assert.equal(recoveryOutcome.problem.code, 'recovery-required');
         assert.equal(recoveryOutcome.problem.dataEffect, 'unchanged');
+        const recoveryStatus = await recovery.handle(makeSetTaskOccurrenceStatusRequest(
+            'complete-task-recovery',
+            APP_BUILD_ID,
+            recoveryBootstrap.workspaceEpoch,
+            {
+                commandId: '12121212-3434-4567-89ab-121212121212',
+                followUpId: '34343434-5656-4789-8abc-343434343434',
+                expectedRevision: '3',
+                expectedPlanVersion: '3',
+                expectedTaskSeriesVersion: '1',
+                intent: {
+                    kind: 'plan.set-task-occurrence-status',
+                    intentSchemaVersion: 2,
+                    payload: {
+                        taskSeriesId,
+                        originalLogicalAnchor: 'once',
+                        status: 'completed',
+                    },
+                },
+            },
+        ));
+        assert.equal(recoveryStatus.ok, false);
+        if (recoveryStatus.ok) {
+            throw new Error('Expected recovery-required Task occurrence rejection');
+        }
+        assert.equal(recoveryStatus.problem.code, 'recovery-required');
+        assert.equal(recoveryStatus.problem.dataEffect, 'unchanged');
+        const recoveryPreview = await recovery.handle(makeTaskOccurrenceImpactRequest(
+            'preview-task-recovery',
+            APP_BUILD_ID,
+            recoveryBootstrap.workspaceEpoch,
+            {
+                scope: 'whole-series',
+                taskSeriesId,
+                action: 'delete',
+                requestedWindow: { startDate: '2026-10-01', endDate: '2026-10-31' },
+            },
+        ));
+        assert.equal(recoveryPreview.ok, false);
+        if (recoveryPreview.ok) {
+            throw new Error('Expected recovery-required Task impact preview rejection');
+        }
+        assert.equal(recoveryPreview.problem.code, 'recovery-required');
+        assert.equal(recoveryPreview.problem.dataEffect, 'unchanged');
         await recovery.close();
     });
 });
@@ -778,4 +960,324 @@ test('TEST-DATA-005: concurrent Task writes preserve writer-busy as retryable', 
     assert.ok(problems.some((problem) => (problem.code as string) === 'operation-in-progress'
         && (problem.details as { reason?: string } | undefined)?.reason === 'writer-busy'));
     await application.close();
+});
+
+test('A-TASK-006/008/009/TEST-FLOW-01-COMMIT: Workspace previews without writing and ' +
+    'recovers Task state receipts', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    let loseStatusResponse = false;
+    const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        commitOptions: {
+            failpoint(point) {
+                if (loseStatusResponse && point === 'commit.after-sqlite-commit') {
+                    loseStatusResponse = false;
+                    throw new Error(point);
+                }
+            },
+        },
+    });
+    const { courseId, epoch } = await initializePlan(application);
+    const created = await application.handle(makeCreateTaskRequest(
+        'create-weekly-task',
+        APP_BUILD_ID,
+        epoch,
+        {
+            commandId: '56565656-5656-4565-8565-565656565656',
+            followUpId: '67676767-6767-4676-8676-676767676767',
+            expectedRevision: '2',
+            expectedPlanVersion: '2',
+            intent: {
+                kind: 'plan.create-task-series',
+                intentSchemaVersion: 2,
+                payload: {
+                    courseId,
+                    title: 'Weekly review',
+                    size: 'large',
+                    schedule: {
+                        kind: 'weekly',
+                        startDate: '2026-09-05',
+                        weekday: 'SAT',
+                        localDeadlineTime: '23:00',
+                        confirmedEndDate: '2026-12-05',
+                        followTeachingWeek: true,
+                    },
+                },
+            },
+        },
+    ));
+    assert.equal(created.ok, true, JSON.stringify(created));
+    if (!created.ok || created.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected weekly Task creation');
+    }
+    const taskSeriesId = created.value.outcome.effects[0]!.entity.id;
+
+    const beforePreview = await application.handle(makeSetupQueryRequest(
+        'before-task-preview',
+        APP_BUILD_ID,
+        epoch,
+    ));
+    assert.equal(beforePreview.ok, true);
+    if (!beforePreview.ok || beforePreview.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected setup projection before preview');
+    }
+    const preview = await application.handle(makeTaskOccurrenceImpactRequest(
+        'task-preview',
+        APP_BUILD_ID,
+        epoch,
+        {
+            scope: 'this-and-future',
+            taskSeriesId,
+            originalLogicalAnchor: '2026-09-12',
+            action: 'change',
+            replacement: {
+                title: 'Revised weekly review',
+                size: 'large',
+                weekday: 'TUE',
+                localDeadlineTime: '22:00',
+                followTeachingWeek: true,
+            },
+            requestedWindow: { startDate: '2026-09-01', endDate: '2026-10-01' },
+        },
+    ));
+    assert.equal(preview.ok, true, JSON.stringify(preview));
+    if (!preview.ok || preview.value.kind !== 'workspace.task-occurrence-impact') {
+        throw new Error('Expected Task occurrence impact preview');
+    }
+    const afterPreview = await application.handle(makeSetupQueryRequest(
+        'after-task-preview',
+        APP_BUILD_ID,
+        epoch,
+    ));
+    assert.equal(afterPreview.ok, true);
+    if (!afterPreview.ok || afterPreview.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected setup projection after preview');
+    }
+    assert.equal(afterPreview.value.projection.workspaceRevision, beforePreview.value.projection.workspaceRevision);
+
+    loseStatusResponse = true;
+    const changed = await application.handle(makeChangeTaskOccurrenceRequest(
+        'confirm-task-preview',
+        APP_BUILD_ID,
+        epoch,
+        {
+            commandId: '90909090-9090-4090-8090-909090909090',
+            followUpId: 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1',
+            confirmationToken: preview.value.projection.confirmationToken,
+            impactWindow: preview.value.projection.requestedWindow,
+            expectedRevision: preview.value.projection.basedOnRevision,
+            expectedPlanVersion: preview.value.projection.planEntityVersion,
+            expectedTaskSeriesVersion: preview.value.projection.taskSeriesVersion,
+            intent: {
+                kind: 'plan.change-task-occurrence',
+                intentSchemaVersion: 1,
+                payload: {
+                    taskSeriesId,
+                    originalLogicalAnchor: '2026-09-12',
+                    scope: 'this-and-future',
+                    replacement: {
+                        title: 'Revised weekly review',
+                        size: 'large',
+                        weekday: 'TUE',
+                        localDeadlineTime: '22:00',
+                        followTeachingWeek: true,
+                    },
+                },
+            },
+        },
+    ));
+    assert.equal(changed.ok, true, JSON.stringify(changed));
+    if (!changed.ok || changed.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected confirmed Task occurrence change');
+    }
+    assert.equal(changed.value.outcome.effects[0]?.code, 'plan.task-occurrence-changed');
+    assert.deepEqual(
+        changed.value.outcome.pendingFollowUps,
+        ['a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1'],
+    );
+    const afterChange = await application.handle(makeTaskSeriesQueryRequest(
+        'query-task-after-split',
+        APP_BUILD_ID,
+        epoch,
+        taskSeriesId,
+        { startDate: '2026-09-01', endDate: '2026-10-01' },
+    ));
+    assert.equal(afterChange.ok, true, JSON.stringify(afterChange));
+    if (!afterChange.ok || afterChange.value.kind !== 'workspace.task-series-projection') {
+        throw new Error('Expected Task projection after confirmed split');
+    }
+    assert.equal(afterChange.value.projection.segments.length, 2);
+    assert.equal(afterChange.value.projection.occurrences[0]?.title, 'Weekly review');
+    assert.equal(afterChange.value.projection.occurrences[1]?.title, 'Revised weekly review');
+
+    const statusCommand = {
+        commandId: '78787878-7878-4787-8787-787878787878',
+        followUpId: '89898989-8989-4989-8989-898989898989',
+        expectedRevision: '4',
+        expectedPlanVersion: '4',
+        expectedTaskSeriesVersion: '2',
+        intent: {
+            kind: 'plan.set-task-occurrence-status' as const,
+            intentSchemaVersion: 2 as const,
+            payload: {
+                taskSeriesId,
+                originalLogicalAnchor: '2026-09-05',
+                status: 'completed' as const,
+            },
+        },
+    };
+    loseStatusResponse = true;
+    const status = await application.handle(makeSetTaskOccurrenceStatusRequest(
+        'complete-weekly-task',
+        APP_BUILD_ID,
+        epoch,
+        statusCommand,
+    ));
+    assert.equal(status.ok, true, JSON.stringify(status));
+    if (!status.ok || status.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected recovered Task state receipt');
+    }
+    assert.equal(status.value.outcome.effects[0]?.code, 'plan.task-occurrence-status-set');
+    const undoCapability = status.value.outcome.undoCapability;
+    assert.ok(undoCapability);
+    assert.notEqual(undoCapability.token, '');
+    assert.deepEqual({
+        ...undoCapability,
+        token: '<durable-token>',
+    }, {
+        token: '<durable-token>',
+        taskSeriesId,
+        originalLogicalAnchor: '2026-09-05',
+        committedRevision: '5',
+        validThroughTaskSeriesVersion: '3',
+    });
+    await application.close();
+
+    const restartedAfterStatus = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
+    const restartedStatusBootstrap = await bootstrap(restartedAfterStatus);
+    const recoveredStatus = await restartedAfterStatus.handle(makeSetTaskOccurrenceStatusRequest(
+        'recover-complete-weekly-task-after-restart',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        statusCommand,
+    ));
+    assert.equal(recoveredStatus.ok, true, JSON.stringify(recoveredStatus));
+    if (!recoveredStatus.ok || recoveredStatus.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected durable Task state receipt after Workspace restart');
+    }
+    assert.deepEqual(recoveredStatus.value.outcome, status.value.outcome);
+    const undoCommand = {
+        commandId: 'b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2',
+        followUpId: 'c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3',
+        expectedRevision: '5',
+        expectedPlanVersion: '5',
+        expectedTaskSeriesVersion: '3',
+        intent: {
+            kind: 'plan.undo-task-occurrence-state' as const,
+            intentSchemaVersion: 1 as const,
+            payload: {
+                token: undoCapability.token,
+                taskSeriesId,
+                originalLogicalAnchor: '2026-09-05',
+            },
+        },
+    };
+    const undone = await restartedAfterStatus.handle(makeUndoTaskOccurrenceStateRequest(
+        'undo-complete-weekly-task',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        undoCommand,
+    ));
+    assert.equal(undone.ok, true, JSON.stringify(undone));
+    if (!undone.ok || undone.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected Task occurrence Undo');
+    }
+    assert.equal(undone.value.outcome.effects[0]?.code, 'plan.task-occurrence-state-undone');
+    assert.deepEqual(
+        undone.value.outcome.pendingFollowUps,
+        ['c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3'],
+    );
+    const replayedUndo = await restartedAfterStatus.handle(makeUndoTaskOccurrenceStateRequest(
+        'replay-undo-complete-weekly-task',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        undoCommand,
+    ));
+    assert.equal(replayedUndo.ok, true, JSON.stringify(replayedUndo));
+    if (!replayedUndo.ok || replayedUndo.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected idempotent Task Undo receipt replay');
+    }
+    assert.deepEqual(replayedUndo.value.outcome, undone.value.outcome);
+    const afterUndo = await restartedAfterStatus.handle(makeTaskSeriesQueryRequest(
+        'query-task-after-undo',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        taskSeriesId,
+        { startDate: '2026-09-01', endDate: '2026-10-01' },
+    ));
+    assert.equal(afterUndo.ok, true, JSON.stringify(afterUndo));
+    if (!afterUndo.ok || afterUndo.value.kind !== 'workspace.task-series-projection') {
+        throw new Error('Expected Task projection after Undo');
+    }
+    assert.equal(afterUndo.value.projection.occurrences[0]?.status, 'pending');
+    assert.equal(afterUndo.value.projection.occurrences[0]?.reportedProgress, null);
+    assert.equal(afterUndo.value.projection.occurrences[0]?.displayProgress, null);
+    const reusedUndo = await restartedAfterStatus.handle(makeUndoTaskOccurrenceStateRequest(
+        'reuse-undo-complete-weekly-task',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        {
+            ...undoCommand,
+            commandId: 'd4d4d4d4-d4d4-44d4-84d4-d4d4d4d4d4d4',
+            followUpId: 'e5e5e5e5-e5e5-45e5-85e5-e5e5e5e5e5e5',
+            expectedRevision: '6',
+            expectedPlanVersion: '6',
+            expectedTaskSeriesVersion: '4',
+        },
+    ));
+    assert.equal(reusedUndo.ok, false);
+    if (reusedUndo.ok) {
+        throw new Error('Expected one-time Task Undo conflict');
+    }
+    assert.equal(reusedUndo.problem.code, 'conflict');
+    assert.equal(reusedUndo.problem.dataEffect, 'unchanged');
+    const progressed = await restartedAfterStatus.handle(makeSetTaskProgressRequest(
+        'set-weekly-task-progress',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        {
+            commandId: 'f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6',
+            followUpId: '17171717-2828-4717-8717-171717171717',
+            expectedRevision: '6',
+            expectedPlanVersion: '6',
+            expectedTaskSeriesVersion: '4',
+            intent: {
+                kind: 'plan.set-task-progress',
+                intentSchemaVersion: 1,
+                payload: {
+                    taskSeriesId,
+                    originalLogicalAnchor: '2026-09-05',
+                    reportedProgress: 35,
+                },
+            },
+        },
+    ));
+    assert.equal(progressed.ok, true, JSON.stringify(progressed));
+    if (!progressed.ok || progressed.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected large Task progress commit');
+    }
+    assert.equal(progressed.value.outcome.effects[0]?.code, 'plan.task-progress-set');
+    const afterProgress = await restartedAfterStatus.handle(makeTaskSeriesQueryRequest(
+        'query-task-after-progress',
+        APP_BUILD_ID,
+        restartedStatusBootstrap.workspaceEpoch,
+        taskSeriesId,
+        { startDate: '2026-09-01', endDate: '2026-10-01' },
+    ));
+    assert.equal(afterProgress.ok, true, JSON.stringify(afterProgress));
+    if (!afterProgress.ok || afterProgress.value.kind !== 'workspace.task-series-projection') {
+        throw new Error('Expected Task projection after progress');
+    }
+    assert.equal(afterProgress.value.projection.occurrences[0]?.reportedProgress, 35);
+    assert.equal(afterProgress.value.projection.occurrences[0]?.displayProgress, 35);
+    await restartedAfterStatus.close();
 });
