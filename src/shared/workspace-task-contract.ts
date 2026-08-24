@@ -1,9 +1,15 @@
 /**
- * @file Defines once-task facts, command DTOs, stable identity, and receipt digest projections.
+ * @file Defines Task facts, command DTOs, stable identity, and receipt digest projections.
  */
 
 import type { CanonicalValue } from './canonical-json';
-import { isCanonicalInstant } from './meeting-time';
+import {
+    isMeetingOccurrenceWindow,
+    normalizeMeetingOccurrenceWindow,
+    type MeetingOccurrenceWindow,
+    type MeetingWeekday,
+} from './workspace-course-contract';
+import { INTL_ZONE_RULES, isCanonicalInstant } from './meeting-time';
 import {
     isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
@@ -17,21 +23,88 @@ export type TaskDeadline =
     | Readonly<{ kind: 'timed'; instant: string; timeZone: string }>
     | Readonly<{ kind: 'tba' }>;
 
-export type TaskOccurrenceId = Readonly<{
-    taskSeriesId: string;
-    originalLogicalAnchor: 'once';
+export type WeeklyTaskSchedule = Readonly<{
+    kind: 'weekly';
+    startDate: string;
+    weekday: MeetingWeekday;
+    localDeadlineTime: string;
+    confirmedEndDate: string;
+    followTeachingWeek: boolean;
 }>;
 
-export type TaskProjection = Readonly<{
+export type OnceTaskSchedule = Readonly<{
+    kind: 'once';
+    deadline: TaskDeadline;
+}>;
+
+export type TaskSchedule =
+    | OnceTaskSchedule
+    | WeeklyTaskSchedule;
+
+export type TaskOccurrenceWindow = MeetingOccurrenceWindow;
+
+export type TaskOccurrenceId = Readonly<{
+    taskSeriesId: string;
+    originalLogicalAnchor: string;
+}>;
+
+type TaskProjectionBase = Readonly<{
     taskSeriesId: string;
     courseId: string;
     title: string;
     size: TaskSize;
-    deadline: TaskDeadline;
-    occurrenceId: TaskOccurrenceId;
-    status: 'pending' | 'completed';
     entityVersion: string;
 }>;
+
+export type TaskProjection =
+    | TaskProjectionBase & Readonly<{
+        deadline: TaskDeadline;
+        occurrenceId: TaskOccurrenceId;
+        status: 'pending' | 'completed';
+    }>
+    | TaskProjectionBase & Readonly<{
+        schedule: WeeklyTaskSchedule;
+        deadline?: never;
+        occurrenceId?: never;
+        status?: never;
+    }>;
+
+export type OnceTaskOccurrenceProjection = Readonly<{
+    occurrenceId: TaskOccurrenceId;
+    deadline: TaskDeadline;
+    status: 'pending' | 'completed';
+}>;
+
+export type WeeklyTaskOccurrenceProjection = Readonly<{
+    occurrenceId: TaskOccurrenceId;
+    deadline: TaskDeadline;
+}>;
+
+export type TaskOccurrenceProjection =
+    | OnceTaskOccurrenceProjection
+    | WeeklyTaskOccurrenceProjection;
+
+type TaskSeriesDetailProjectionBase = Readonly<{
+    workspaceRevision: string;
+    planEntityVersion: string;
+    requestedWindow: TaskOccurrenceWindow;
+    termZone: string;
+    taskSeriesId: string;
+    courseId: string;
+    title: string;
+    size: TaskSize;
+    entityVersion: string;
+}>;
+
+export type TaskSeriesDetailProjection =
+    | TaskSeriesDetailProjectionBase & Readonly<{
+        schedule: OnceTaskSchedule;
+        occurrences: readonly OnceTaskOccurrenceProjection[];
+    }>
+    | TaskSeriesDetailProjectionBase & Readonly<{
+        schedule: WeeklyTaskSchedule;
+        occurrences: readonly WeeklyTaskOccurrenceProjection[];
+    }>;
 
 type TaskCommandBase = Readonly<{
     commandId: string;
@@ -44,28 +117,53 @@ type ExistingTaskCommandBase = TaskCommandBase & Readonly<{
     expectedTaskSeriesVersion: string;
 }>;
 
-type TaskFacts = Readonly<{
+type OnceTaskFacts = Readonly<{
     courseId: string;
     title: string;
     size: TaskSize;
     deadline: TaskDeadline;
 }>;
 
-export type CreateTaskCommand = TaskCommandBase & Readonly<{
-    intent: Readonly<{
-        kind: 'plan.create-task-series';
-        intentSchemaVersion: 1;
-        payload: TaskFacts;
-    }>;
+type ScheduledTaskFacts = Readonly<{
+    courseId: string;
+    title: string;
+    size: TaskSize;
+    schedule: TaskSchedule;
 }>;
 
-export type UpdateTaskCommand = ExistingTaskCommandBase & Readonly<{
-    intent: Readonly<{
-        kind: 'plan.update-task-series';
-        intentSchemaVersion: 1;
-        payload: TaskFacts & Readonly<{ taskSeriesId: string }>;
-    }>;
-}>;
+export type CreateTaskCommand = TaskCommandBase & (
+    | Readonly<{
+        intent: Readonly<{
+            kind: 'plan.create-task-series';
+            intentSchemaVersion: 1;
+            payload: OnceTaskFacts;
+        }>;
+    }>
+    | Readonly<{
+        intent: Readonly<{
+            kind: 'plan.create-task-series';
+            intentSchemaVersion: 2;
+            payload: ScheduledTaskFacts;
+        }>;
+    }>
+);
+
+export type UpdateTaskCommand = ExistingTaskCommandBase & (
+    | Readonly<{
+        intent: Readonly<{
+            kind: 'plan.update-task-series';
+            intentSchemaVersion: 1;
+            payload: OnceTaskFacts & Readonly<{ taskSeriesId: string }>;
+        }>;
+    }>
+    | Readonly<{
+        intent: Readonly<{
+            kind: 'plan.update-task-series';
+            intentSchemaVersion: 2;
+            payload: ScheduledTaskFacts & Readonly<{ taskSeriesId: string }>;
+        }>;
+    }>
+);
 
 export type DeleteTaskCommand = ExistingTaskCommandBase & Readonly<{
     intent: Readonly<{
@@ -94,6 +192,26 @@ export type TaskCommand =
     | CompleteTaskCommand;
 
 const MAX_TASK_TITLE_LENGTH = 240;
+const TASK_WEEKDAYS = new Set<MeetingWeekday>([
+    'MON',
+    'TUE',
+    'WED',
+    'THU',
+    'FRI',
+    'SAT',
+    'SUN',
+]);
+const LOCAL_TIME_PATTERN = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/;
+const MAX_TASK_OCCURRENCE_ITEMS = 54;
+const TASK_WEEKDAY_NUMBERS: Readonly<Record<MeetingWeekday, number>> = Object.freeze({
+    SUN: 0,
+    MON: 1,
+    TUE: 2,
+    WED: 3,
+    THU: 4,
+    FRI: 5,
+    SAT: 6,
+});
 
 /**
  * Narrows an untrusted value to a plain object with exact enumerable data keys.
@@ -119,6 +237,25 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
             const descriptor = descriptors[key];
             return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
         });
+}
+
+/**
+ * Rejects sparse arrays and arrays carrying structured-clone properties beyond indexed values.
+ * @param {unknown} value - Candidate array crossing the Workspace boundary.
+ * @return {boolean} Whether every slot is one enumerable data property and no extras exist.
+ */
+function isDenseArray(value: unknown): value is unknown[] {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+        return false;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (Reflect.ownKeys(descriptors).length !== value.length + 1) {
+        return false;
+    }
+    return Array.from({ length: value.length }, (_, index) => String(index)).every(key => {
+        const descriptor = descriptors[key];
+        return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
+    });
 }
 
 /**
@@ -187,7 +324,207 @@ function isCanonicalTaskDeadline(value: unknown): value is TaskDeadline {
 }
 
 /**
- * Normalizes one Course-linked once-task fact payload.
+ * Normalizes the exact once-or-weekly Task schedule union.
+ * @param {unknown} value - Candidate Task schedule.
+ * @return {TaskSchedule | null} Canonical schedule, or null when invalid.
+ */
+export function normalizeTaskSchedule(value: unknown): TaskSchedule | null {
+    if (hasExactDataKeys(value, ['kind', 'deadline']) && value.kind === 'once') {
+        const deadline = normalizeTaskDeadline(value.deadline);
+        return deadline === null ? null : { kind: 'once', deadline };
+    }
+    if (!hasExactDataKeys(value, [
+        'kind',
+        'startDate',
+        'weekday',
+        'localDeadlineTime',
+        'confirmedEndDate',
+        'followTeachingWeek',
+    ])
+        || value.kind !== 'weekly'
+        || !isCanonicalLocalDate(value.startDate)
+        || !TASK_WEEKDAYS.has(value.weekday as MeetingWeekday)
+        || typeof value.localDeadlineTime !== 'string'
+        || !LOCAL_TIME_PATTERN.test(value.localDeadlineTime)
+        || !isCanonicalLocalDate(value.confirmedEndDate)
+        || value.confirmedEndDate < value.startDate
+        || typeof value.followTeachingWeek !== 'boolean') {
+        return null;
+    }
+    return {
+        kind: 'weekly',
+        startDate: value.startDate,
+        weekday: value.weekday as MeetingWeekday,
+        localDeadlineTime: value.localDeadlineTime,
+        confirmedEndDate: value.confirmedEndDate,
+        followTeachingWeek: value.followTeachingWeek,
+    };
+}
+
+/**
+ * Validates that a schedule is already in canonical DTO form.
+ * @param {unknown} value - Candidate Task schedule.
+ * @return {boolean} Whether the schedule has exact canonical fields.
+ */
+function isCanonicalTaskSchedule(value: unknown): value is TaskSchedule {
+    const schedule = normalizeTaskSchedule(value);
+    if (schedule === null) {
+        return false;
+    }
+    if (schedule.kind === 'once') {
+        return hasExactDataKeys(value, ['kind', 'deadline'])
+            && isCanonicalTaskDeadline(value.deadline);
+    }
+    return hasExactDataKeys(value, [
+        'kind',
+        'startDate',
+        'weekday',
+        'localDeadlineTime',
+        'confirmedEndDate',
+        'followTeachingWeek',
+    ])
+        && value.startDate === schedule.startDate
+        && value.weekday === schedule.weekday
+        && value.localDeadlineTime === schedule.localDeadlineTime
+        && value.confirmedEndDate === schedule.confirmedEndDate
+        && value.followTeachingWeek === schedule.followTeachingWeek;
+}
+
+/**
+ * Normalizes the bounded physical-date window used to expand Task occurrences.
+ * @param {unknown} value - Candidate expansion window.
+ * @return {TaskOccurrenceWindow} Frozen canonical window.
+ */
+export function normalizeTaskOccurrenceWindow(value: unknown): TaskOccurrenceWindow {
+    return normalizeMeetingOccurrenceWindow(value);
+}
+
+/**
+ * Validates the bounded physical-date window used to expand Task occurrences.
+ * @param {unknown} value - Candidate expansion window.
+ * @return {boolean} Whether the window is exact, canonical, ordered, and bounded.
+ */
+export function isTaskOccurrenceWindow(value: unknown): value is TaskOccurrenceWindow {
+    return isMeetingOccurrenceWindow(value);
+}
+
+/**
+ * Tests whether one canonical LocalDate matches a weekly Task weekday.
+ * @param {string} localDate - Candidate occurrence anchor.
+ * @param {MeetingWeekday} weekday - Required weekly weekday.
+ * @return {boolean} Whether the LocalDate falls on the requested weekday.
+ */
+function matchesWeekday(localDate: string, weekday: MeetingWeekday): boolean {
+    return new Date(`${localDate}T00:00:00.000Z`).getUTCDay() === TASK_WEEKDAY_NUMBERS[weekday];
+}
+
+/**
+ * Validates one derived occurrence against its owning Task schedule and TermZone.
+ * @param {unknown} value - Candidate occurrence DTO.
+ * @param {string} taskSeriesId - Owning Task series identity.
+ * @param {TaskSchedule} schedule - Canonical owning schedule.
+ * @param {TaskOccurrenceWindow} requestedWindow - Bounded expansion window.
+ * @param {string} termZone - Explicit owning TermZone.
+ * @return {boolean} Whether identity, deadline, and schedule-owned fields are coherent.
+ */
+function isTaskOccurrenceProjection(
+    value: unknown,
+    taskSeriesId: string,
+    schedule: TaskSchedule,
+    requestedWindow: TaskOccurrenceWindow,
+    termZone: string,
+): value is TaskOccurrenceProjection {
+    const expectedKeys = schedule.kind === 'once'
+        ? ['occurrenceId', 'deadline', 'status']
+        : ['occurrenceId', 'deadline'];
+    if (!hasExactDataKeys(value, expectedKeys)
+        || !hasExactDataKeys(value.occurrenceId, ['taskSeriesId', 'originalLogicalAnchor'])
+        || value.occurrenceId.taskSeriesId !== taskSeriesId
+        || !isCanonicalTaskDeadline(value.deadline)) {
+        return false;
+    }
+    const anchor = value.occurrenceId.originalLogicalAnchor;
+    if (schedule.kind === 'once') {
+        return anchor === 'once'
+            && (value.status === 'pending' || value.status === 'completed')
+            && JSON.stringify(value.deadline) === JSON.stringify(schedule.deadline);
+    }
+    if (!isCanonicalLocalDate(anchor)
+        || anchor < schedule.startDate
+        || anchor > schedule.confirmedEndDate
+        || anchor < requestedWindow.startDate
+        || anchor > requestedWindow.endDate
+        || !matchesWeekday(anchor, schedule.weekday)
+        || value.deadline.kind !== 'timed'
+        || value.deadline.timeZone !== termZone) {
+        return false;
+    }
+    return value.deadline.instant === INTL_ZONE_RULES.resolveInstant(
+        termZone,
+        anchor,
+        schedule.localDeadlineTime,
+    );
+}
+
+/**
+ * Validates one bounded Task series detail crossing the Workspace query seam.
+ * @param {unknown} value - Candidate Task series detail.
+ * @return {boolean} Whether the projection is exact and internally coherent.
+ */
+export function isTaskSeriesDetailProjection(value: unknown): value is TaskSeriesDetailProjection {
+    if (!hasExactDataKeys(value, [
+        'workspaceRevision',
+        'planEntityVersion',
+        'requestedWindow',
+        'termZone',
+        'taskSeriesId',
+        'courseId',
+        'title',
+        'size',
+        'schedule',
+        'entityVersion',
+        'occurrences',
+    ])
+        || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
+        || !isTaskOccurrenceWindow(value.requestedWindow)
+        || canonicalTimeZone(value.termZone) !== value.termZone
+        || !isCanonicalUuid(value.taskSeriesId)
+        || !isCanonicalUuid(value.courseId)
+        || typeof value.title !== 'string'
+        || value.title.length === 0
+        || value.title.length > MAX_TASK_TITLE_LENGTH
+        || value.title !== value.title.trim()
+        || (value.size !== 'small' && value.size !== 'large')
+        || !isCanonicalTaskSchedule(value.schedule)
+        || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
+        || value.entityVersion === '0'
+        || !isDenseArray(value.occurrences)
+        || value.occurrences.length > MAX_TASK_OCCURRENCE_ITEMS) {
+        return false;
+    }
+    const occurrences = value.occurrences as unknown[];
+    if (value.schedule.kind === 'once' && occurrences.length !== 1) {
+        return false;
+    }
+    if (!occurrences.every(occurrence => isTaskOccurrenceProjection(
+        occurrence,
+        value.taskSeriesId as string,
+        value.schedule as TaskSchedule,
+        value.requestedWindow as TaskOccurrenceWindow,
+        value.termZone as string,
+    ))) {
+        return false;
+    }
+    const anchors = occurrences.map(occurrence => (
+        (occurrence as TaskOccurrenceProjection).occurrenceId.originalLogicalAnchor
+    ));
+    return new Set(anchors).size === anchors.length
+        && anchors.every((anchor, index) => index === 0 || anchor > anchors[index - 1]!);
+}
+
+/**
+ * Normalizes one Course-linked Task fact payload for the requested schema version.
  * @param {unknown} value - Candidate Task facts.
  * @param {boolean} includeTaskSeriesId - Whether the payload targets an existing Task series.
  * @return {TaskFacts & Record<string, unknown> | null} Canonical facts, or null when invalid.
@@ -195,10 +532,12 @@ function isCanonicalTaskDeadline(value: unknown): value is TaskDeadline {
 function normalizeTaskFacts(
     value: unknown,
     includeTaskSeriesId: boolean,
-): (TaskFacts & Record<string, unknown>) | null {
+    intentSchemaVersion: 1 | 2,
+): Record<string, unknown> | null {
+    const scheduleKey = intentSchemaVersion === 1 ? 'deadline' : 'schedule';
     const expectedKeys = includeTaskSeriesId
-        ? ['taskSeriesId', 'courseId', 'title', 'size', 'deadline']
-        : ['courseId', 'title', 'size', 'deadline'];
+        ? ['taskSeriesId', 'courseId', 'title', 'size', scheduleKey]
+        : ['courseId', 'title', 'size', scheduleKey];
     if (!hasExactDataKeys(value, expectedKeys)
         || !isCanonicalUuid(value.courseId)
         || (includeTaskSeriesId && !isCanonicalUuid(value.taskSeriesId))
@@ -207,14 +546,17 @@ function normalizeTaskFacts(
     }
 
     const title = typeof value.title === 'string' ? value.title.trim() : '';
-    const deadline = normalizeTaskDeadline(value.deadline);
-    if (title.length === 0 || title.length > MAX_TASK_TITLE_LENGTH || deadline === null) {
+    const schedule = intentSchemaVersion === 1
+        ? normalizeTaskDeadline(value.deadline)
+        : normalizeTaskSchedule(value.schedule);
+    if (title.length === 0 || title.length > MAX_TASK_TITLE_LENGTH || schedule === null) {
         return null;
     }
 
-    return includeTaskSeriesId
-        ? { taskSeriesId: value.taskSeriesId, courseId: value.courseId, title, size: value.size, deadline }
-        : { courseId: value.courseId, title, size: value.size, deadline };
+    const facts = intentSchemaVersion === 1
+        ? { courseId: value.courseId, title, size: value.size, deadline: schedule }
+        : { courseId: value.courseId, title, size: value.size, schedule };
+    return includeTaskSeriesId ? { taskSeriesId: value.taskSeriesId, ...facts } : facts;
 }
 
 /**
@@ -250,54 +592,64 @@ function normalizeCommandBase(
 }
 
 /**
- * Derives the once-task occurrence identity without a stored occurrence row.
+ * Derives a stable Task occurrence identity without a stored ordinary occurrence row.
  * @param {string} taskSeriesId - Stable Task series identity.
  * @return {TaskOccurrenceId} Frozen stable tuple identity.
  */
-export function deriveTaskOccurrenceId(taskSeriesId: string): TaskOccurrenceId {
-    if (!isCanonicalUuid(taskSeriesId)) {
-        throw new TypeError('TaskOccurrenceId requires a canonical TaskSeriesId');
+export function deriveTaskOccurrenceId(
+    taskSeriesId: string,
+    originalLogicalAnchor: string = 'once',
+): TaskOccurrenceId {
+    if (!isCanonicalUuid(taskSeriesId)
+        || (originalLogicalAnchor !== 'once' && !isCanonicalLocalDate(originalLogicalAnchor))) {
+        throw new TypeError('TaskOccurrenceId requires a canonical series and logical anchor');
     }
-    return Object.freeze({ taskSeriesId, originalLogicalAnchor: 'once' });
+    return Object.freeze({ taskSeriesId, originalLogicalAnchor });
 }
 
 /**
- * Validates the active once-task projection crossing the Workspace query seam.
+ * Validates an active Task summary projection crossing the Workspace query seam.
  * @param {unknown} value - Candidate Task projection.
  * @return {boolean} Whether the projection is exact and canonical.
  */
 export function isTaskProjection(value: unknown): value is TaskProjection {
-    if (!hasExactDataKeys(value, [
+    const commonKeys = [
         'taskSeriesId',
         'courseId',
         'title',
         'size',
-        'deadline',
-        'occurrenceId',
-        'status',
         'entityVersion',
-    ])
-        || !isCanonicalUuid(value.taskSeriesId)
+    ];
+    if (!hasExactDataKeys(value, [...commonKeys, 'deadline', 'occurrenceId', 'status'])
+        && !hasExactDataKeys(value, [...commonKeys, 'schedule'])) {
+        return false;
+    }
+    if (!isCanonicalUuid(value.taskSeriesId)
         || !isCanonicalUuid(value.courseId)
         || typeof value.title !== 'string'
         || value.title.length === 0
         || value.title.length > MAX_TASK_TITLE_LENGTH
         || value.title !== value.title.trim()
         || (value.size !== 'small' && value.size !== 'large')
-        || !isCanonicalTaskDeadline(value.deadline)
+        || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
+        || value.entityVersion === '0') {
+        return false;
+    }
+    if ('schedule' in value) {
+        return isCanonicalTaskSchedule(value.schedule) && value.schedule.kind === 'weekly';
+    }
+    if (!isCanonicalTaskDeadline(value.deadline)
         || !hasExactDataKeys(value.occurrenceId, ['taskSeriesId', 'originalLogicalAnchor'])
         || value.occurrenceId.taskSeriesId !== value.taskSeriesId
         || value.occurrenceId.originalLogicalAnchor !== 'once'
-        || (value.status !== 'pending' && value.status !== 'completed')
-        || !isCanonicalUnsignedSqliteInteger(value.entityVersion)
-        || value.entityVersion === '0') {
+        || (value.status !== 'pending' && value.status !== 'completed')) {
         return false;
     }
     return true;
 }
 
 /**
- * Normalizes a Course-linked once Task creation command.
+ * Normalizes a Course-linked Task creation command.
  * @param {unknown} value - Candidate command DTO.
  * @return {CreateTaskCommand} Canonical Task creation command.
  */
@@ -305,28 +657,30 @@ export function normalizeCreateTaskCommand(value: unknown): CreateTaskCommand {
     const base = normalizeCommandBase(value, false);
     if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
         || base.intent.kind !== 'plan.create-task-series'
-        || base.intent.intentSchemaVersion !== 1) {
+        || (base.intent.intentSchemaVersion !== 1 && base.intent.intentSchemaVersion !== 2)) {
         throw new TypeError('Create Task command has invalid intent');
     }
-    const task = normalizeTaskFacts(base.intent.payload, false);
+    const intentSchemaVersion = base.intent.intentSchemaVersion;
+    const task = normalizeTaskFacts(base.intent.payload, false, intentSchemaVersion);
     if (task === null) {
         throw new TypeError('Create Task command has invalid Task facts');
     }
-    return {
+    const command = {
         commandId: base.commandId,
         followUpId: base.followUpId,
         expectedRevision: base.expectedRevision,
         expectedPlanVersion: base.expectedPlanVersion,
         intent: {
             kind: 'plan.create-task-series',
-            intentSchemaVersion: 1,
+            intentSchemaVersion,
             payload: task,
         },
     };
+    return command as CreateTaskCommand;
 }
 
 /**
- * Normalizes an existing once Task edit command.
+ * Normalizes an existing Task edit command.
  * @param {unknown} value - Candidate command DTO.
  * @return {UpdateTaskCommand} Canonical Task update command.
  */
@@ -334,14 +688,30 @@ export function normalizeUpdateTaskCommand(value: unknown): UpdateTaskCommand {
     const base = normalizeCommandBase(value, true);
     if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
         || base.intent.kind !== 'plan.update-task-series'
-        || base.intent.intentSchemaVersion !== 1) {
+        || (base.intent.intentSchemaVersion !== 1 && base.intent.intentSchemaVersion !== 2)) {
         throw new TypeError('Update Task command has invalid intent');
     }
-    const task = normalizeTaskFacts(base.intent.payload, true);
+    const intentSchemaVersion = base.intent.intentSchemaVersion;
+    const task = normalizeTaskFacts(base.intent.payload, true, intentSchemaVersion);
     if (task === null || typeof task.taskSeriesId !== 'string') {
         throw new TypeError('Update Task command has invalid Task facts');
     }
-    return {
+    const payload = intentSchemaVersion === 1
+        ? {
+            taskSeriesId: task.taskSeriesId,
+            courseId: task.courseId,
+            title: task.title,
+            size: task.size,
+            deadline: task.deadline,
+        }
+        : {
+            taskSeriesId: task.taskSeriesId,
+            courseId: task.courseId,
+            title: task.title,
+            size: task.size,
+            schedule: task.schedule,
+        };
+    const command = {
         commandId: base.commandId,
         followUpId: base.followUpId,
         expectedRevision: base.expectedRevision,
@@ -349,20 +719,15 @@ export function normalizeUpdateTaskCommand(value: unknown): UpdateTaskCommand {
         expectedTaskSeriesVersion: base.expectedTaskSeriesVersion as string,
         intent: {
             kind: 'plan.update-task-series',
-            intentSchemaVersion: 1,
-            payload: {
-                taskSeriesId: task.taskSeriesId,
-                courseId: task.courseId,
-                title: task.title,
-                size: task.size,
-                deadline: task.deadline,
-            },
+            intentSchemaVersion,
+            payload,
         },
     };
+    return command as UpdateTaskCommand;
 }
 
 /**
- * Normalizes a once Task series deletion command.
+ * Normalizes a Task series deletion command.
  * @param {unknown} value - Candidate command DTO.
  * @return {DeleteTaskCommand} Canonical Task deletion command.
  */

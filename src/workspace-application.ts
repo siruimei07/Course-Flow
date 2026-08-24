@@ -39,6 +39,7 @@ import {
     type UpdateTermEndDateRequest,
     type UpdateHolidayRangeRequest,
     type UpdateTaskRequest,
+    type TaskSeriesQueryRequest,
     type WorkspaceCommandResult,
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblem,
@@ -152,6 +153,7 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.task.update'
                         || requestKind === 'workspace.task.delete'
                         || requestKind === 'workspace.task.complete'
+                        || requestKind === 'workspace.task-series.query'
                         || requestKind === 'workspace.course.create-with-first-meeting'
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
@@ -193,6 +195,12 @@ export class WorkspaceApplication {
                 return this.queryMeetingSeries(
                     request.requestId,
                     request.meetingSeriesId,
+                    request.requestedWindow,
+                );
+            case 'workspace.task-series.query':
+                return this.queryTaskSeries(
+                    request.requestId,
+                    request.taskSeriesId,
                     request.requestedWindow,
                 );
             case 'workspace.meeting-occurrence.preview':
@@ -326,6 +334,45 @@ export class WorkspaceApplication {
         catch (error) {
             const code = error instanceof TypeError ? 'validation' : 'recovery-required';
             return this.problem(code, '无法读取一致的课节规则数据。', requestId);
+        }
+    }
+
+    /**
+     * Routes a bounded Task series query to DATA and wraps its Workspace outcome.
+     * @param {string} requestId - Request correlation identity.
+     * @param {string} taskSeriesId - Stable Task series identity.
+     * @param {TaskSeriesQueryRequest['requestedWindow']} requestedWindow - Requested physical-date window.
+     * @return {Promise<WorkspaceSetupOutcome>} Query projection or structured problem.
+     */
+    private async queryTaskSeries(
+        requestId: string,
+        taskSeriesId: TaskSeriesQueryRequest['taskSeriesId'],
+        requestedWindow: TaskSeriesQueryRequest['requestedWindow'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的任务规则数据。', requestId);
+        }
+
+        try {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.task-series-projection',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: this.dataState.store.readTaskSeriesDetail(taskSeriesId, requestedWindow),
+                },
+            };
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法读取一致的任务规则数据。', requestId);
         }
     }
 

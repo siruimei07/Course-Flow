@@ -42,7 +42,9 @@ import {
     type UpdateHolidayRangeCommand,
 } from './workspace-holiday-contract';
 import {
+    isTaskOccurrenceWindow,
     isTaskProjection,
+    isTaskSeriesDetailProjection,
     normalizeCompleteTaskCommand,
     normalizeCreateTaskCommand,
     normalizeDeleteTaskCommand,
@@ -50,7 +52,9 @@ import {
     type CompleteTaskCommand,
     type CreateTaskCommand,
     type DeleteTaskCommand,
+    type TaskOccurrenceWindow,
     type TaskProjection,
+    type TaskSeriesDetailProjection,
     type UpdateTaskCommand,
 } from './workspace-task-contract';
 import {
@@ -153,6 +157,12 @@ export type MeetingSeriesQueryRequest = WorkspaceRequestBase & Readonly<{
     requestedWindow: MeetingOccurrenceWindow;
 }>;
 
+export type TaskSeriesQueryRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.task-series.query';
+    taskSeriesId: string;
+    requestedWindow: TaskOccurrenceWindow;
+}>;
+
 export type MeetingOccurrenceImpactRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.meeting-occurrence.preview';
     draft: MeetingOccurrenceImpactDraft;
@@ -183,6 +193,7 @@ export type WorkspaceSetupRequest =
     | RestoreTermAsCurrentRequest
     | CreateCourseWithMeetingRequest
     | MeetingSeriesQueryRequest
+    | TaskSeriesQueryRequest
     | MeetingOccurrenceImpactRequest
     | ChangeMeetingOccurrenceRequest
     | CancelMeetingOccurrenceRequest;
@@ -289,6 +300,18 @@ export type WorkspaceSetupOutcome =
             workspaceEpoch: string;
             dataMode: 'ready' | 'read-only';
             projection: MeetingSeriesDetailProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.task-series-projection';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: TaskSeriesDetailProjection;
         }>;
     }>
     | Readonly<{
@@ -665,6 +688,36 @@ export function makeMeetingSeriesQueryRequest(
 }
 
 /**
+ * Builds an exact bounded Task series query request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {string} taskSeriesId - Stable Task series identity.
+ * @param {TaskOccurrenceWindow} requestedWindow - Physical-date expansion window.
+ * @return {TaskSeriesQueryRequest} Canonical Workspace request.
+ */
+export function makeTaskSeriesQueryRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    taskSeriesId: string,
+    requestedWindow: TaskOccurrenceWindow,
+): TaskSeriesQueryRequest {
+    if (!isCanonicalUuid(taskSeriesId) || !isTaskOccurrenceWindow(requestedWindow)) {
+        throw new TypeError('Task series query requires a canonical ID and bounded window');
+    }
+    return {
+        kind: 'workspace.task-series.query',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        taskSeriesId,
+        requestedWindow: Object.freeze({ ...requestedWindow }),
+    };
+}
+
+/**
  * Builds an exact whole-rule Meeting impact preview request.
  * @param {string} requestId - Request correlation identity.
  * @param {string} appBuildId - Calling application build identity.
@@ -769,6 +822,19 @@ export function isWorkspaceSetupRequest(
         ])
             && isCanonicalUuid(value.meetingSeriesId)
             && isMeetingOccurrenceWindow(value.requestedWindow);
+    }
+    if (value.kind === 'workspace.task-series.query') {
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'taskSeriesId',
+            'requestedWindow',
+        ])
+            && isCanonicalUuid(value.taskSeriesId)
+            && isTaskOccurrenceWindow(value.requestedWindow);
     }
     if (value.kind === 'workspace.meeting-occurrence.preview') {
         if (!hasExactDataKeys(value, [
@@ -1076,6 +1142,19 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isMeetingSeriesDetailProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.task-series-projection') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isTaskSeriesDetailProjection(outcome.projection);
     }
     if (outcome.kind === 'workspace.meeting-occurrence-impact') {
         return hasExactDataKeys(outcome, [

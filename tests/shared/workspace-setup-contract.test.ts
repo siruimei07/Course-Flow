@@ -9,6 +9,7 @@ import {
     isWorkspaceSetupOutcome,
     isWorkspaceSetupRequest,
     makeCreateCourseWithMeetingRequest,
+    makeTaskSeriesQueryRequest,
 } from '../../src/shared/workspace-setup-contract';
 
 const APP_BUILD_ID = 'development:1234567890abcdef1234567890abcdef12345678';
@@ -75,6 +76,42 @@ const TASK = {
     },
     status: 'pending',
     entityVersion: '1',
+} as const;
+const TASK_SERIES_ID = '77777777-7777-4777-8777-777777777777';
+const TASK_WINDOW = {
+    startDate: '2026-09-01',
+    endDate: '2026-09-30',
+} as const;
+
+const TASK_SERIES_DETAIL = {
+    workspaceRevision: '2',
+    planEntityVersion: '2',
+    requestedWindow: TASK_WINDOW,
+    termZone: 'America/Toronto',
+    taskSeriesId: TASK_SERIES_ID,
+    courseId: COURSE.courseId,
+    title: 'Submit weekly design review',
+    size: 'small',
+    schedule: {
+        kind: 'weekly',
+        startDate: '2026-09-05',
+        weekday: 'SAT',
+        localDeadlineTime: '23:59',
+        confirmedEndDate: '2026-11-28',
+        followTeachingWeek: true,
+    },
+    entityVersion: '1',
+    occurrences: [{
+        occurrenceId: {
+            taskSeriesId: TASK_SERIES_ID,
+            originalLogicalAnchor: '2026-09-05',
+        },
+        deadline: {
+            kind: 'timed',
+            instant: '2026-09-06T03:59:00.000Z',
+            timeZone: 'America/Toronto',
+        },
+    }],
 } as const;
 
 function outcomeWithCourse(course: unknown): unknown {
@@ -198,6 +235,50 @@ test('A-TASK-001/TEST-PLAN-001: Workspace projection rejects dangling Task owner
             },
         }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
     }
+});
+
+test('A-TASK-004/TEST-PLAN-003: bounded Task series query validates its request and projection', () => {
+    const request = makeTaskSeriesQueryRequest(
+        REQUEST_ID,
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+        TASK_SERIES_ID,
+        TASK_WINDOW,
+    );
+    assert.deepEqual(request, {
+        kind: 'workspace.task-series.query',
+        protocolVersion: 2,
+        appBuildId: APP_BUILD_ID,
+        requestId: REQUEST_ID,
+        workspaceEpoch: WORKSPACE_EPOCH,
+        taskSeriesId: TASK_SERIES_ID,
+        requestedWindow: TASK_WINDOW,
+    });
+    assert.equal(isWorkspaceSetupRequest(request, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+
+    const outcome = {
+        ok: true,
+        value: {
+            kind: 'workspace.task-series-projection',
+            protocolVersion: 2,
+            appBuildId: APP_BUILD_ID,
+            requestId: REQUEST_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            dataMode: 'ready',
+            projection: TASK_SERIES_DETAIL,
+        },
+    } as const;
+    assert.equal(isWorkspaceSetupOutcome(outcome, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupOutcome({
+        ...outcome,
+        value: {
+            ...outcome.value,
+            projection: {
+                ...TASK_SERIES_DETAIL,
+                taskSeriesId: COURSE.courseId,
+            },
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), false);
 });
 
 test('TEST-DATA-005: Workspace boundary preserves writer-busy retry semantics', () => {

@@ -21,6 +21,7 @@ import type {
   CreateTaskCommand,
   DeleteTaskCommand,
   UpdateTaskCommand,
+  TaskOccurrenceWindow,
 } from '../shared/workspace-task-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
@@ -50,6 +51,10 @@ declare global {
       queryMeetingSeries(
         meetingSeriesId: string,
         requestedWindow: MeetingOccurrenceWindow,
+      ): Promise<WorkspaceSetupOutcome>;
+      queryTaskSeries(
+        taskSeriesId: string,
+        requestedWindow: TaskOccurrenceWindow,
       ): Promise<WorkspaceSetupOutcome>;
       previewMeetingOccurrence(draft: MeetingOccurrenceImpactDraft): Promise<WorkspaceSetupOutcome>;
       changeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;

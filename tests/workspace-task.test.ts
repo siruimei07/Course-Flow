@@ -18,6 +18,7 @@ import {
     makeDeleteTaskRequest,
     makeInitializeWorkspaceRequest,
     makeSetupQueryRequest,
+    makeTaskSeriesQueryRequest,
     makeUpdateTaskRequest,
 } from '../src/shared/workspace-setup-contract';
 
@@ -193,6 +194,35 @@ test('A-TASK-001–003: one-time Task retains size, Deadline, status, and stable
     }
     assert.equal(created.value.outcome.effects[0]?.code, 'plan.task-series-created');
     const taskSeriesId = created.value.outcome.effects[0]!.entity.id;
+
+    const boundedDetail = await application.handle(makeTaskSeriesQueryRequest(
+        'query-task-series',
+        APP_BUILD_ID,
+        epoch,
+        taskSeriesId,
+        { startDate: '2026-10-01', endDate: '2026-10-31' },
+    ));
+    assert.equal(boundedDetail.ok, true);
+    if (!boundedDetail.ok || boundedDetail.value.kind !== 'workspace.task-series-projection') {
+        throw new Error('Expected bounded Task series projection');
+    }
+    assert.deepEqual(boundedDetail.value.projection, {
+        workspaceRevision: '3',
+        planEntityVersion: '3',
+        requestedWindow: { startDate: '2026-10-01', endDate: '2026-10-31' },
+        termZone: 'America/Toronto',
+        taskSeriesId,
+        courseId,
+        title: 'Submit design review',
+        size: 'small',
+        schedule: { deadline: { kind: 'date-only', date: '2026-10-12' }, kind: 'once' },
+        entityVersion: '1',
+        occurrences: [{
+            occurrenceId: { taskSeriesId, originalLogicalAnchor: 'once' },
+            deadline: { kind: 'date-only', date: '2026-10-12' },
+            status: 'pending',
+        }],
+    });
 
     const replayed = await application.handle(makeCreateTaskRequest(
         'replay-task',

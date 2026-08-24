@@ -35,7 +35,9 @@ import {
     MAX_MEETING_OVERLAP_WARNINGS,
 } from '../shared/workspace-course-contract';
 import {
+    INTL_ZONE_RULES,
     findMeetingTimeOverlap,
+    isCanonicalInstant,
     resolveMeetingOccurrenceTime,
     type MeetingEndDayOffset,
     type MeetingInstantWindow,
@@ -72,14 +74,20 @@ import {
     normalizeCompleteTaskCommand,
     normalizeCreateTaskCommand,
     normalizeDeleteTaskCommand,
+    normalizeTaskOccurrenceWindow,
     normalizeUpdateTaskCommand,
     type CompleteTaskCommand,
     type CreateTaskCommand,
     type DeleteTaskCommand,
     type TaskCommand,
     type TaskDeadline,
+    type OnceTaskOccurrenceProjection,
+    type TaskOccurrenceWindow,
+    type TaskSchedule,
+    type TaskSeriesDetailProjection,
     type TaskSize,
     type UpdateTaskCommand,
+    type WeeklyTaskOccurrenceProjection,
 } from '../shared/workspace-task-contract';
 import {
     digestCancelMeetingOccurrence,
@@ -101,7 +109,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel8,
+    createSchemaLevel9,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -109,6 +117,7 @@ import {
     migrateLevel5To6,
     migrateLevel6To7,
     migrateLevel7To8,
+    migrateLevel8To9,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -118,6 +127,7 @@ import {
     validateSchemaLevel6,
     validateSchemaLevel7,
     validateSchemaLevel8,
+    validateSchemaLevel9,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -167,7 +177,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 8 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 9 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -200,13 +210,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 8;
+        schemaLevel: 9;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 8;
+        schemaLevel: 9;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -565,7 +575,7 @@ function occurrenceDate(originalLogicalAnchor: string, weekday: MeetingWeekday):
  * @param {MeetingWeekday} weekday - Initial Meeting weekday.
  * @return {string} First matching anchor, using the previous match at the LocalDate ceiling.
  */
-function meetingFirstLogicalAnchor(startDate: string, weekday: MeetingWeekday): string {
+function firstWeeklyLogicalAnchor(startDate: string, weekday: MeetingWeekday): string {
     const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
     const startWeekday = new Date(localDateMilliseconds(startDate)).getUTCDay();
     const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
@@ -573,6 +583,37 @@ function meetingFirstLogicalAnchor(startDate: string, weekday: MeetingWeekday): 
     return forwardMilliseconds <= localDateMilliseconds('9999-12-31')
         ? new Date(forwardMilliseconds).toISOString().slice(0, 10)
         : addLocalDateDays(startDate, forwardDays - 7);
+}
+
+/**
+ * Chooses the first weekly Task anchor on or after its inclusive start without crossing LocalDate max.
+ * @param {string} startDate - Inclusive Task schedule start.
+ * @param {MeetingWeekday} weekday - Required Task weekday.
+ * @return {string | null} First matching LocalDate, or null when no representable match exists.
+ */
+function firstTaskWeeklyAnchor(startDate: string, weekday: MeetingWeekday): string | null {
+    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
+    const startMilliseconds = localDateMilliseconds(startDate);
+    const startWeekday = new Date(startMilliseconds).getUTCDay();
+    const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
+    const forwardMilliseconds = startMilliseconds + forwardDays * MILLISECONDS_PER_DAY;
+    return forwardMilliseconds > localDateMilliseconds('9999-12-31')
+        ? null
+        : new Date(forwardMilliseconds).toISOString().slice(0, 10);
+}
+
+/**
+ * Chooses the final weekly Task anchor on or before its inclusive confirmed end.
+ * @param {string} endDate - Inclusive confirmed Task schedule end.
+ * @param {MeetingWeekday} weekday - Required Task weekday.
+ * @return {string} Final matching LocalDate.
+ */
+function lastTaskWeeklyAnchor(endDate: string, weekday: MeetingWeekday): string {
+    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
+    const endMilliseconds = localDateMilliseconds(endDate);
+    const endWeekday = new Date(endMilliseconds).getUTCDay();
+    const backwardDays = (endWeekday - weekdayNumber + 7) % 7;
+    return addLocalDateDays(endDate, -backwardDays);
 }
 
 type StoredMeetingSegment = Readonly<{
@@ -1099,6 +1140,19 @@ type TaskDeadlineColumns = readonly [
     string | null,
 ];
 
+type TaskScheduleColumns = readonly [
+    TaskSchedule['kind'],
+    TaskDeadline['kind'] | null,
+    string | null,
+    string | null,
+    string | null,
+    string | null,
+    MeetingWeekday | null,
+    string | null,
+    string | null,
+    0 | 1 | null,
+];
+
 function taskDeadlineColumns(deadline: TaskDeadline): TaskDeadlineColumns {
     if (deadline.kind === 'date-only') {
         return Object.freeze(['date-only', deadline.date, null, null]);
@@ -1107,6 +1161,37 @@ function taskDeadlineColumns(deadline: TaskDeadline): TaskDeadlineColumns {
         return Object.freeze(['timed', null, deadline.instant, deadline.timeZone]);
     }
     return Object.freeze(['tba', null, null, null]);
+}
+
+/**
+ * Serializes the exact once-or-weekly Task schedule union to level-9 columns.
+ * @param {TaskSchedule} schedule - Canonical Task schedule.
+ * @return {TaskScheduleColumns} SQLite binding tuple with the inactive union arm cleared.
+ */
+function taskScheduleColumns(schedule: TaskSchedule): TaskScheduleColumns {
+    if (schedule.kind === 'once') {
+        return Object.freeze([
+            'once',
+            ...taskDeadlineColumns(schedule.deadline),
+            null,
+            null,
+            null,
+            null,
+            null,
+        ]);
+    }
+    return Object.freeze([
+        'weekly',
+        null,
+        null,
+        null,
+        null,
+        schedule.startDate,
+        schedule.weekday,
+        schedule.localDeadlineTime,
+        schedule.confirmedEndDate,
+        schedule.followTeachingWeek ? 1 : 0,
+    ]);
 }
 
 function taskDeadlineProjection(
@@ -1122,6 +1207,61 @@ function taskDeadlineProjection(
         return Object.freeze({ kind, instant: instant!, timeZone: displayZone! });
     }
     return Object.freeze({ kind });
+}
+
+type StoredTaskSchedule = Readonly<{
+    schedule_kind: TaskSchedule['kind'];
+    deadline_kind: TaskDeadline['kind'] | null;
+    deadline_date: string | null;
+    deadline_instant: string | null;
+    deadline_display_zone: string | null;
+    weekly_start_date: string | null;
+    weekly_weekday: MeetingWeekday | null;
+    weekly_local_deadline_time: string | null;
+    weekly_confirmed_end_date: string | null;
+    follow_teaching_week: bigint | null;
+}>;
+
+/**
+ * Materializes the validated stored Task schedule discriminated union.
+ * @param {StoredTaskSchedule} row - Level-9 Task schedule columns.
+ * @return {TaskSchedule} Immutable exact Task schedule.
+ */
+function taskScheduleProjection(row: StoredTaskSchedule): TaskSchedule {
+    if (row.schedule_kind === 'once') {
+        return Object.freeze({
+            kind: 'once',
+            deadline: taskDeadlineProjection(
+                row.deadline_kind!,
+                row.deadline_date,
+                row.deadline_instant,
+                row.deadline_display_zone,
+            ),
+        });
+    }
+    return Object.freeze({
+        kind: 'weekly',
+        startDate: row.weekly_start_date!,
+        weekday: row.weekly_weekday!,
+        localDeadlineTime: row.weekly_local_deadline_time!,
+        confirmedEndDate: row.weekly_confirmed_end_date!,
+        followTeachingWeek: row.follow_teaching_week === 1n,
+    });
+}
+
+/**
+ * Reads the once deadline from either retained v1 facts or a v2 once schedule.
+ * @param {CreateTaskCommand['intent']['payload'] | UpdateTaskCommand['intent']['payload']} payload
+ *     - Normalized Task facts.
+ * @return {TaskDeadline} Exact once deadline.
+ */
+function taskSchedule(
+    payload: CreateTaskCommand['intent']['payload'] | UpdateTaskCommand['intent']['payload'],
+): TaskSchedule {
+    if ('deadline' in payload) {
+        return Object.freeze({ kind: 'once', deadline: payload.deadline });
+    }
+    return payload.schedule;
 }
 
 function isCourseWithMeetingCommand(
@@ -1817,10 +1957,16 @@ class SqliteDataStoreImplementation {
                     task_series.entity_version,
                     task_segments.title,
                     task_segments.task_size,
+                    task_segments.schedule_kind,
                     task_segments.deadline_kind,
                     task_segments.deadline_date,
                     task_segments.deadline_instant,
                     task_segments.deadline_display_zone,
+                    task_segments.weekly_start_date,
+                    task_segments.weekly_weekday,
+                    task_segments.weekly_local_deadline_time,
+                    task_segments.weekly_confirmed_end_date,
+                    task_segments.follow_teaching_week,
                     task_occurrence_states.status
                 FROM task_series
                 JOIN task_segments ON task_segments.task_series_id = task_series.task_series_id
@@ -1837,27 +1983,26 @@ class SqliteDataStoreImplementation {
                 entity_version: bigint;
                 title: string;
                 task_size: TaskSize;
-                deadline_kind: TaskDeadline['kind'];
-                deadline_date: string | null;
-                deadline_instant: string | null;
-                deadline_display_zone: string | null;
                 status: 'completed' | null;
-            }>;
-            const tasks = Object.freeze(taskRows.map(row => Object.freeze({
-                taskSeriesId: row.task_series_id,
-                courseId: row.course_id,
-                title: row.title,
-                size: row.task_size,
-                deadline: taskDeadlineProjection(
-                    row.deadline_kind,
-                    row.deadline_date,
-                    row.deadline_instant,
-                    row.deadline_display_zone,
-                ),
-                occurrenceId: deriveTaskOccurrenceId(row.task_series_id),
-                status: row.status ?? 'pending',
-                entityVersion: row.entity_version.toString(),
-            })));
+            } & StoredTaskSchedule>;
+            const tasks = Object.freeze(taskRows.map(row => {
+                const common = {
+                    taskSeriesId: row.task_series_id,
+                    courseId: row.course_id,
+                    title: row.title,
+                    size: row.task_size,
+                    entityVersion: row.entity_version.toString(),
+                };
+                const schedule = taskScheduleProjection(row);
+                return schedule.kind === 'weekly'
+                    ? Object.freeze({ ...common, schedule })
+                    : Object.freeze({
+                        ...common,
+                        deadline: schedule.deadline,
+                        occurrenceId: deriveTaskOccurrenceId(row.task_series_id),
+                        status: row.status ?? 'pending',
+                    });
+            }));
             this.database.exec('COMMIT');
 
             return Object.freeze({
@@ -1888,6 +2033,149 @@ class SqliteDataStoreImplementation {
             WHERE term_id = ? AND tombstoned = 0
             ORDER BY start_date, holiday_range_id
         `).all(termId) as StoredHolidayRange[];
+    }
+
+    /**
+     * Reads one bounded Task series projection without storing ordinary weekly occurrences.
+     * @param {string} taskSeriesId - Stable Task series identity.
+     * @param {TaskOccurrenceWindow} candidateWindow - Requested inclusive LocalDate window.
+     * @return {TaskSeriesDetailProjection} Revision-bound Task rule and derived occurrences.
+     */
+    public readTaskSeriesDetail(
+        taskSeriesId: string,
+        candidateWindow: TaskOccurrenceWindow,
+    ): TaskSeriesDetailProjection {
+        this.requireOpen();
+        if (!isCanonicalUuid(taskSeriesId)) {
+            throw new TypeError('TaskSeriesId must be a canonical UUID');
+        }
+        const requestedWindow = normalizeTaskOccurrenceWindow(candidateWindow);
+
+        try {
+            this.database.exec('BEGIN');
+            const statement = this.database.prepare(`
+                SELECT
+                    task_series.course_id,
+                    task_series.entity_version,
+                    task_segments.title,
+                    task_segments.task_size,
+                    task_segments.schedule_kind,
+                    task_segments.deadline_kind,
+                    task_segments.deadline_date,
+                    task_segments.deadline_instant,
+                    task_segments.deadline_display_zone,
+                    task_segments.weekly_start_date,
+                    task_segments.weekly_weekday,
+                    task_segments.weekly_local_deadline_time,
+                    task_segments.weekly_confirmed_end_date,
+                    task_segments.follow_teaching_week,
+                    task_occurrence_states.status,
+                    terms.term_id,
+                    terms.time_zone,
+                    workspace_state.revision,
+                    plan_state.plan_entity_version
+                FROM task_series
+                JOIN task_segments ON task_segments.task_series_id = task_series.task_series_id
+                JOIN courses ON courses.course_id = task_series.course_id
+                JOIN terms ON terms.term_id = courses.term_id
+                JOIN workspace_state ON workspace_state.singleton = 1
+                JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+                LEFT JOIN task_occurrence_states
+                    ON task_occurrence_states.task_series_id = task_series.task_series_id
+                    AND task_occurrence_states.original_logical_anchor = 'once'
+                WHERE task_series.task_series_id = ? AND task_series.retired = 0
+            `);
+            statement.setReadBigInts(true);
+            const row = statement.get(taskSeriesId) as ({
+                course_id: string;
+                entity_version: bigint;
+                title: string;
+                task_size: TaskSize;
+                status: 'completed' | null;
+                term_id: string;
+                time_zone: string;
+                revision: bigint;
+                plan_entity_version: bigint;
+            } & StoredTaskSchedule) | undefined;
+            if (!row) {
+                throw new TypeError('Task series does not exist');
+            }
+
+            const schedule = taskScheduleProjection(row);
+            const projectionBase = {
+                workspaceRevision: row.revision.toString(),
+                planEntityVersion: row.plan_entity_version.toString(),
+                requestedWindow,
+                termZone: row.time_zone,
+                taskSeriesId,
+                courseId: row.course_id,
+                title: row.title,
+                size: row.task_size,
+                entityVersion: row.entity_version.toString(),
+            } as const;
+            let projection: TaskSeriesDetailProjection;
+            if (schedule.kind === 'once') {
+                const occurrences: OnceTaskOccurrenceProjection[] = [];
+                occurrences.push(Object.freeze({
+                    occurrenceId: deriveTaskOccurrenceId(taskSeriesId),
+                    deadline: schedule.deadline,
+                    status: row.status ?? 'pending',
+                }));
+                projection = Object.freeze({
+                    ...projectionBase,
+                    schedule,
+                    occurrences: Object.freeze(occurrences),
+                });
+            }
+            else {
+                const occurrences: WeeklyTaskOccurrenceProjection[] = [];
+                const boundedStart = schedule.startDate > requestedWindow.startDate
+                    ? schedule.startDate
+                    : requestedWindow.startDate;
+                const boundedEnd = schedule.confirmedEndDate < requestedWindow.endDate
+                    ? schedule.confirmedEndDate
+                    : requestedWindow.endDate;
+                const holidayRanges = schedule.followTeachingWeek
+                    ? this.readActiveHolidayRanges(row.term_id)
+                    : [];
+                let anchor = firstTaskWeeklyAnchor(boundedStart, schedule.weekday);
+                while (anchor !== null && anchor <= boundedEnd) {
+                    const currentAnchor = anchor;
+                    const isHoliday = holidayRanges.some(range => (
+                        currentAnchor >= range.start_date && currentAnchor <= range.end_date
+                    ));
+                    if (!isHoliday) {
+                        occurrences.push(Object.freeze({
+                            occurrenceId: deriveTaskOccurrenceId(taskSeriesId, currentAnchor),
+                            deadline: Object.freeze({
+                                kind: 'timed' as const,
+                                instant: INTL_ZONE_RULES.resolveInstant(
+                                    row.time_zone,
+                                    currentAnchor,
+                                    schedule.localDeadlineTime,
+                                ),
+                                timeZone: row.time_zone,
+                            }),
+                        }));
+                    }
+                    if (anchor > '9999-12-24') {
+                        break;
+                    }
+                    anchor = addLocalDateDays(anchor, 7);
+                }
+                projection = Object.freeze({
+                    ...projectionBase,
+                    schedule,
+                    occurrences: Object.freeze(occurrences),
+                });
+            }
+            this.database.exec('COMMIT');
+            return projection;
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
     }
 
     /**
@@ -3190,7 +3478,7 @@ class SqliteDataStoreImplementation {
                 this.rollbackOrRequireReopen();
                 throw new TypeError('Course and Meeting ranges must remain inside their owners');
             }
-            const logicalStartAnchor = meetingFirstLogicalAnchor(
+            const logicalStartAnchor = firstWeeklyLogicalAnchor(
                 effectiveStartDate,
                 payload.meeting.weekday,
             );
@@ -4291,7 +4579,7 @@ class SqliteDataStoreImplementation {
     }
 
     /**
-     * Commits one once-only Task lifecycle transition and its durable receipt atomically.
+     * Commits one bounded Task lifecycle transition and its durable receipt atomically.
      * @param {TaskCommand} command - Normalized Task command.
      * @param {CommitOptions} options - Transaction failpoint controls used by tests.
      * @return {DataCommitResult} Committed receipt or unchanged structured problem.
@@ -4351,8 +4639,10 @@ class SqliteDataStoreImplementation {
                             task_series.course_id,
                             task_series.retired,
                             task_series.entity_version,
+                            task_segments.schedule_kind,
                             task_occurrence_states.status
                         FROM task_series
+                        JOIN task_segments ON task_segments.task_series_id = task_series.task_series_id
                         LEFT JOIN task_occurrence_states
                             ON task_occurrence_states.task_series_id = task_series.task_series_id
                             AND task_occurrence_states.original_logical_anchor = 'once'
@@ -4363,6 +4653,7 @@ class SqliteDataStoreImplementation {
                         course_id: string;
                         retired: bigint;
                         entity_version: bigint;
+                        schedule_kind: TaskSchedule['kind'];
                         status: 'completed' | null;
                     } | undefined;
                 })();
@@ -4384,6 +4675,11 @@ class SqliteDataStoreImplementation {
                     && existing.status === 'completed') {
                     this.rollbackOrRequireReopen();
                     throw new TypeError('Task occurrence is already completed');
+                }
+                if (command.intent.kind === 'plan.set-task-occurrence-status'
+                    && existing.schedule_kind !== 'once') {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Weekly Task occurrence status belongs to WP-R4-03');
                 }
             }
             fireCommitFailpoint(options, 'commit.after-expected-versions');
@@ -4412,6 +4708,66 @@ class SqliteDataStoreImplementation {
                 this.rollbackOrRequireReopen();
                 throw new TypeError('Task requires an active Current Term Course');
             }
+            const proposedSchedule = command.intent.kind === 'plan.create-task-series'
+                || command.intent.kind === 'plan.update-task-series'
+                ? taskSchedule(command.intent.payload)
+                : null;
+            if (command.intent.kind === 'plan.update-task-series'
+                && existing!.schedule_kind === 'once'
+                && proposedSchedule!.kind === 'weekly'
+                && existing!.status !== null) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Completed once Task cannot become weekly without preserving instance state');
+            }
+            if (proposedSchedule?.kind === 'weekly') {
+                const courseRange = this.database.prepare(`
+                    SELECT
+                        CASE
+                            WHEN courses.teaching_range_kind = 'explicit'
+                                THEN courses.teaching_start_date
+                            ELSE terms.start_date
+                        END AS teaching_start_date,
+                        CASE
+                            WHEN courses.teaching_range_kind = 'explicit'
+                                THEN courses.teaching_end_date
+                            ELSE terms.end_date
+                        END AS teaching_end_date,
+                        terms.time_zone AS term_zone
+                    FROM courses
+                    JOIN terms ON terms.term_id = courses.term_id
+                    WHERE courses.course_id = ?
+                `).get(courseId) as {
+                    teaching_start_date: string;
+                    teaching_end_date: string;
+                    term_zone: string;
+                };
+                const firstAnchor = firstTaskWeeklyAnchor(
+                    proposedSchedule.startDate,
+                    proposedSchedule.weekday,
+                );
+                if (proposedSchedule.startDate < courseRange.teaching_start_date
+                    || proposedSchedule.confirmedEndDate > courseRange.teaching_end_date
+                    || firstAnchor === null
+                    || firstAnchor > proposedSchedule.confirmedEndDate) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Weekly Task range must produce an occurrence inside the Course range');
+                }
+                const lastAnchor = lastTaskWeeklyAnchor(
+                    proposedSchedule.confirmedEndDate,
+                    proposedSchedule.weekday,
+                );
+                const boundaryInstants = [firstAnchor, lastAnchor].map(anchor => (
+                    INTL_ZONE_RULES.resolveInstant(
+                        courseRange.term_zone,
+                        anchor,
+                        proposedSchedule.localDeadlineTime,
+                    )
+                ));
+                if (!boundaryInstants.every(isCanonicalInstant)) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Weekly Task deadline must resolve to canonical Instants');
+                }
+            }
 
             const existingVersion = existing?.entity_version ?? 0n;
             if (versions.revision === SQLITE_INTEGER_MAX
@@ -4428,7 +4784,7 @@ class SqliteDataStoreImplementation {
             const newPlanVersion = versions.planVersion + 1n;
             const newTaskSeriesVersion = existingVersion + 1n;
             if (command.intent.kind === 'plan.create-task-series') {
-                const deadline = taskDeadlineColumns(command.intent.payload.deadline);
+                const schedule = taskScheduleColumns(taskSchedule(command.intent.payload));
                 this.database.prepare(`
                     INSERT INTO task_series (
                         task_series_id,
@@ -4447,18 +4803,23 @@ class SqliteDataStoreImplementation {
                         deadline_kind,
                         deadline_date,
                         deadline_instant,
-                        deadline_display_zone
-                    ) VALUES (?, ?, ?, ?, 'once', ?, ?, ?, ?)
+                        deadline_display_zone,
+                        weekly_start_date,
+                        weekly_weekday,
+                        weekly_local_deadline_time,
+                        weekly_confirmed_end_date,
+                        follow_teaching_week
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 `).run(
                     randomUUID(),
                     taskSeriesId,
                     command.intent.payload.title,
                     command.intent.payload.size,
-                    ...deadline,
+                    ...schedule,
                 );
             }
             else if (command.intent.kind === 'plan.update-task-series') {
-                const deadline = taskDeadlineColumns(command.intent.payload.deadline);
+                const schedule = taskScheduleColumns(taskSchedule(command.intent.payload));
                 this.database.prepare(`
                     UPDATE task_series
                     SET course_id = ?, entity_version = ?
@@ -4469,15 +4830,21 @@ class SqliteDataStoreImplementation {
                     SET
                         title = ?,
                         task_size = ?,
+                        schedule_kind = ?,
                         deadline_kind = ?,
                         deadline_date = ?,
                         deadline_instant = ?,
-                        deadline_display_zone = ?
-                    WHERE task_series_id = ? AND schedule_kind = 'once'
+                        deadline_display_zone = ?,
+                        weekly_start_date = ?,
+                        weekly_weekday = ?,
+                        weekly_local_deadline_time = ?,
+                        weekly_confirmed_end_date = ?,
+                        follow_teaching_week = ?
+                    WHERE task_series_id = ?
                 `).run(
                     command.intent.payload.title,
                     command.intent.payload.size,
-                    ...deadline,
+                    ...schedule,
                     taskSeriesId,
                 );
             }
@@ -4523,8 +4890,14 @@ class SqliteDataStoreImplementation {
                     payload_digest,
                     committed_revision,
                     result_kind
-                ) VALUES (?, ?, 1, 'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed')
-            `).run(command.commandId, command.intent.kind, digest, newRevision);
+                ) VALUES (?, ?, ?, 'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed')
+            `).run(
+                command.commandId,
+                command.intent.kind,
+                command.intent.intentSchemaVersion,
+                digest,
+                newRevision,
+            );
             fireCommitFailpoint(options, 'commit.after-receipt');
 
             const effectCode: ReceiptEffect['code'] = command.intent.kind === 'plan.create-task-series'
@@ -4785,6 +5158,31 @@ class SqliteDataStoreImplementation {
                 if (meetingOutsideCourse) {
                     this.rollbackOrRequireReopen();
                     throw new TypeError('Corrected Term range would exclude a Meeting');
+                }
+
+                const weeklyTasks = this.database.prepare(`
+                    SELECT
+                        task_series.course_id,
+                        task_segments.weekly_start_date,
+                        task_segments.weekly_confirmed_end_date
+                    FROM task_segments
+                    JOIN task_series ON task_series.task_series_id = task_segments.task_series_id
+                    JOIN courses ON courses.course_id = task_series.course_id
+                    WHERE courses.term_id = ?
+                        AND task_segments.schedule_kind = 'weekly'
+                `).all(termRow.term_id) as Array<{
+                    course_id: string;
+                    weekly_start_date: string;
+                    weekly_confirmed_end_date: string;
+                }>;
+                const taskOutsideCourse = weeklyTasks.some(task => {
+                    const course = resolvedCourses.find(candidate => candidate.courseId === task.course_id)!;
+                    return task.weekly_start_date < course.startDate
+                        || task.weekly_confirmed_end_date > course.endDate;
+                });
+                if (taskOutsideCourse) {
+                    this.rollbackOrRequireReopen();
+                    throw new TypeError('Corrected Term range would exclude a weekly Task');
                 }
             }
             else if (termRow.archived !== 1n
@@ -5118,7 +5516,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel8(stagingDatabase);
+        createSchemaLevel9(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -5150,7 +5548,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel8(validationDatabase);
+            validateSchemaLevel9(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -5159,7 +5557,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel8(activeDatabase);
+        const facts = validateSchemaLevel9(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -5232,7 +5630,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel8(validationDatabase);
+        const facts = validateSchemaLevel9(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -5282,7 +5680,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel8(activeDatabase);
+        const facts = validateSchemaLevel9(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -5324,15 +5722,11 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 4
                 && identity.schemaLevel !== 5
                 && identity.schemaLevel !== 6
-                && identity.schemaLevel !== 7)) {
+                && identity.schemaLevel !== 7
+                && identity.schemaLevel !== 8)) {
             closeBestEffort(source);
             return opened;
         }
-        if (options.readOnly) {
-            closeBestEffort(source);
-            return recoveryResult(incompatibleVersionProblem(identity.schemaLevel));
-        }
-
         if (identity.schemaLevel === 1) {
             validateSchemaLevel1(source);
         }
@@ -5351,8 +5745,15 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 6) {
             validateSchemaLevel6(source);
         }
-        else {
+        else if (identity.schemaLevel === 7) {
             validateSchemaLevel7(source);
+        }
+        else {
+            validateSchemaLevel8(source);
+        }
+        if (options.readOnly) {
+            closeBestEffort(source);
+            return recoveryResult(incompatibleVersionProblem(identity.schemaLevel));
         }
         const safetyDirectory = join(
             dataSlotsRoot,
@@ -5381,8 +5782,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 6) {
                 validateSchemaLevel6(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 7) {
                 validateSchemaLevel7(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel8(safetyDatabase);
             }
         }
         finally {
@@ -5434,10 +5838,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel6To7(maintenance);
                         validateSchemaLevel7(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 7) {
                         validateSchemaLevel7(maintenance);
                         migrateLevel7To8(maintenance);
                         validateSchemaLevel8(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel8(maintenance);
+                        migrateLevel8To9(maintenance);
+                        validateSchemaLevel9(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -5461,7 +5870,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel8(maintenance);
+            validateSchemaLevel9(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

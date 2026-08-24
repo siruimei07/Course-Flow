@@ -4,10 +4,15 @@
 
 import { DatabaseSync } from 'node:sqlite';
 
+import { INTL_ZONE_RULES, isCanonicalInstant } from '../shared/meeting-time';
 import { isCanonicalUuid } from '../shared/workspace-data-contract';
+import {
+    normalizeTaskSchedule,
+    type WeeklyTaskSchedule,
+} from '../shared/workspace-task-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 8;
+export const CURRENT_SCHEMA_LEVEL = 9;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -788,6 +793,157 @@ const LEVEL_8_TASK_DDL = `
 const LEVEL_8_DDL = LEVEL_7_DDL.replace(LEVEL_7_RECEIPT_DDL, LEVEL_8_RECEIPT_DDL)
     + LEVEL_8_TASK_DDL;
 
+const LEVEL_9_RECEIPT_DDL = LEVEL_8_RECEIPT_DDL.replace(
+    "            OR (intent_kind = 'plan.change-meeting-occurrence' AND intent_schema_version = 2)",
+    `            OR (intent_kind = 'plan.change-meeting-occurrence' AND intent_schema_version = 2)
+            OR (intent_kind = 'plan.create-task-series' AND intent_schema_version = 2)
+            OR (intent_kind = 'plan.update-task-series' AND intent_schema_version = 2)`,
+);
+
+const LEVEL_9_TASK_SEGMENT_DDL = `
+    CREATE TABLE task_segments (
+        task_segment_id TEXT PRIMARY KEY CHECK (${taskSegmentIdCheck}),
+        task_series_id TEXT NOT NULL UNIQUE CHECK (${taskSeriesIdCheck}),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240 AND title = trim(title)),
+        task_size TEXT NOT NULL CHECK (task_size IN ('small', 'large')),
+        schedule_kind TEXT NOT NULL CHECK (schedule_kind IN ('once', 'weekly')),
+        deadline_kind TEXT CHECK (deadline_kind IN ('date-only', 'timed', 'tba')),
+        deadline_date TEXT CHECK (
+            deadline_date IS NULL
+            OR (
+                length(deadline_date) = 10
+                AND substr(deadline_date, 5, 1) = '-'
+                AND substr(deadline_date, 8, 1) = '-'
+                AND deadline_date NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        deadline_instant TEXT,
+        deadline_display_zone TEXT CHECK (
+            deadline_display_zone IS NULL
+            OR length(deadline_display_zone) BETWEEN 1 AND 255
+        ),
+        weekly_start_date TEXT CHECK (
+            weekly_start_date IS NULL
+            OR (
+                length(weekly_start_date) = 10
+                AND substr(weekly_start_date, 5, 1) = '-'
+                AND substr(weekly_start_date, 8, 1) = '-'
+                AND weekly_start_date NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        weekly_weekday TEXT CHECK (
+            weekly_weekday IS NULL
+            OR weekly_weekday IN ('MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN')
+        ),
+        weekly_local_deadline_time TEXT CHECK (
+            weekly_local_deadline_time IS NULL
+            OR (
+                weekly_local_deadline_time GLOB '[0-2][0-9]:[0-5][0-9]'
+                AND CAST(substr(weekly_local_deadline_time, 1, 2) AS INTEGER) BETWEEN 0 AND 23
+            )
+        ),
+        weekly_confirmed_end_date TEXT CHECK (
+            weekly_confirmed_end_date IS NULL
+            OR (
+                length(weekly_confirmed_end_date) = 10
+                AND substr(weekly_confirmed_end_date, 5, 1) = '-'
+                AND substr(weekly_confirmed_end_date, 8, 1) = '-'
+                AND weekly_confirmed_end_date NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        follow_teaching_week INTEGER CHECK (follow_teaching_week IN (0, 1)),
+        CHECK (
+            (
+                schedule_kind = 'once'
+            AND deadline_kind IS NOT NULL
+            AND weekly_start_date IS NULL
+            AND weekly_weekday IS NULL
+            AND weekly_local_deadline_time IS NULL
+            AND weekly_confirmed_end_date IS NULL
+            AND follow_teaching_week IS NULL
+            AND (
+                (deadline_kind = 'date-only'
+                    AND deadline_date IS NOT NULL
+                    AND deadline_instant IS NULL
+                    AND deadline_display_zone IS NULL)
+                OR (deadline_kind = 'timed'
+                    AND deadline_date IS NULL
+                    AND deadline_instant IS NOT NULL
+                    AND deadline_display_zone IS NOT NULL)
+                OR (deadline_kind = 'tba'
+                    AND deadline_date IS NULL
+                    AND deadline_instant IS NULL
+                    AND deadline_display_zone IS NULL)
+            )
+            )
+            OR (
+                schedule_kind = 'weekly'
+                AND deadline_kind IS NULL
+                AND deadline_date IS NULL
+                AND deadline_instant IS NULL
+                AND deadline_display_zone IS NULL
+                AND weekly_start_date IS NOT NULL
+                AND weekly_weekday IS NOT NULL
+                AND weekly_local_deadline_time IS NOT NULL
+                AND weekly_confirmed_end_date IS NOT NULL
+                AND weekly_confirmed_end_date >= weekly_start_date
+                AND follow_teaching_week IS NOT NULL
+            )
+        ),
+        FOREIGN KEY (task_series_id) REFERENCES task_series(task_series_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX task_segments_by_series ON task_segments(task_series_id);
+`;
+
+const LEVEL_9_TASK_DDL = LEVEL_8_TASK_DDL.replace(
+    `    CREATE TABLE task_segments (
+        task_segment_id TEXT PRIMARY KEY CHECK (${taskSegmentIdCheck}),
+        task_series_id TEXT NOT NULL UNIQUE CHECK (${taskSeriesIdCheck}),
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240 AND title = trim(title)),
+        task_size TEXT NOT NULL CHECK (task_size IN ('small', 'large')),
+        schedule_kind TEXT NOT NULL CHECK (schedule_kind = 'once'),
+        deadline_kind TEXT NOT NULL CHECK (deadline_kind IN ('date-only', 'timed', 'tba')),
+        deadline_date TEXT CHECK (
+            deadline_date IS NULL
+            OR (
+                length(deadline_date) = 10
+                AND substr(deadline_date, 5, 1) = '-'
+                AND substr(deadline_date, 8, 1) = '-'
+                AND deadline_date NOT GLOB '*[^0-9-]*'
+            )
+        ),
+        deadline_instant TEXT,
+        deadline_display_zone TEXT CHECK (
+            deadline_display_zone IS NULL
+            OR length(deadline_display_zone) BETWEEN 1 AND 255
+        ),
+        CHECK (
+            (deadline_kind = 'date-only'
+                AND deadline_date IS NOT NULL
+                AND deadline_instant IS NULL
+                AND deadline_display_zone IS NULL)
+            OR (deadline_kind = 'timed'
+                AND deadline_date IS NULL
+                AND deadline_instant IS NOT NULL
+                AND deadline_display_zone IS NOT NULL)
+            OR (deadline_kind = 'tba'
+                AND deadline_date IS NULL
+                AND deadline_instant IS NULL
+                AND deadline_display_zone IS NULL)
+        ),
+        FOREIGN KEY (task_series_id) REFERENCES task_series(task_series_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX task_segments_by_series ON task_segments(task_series_id);
+`,
+    LEVEL_9_TASK_SEGMENT_DDL,
+);
+
+const LEVEL_9_DDL = LEVEL_8_DDL
+    .replace(LEVEL_8_RECEIPT_DDL, LEVEL_9_RECEIPT_DDL)
+    .replace(LEVEL_8_TASK_DDL, LEVEL_9_TASK_DDL);
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -918,10 +1074,15 @@ const TABLE_COLUMNS = {
         ['title', 'TEXT', 1, 0],
         ['task_size', 'TEXT', 1, 0],
         ['schedule_kind', 'TEXT', 1, 0],
-        ['deadline_kind', 'TEXT', 1, 0],
+        ['deadline_kind', 'TEXT', 0, 0],
         ['deadline_date', 'TEXT', 0, 0],
         ['deadline_instant', 'TEXT', 0, 0],
         ['deadline_display_zone', 'TEXT', 0, 0],
+        ['weekly_start_date', 'TEXT', 0, 0],
+        ['weekly_weekday', 'TEXT', 0, 0],
+        ['weekly_local_deadline_time', 'TEXT', 0, 0],
+        ['weekly_confirmed_end_date', 'TEXT', 0, 0],
+        ['follow_teaching_week', 'INTEGER', 0, 0],
     ],
     task_occurrence_states: [
         ['task_series_id', 'TEXT', 1, 1],
@@ -936,6 +1097,20 @@ const LEVEL_5_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly
     meeting_occurrence_overrides: TABLE_COLUMNS.meeting_occurrence_overrides.filter(
         column => column[0] !== 'end_day_offset',
     ),
+};
+
+const LEVEL_8_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly unknown[]>> = {
+    task_segments: [
+        ['task_segment_id', 'TEXT', 1, 1],
+        ['task_series_id', 'TEXT', 1, 0],
+        ['title', 'TEXT', 1, 0],
+        ['task_size', 'TEXT', 1, 0],
+        ['schedule_kind', 'TEXT', 1, 0],
+        ['deadline_kind', 'TEXT', 1, 0],
+        ['deadline_date', 'TEXT', 0, 0],
+        ['deadline_instant', 'TEXT', 0, 0],
+        ['deadline_display_zone', 'TEXT', 0, 0],
+    ],
 };
 
 const LEVEL_3_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly unknown[]>> = {
@@ -1044,6 +1219,8 @@ const LEVEL_8_TABLES = [
     'task_occurrence_states',
 ] as const;
 
+const LEVEL_9_TABLES = LEVEL_8_TABLES;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1064,7 +1241,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1082,7 +1259,7 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 7) {
         return LEVEL_7_TABLES;
     }
-    return LEVEL_8_TABLES;
+    return level === 8 ? LEVEL_8_TABLES : LEVEL_9_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1117,7 +1294,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                             ? LEVEL_6_DDL
                             : level === 7
                                 ? LEVEL_7_DDL
-                                : LEVEL_8_DDL;
+                                : level === 8
+                                    ? LEVEL_8_DDL
+                                    : LEVEL_9_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -1176,7 +1355,9 @@ function validateColumnsAndForeignKeys(
             ? LEVEL_4_TABLE_COLUMNS[table]
             : level === 5 && LEVEL_5_TABLE_COLUMNS[table]
                 ? LEVEL_5_TABLE_COLUMNS[table]
-                : TABLE_COLUMNS[table];
+                : level === 8 && LEVEL_8_TABLE_COLUMNS[table]
+                    ? LEVEL_8_TABLE_COLUMNS[table]
+                    : TABLE_COLUMNS[table];
     if (!equalRows(actualColumns, expectedColumns)) {
         rejectSchema();
     }
@@ -1426,6 +1607,133 @@ function validateLevel8TaskFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Derives the first and last LocalDate anchors of a canonical weekly Task rule.
+ * @param {WeeklyTaskSchedule} schedule - Canonical weekly Task schedule.
+ * @return {readonly [string, string] | null} Inclusive boundary anchors, or null when none exist.
+ */
+function weeklyTaskBoundaryAnchors(schedule: WeeklyTaskSchedule): readonly [string, string] | null {
+    const weekdayNumber = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].indexOf(schedule.weekday);
+    const startTime = Date.parse(`${schedule.startDate}T00:00:00.000Z`);
+    const endTime = Date.parse(`${schedule.confirmedEndDate}T00:00:00.000Z`);
+    const startWeekday = new Date(startTime).getUTCDay();
+    const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
+    const firstTime = startTime + forwardDays * 86_400_000;
+    if (firstTime > endTime) {
+        return null;
+    }
+    const endWeekday = new Date(endTime).getUTCDay();
+    const backwardDays = (endWeekday - weekdayNumber + 7) % 7;
+    const lastTime = endTime - backwardDays * 86_400_000;
+    return [
+        new Date(firstTime).toISOString().slice(0, 10),
+        new Date(lastTime).toISOString().slice(0, 10),
+    ];
+}
+
+/**
+ * Verifies every retained weekly Task rule and its unsupported occurrence-state boundary.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 9.
+ * @return {void}
+ */
+function validateLevel9TaskFacts(database: DatabaseSync): void {
+    const weeklyTasks = database.prepare(`
+        SELECT
+            weekly_start_date,
+            weekly_weekday,
+            weekly_local_deadline_time,
+            weekly_confirmed_end_date,
+            follow_teaching_week,
+            terms.time_zone
+        FROM task_segments
+        JOIN task_series ON task_series.task_series_id = task_segments.task_series_id
+        JOIN courses ON courses.course_id = task_series.course_id
+        JOIN terms ON terms.term_id = courses.term_id
+        WHERE schedule_kind = 'weekly'
+    `).all() as Array<{
+        weekly_start_date: unknown;
+        weekly_weekday: unknown;
+        weekly_local_deadline_time: unknown;
+        weekly_confirmed_end_date: unknown;
+        follow_teaching_week: unknown;
+        time_zone: unknown;
+    }>;
+    for (const task of weeklyTasks) {
+        const followTeachingWeek = task.follow_teaching_week === 1 || task.follow_teaching_week === 1n
+            ? true
+            : task.follow_teaching_week === 0 || task.follow_teaching_week === 0n
+                ? false
+                : null;
+        const schedule = followTeachingWeek === null
+            ? null
+            : normalizeTaskSchedule({
+                kind: 'weekly',
+                startDate: task.weekly_start_date,
+                weekday: task.weekly_weekday,
+                localDeadlineTime: task.weekly_local_deadline_time,
+                confirmedEndDate: task.weekly_confirmed_end_date,
+                followTeachingWeek,
+            });
+        const termZone = task.time_zone;
+        if (schedule?.kind !== 'weekly' || typeof termZone !== 'string') {
+            rejectSchema('database-corrupt');
+        }
+        const boundaryAnchors = weeklyTaskBoundaryAnchors(schedule);
+        if (boundaryAnchors === null) {
+            rejectSchema('database-corrupt');
+        }
+        let canonicalTermZone: string;
+        let boundaryInstants: string[];
+        try {
+            canonicalTermZone = new Intl.DateTimeFormat('en-CA', { timeZone: termZone })
+                .resolvedOptions()
+                .timeZone;
+            boundaryInstants = boundaryAnchors.map(anchor => INTL_ZONE_RULES.resolveInstant(
+                termZone,
+                anchor,
+                schedule.localDeadlineTime,
+            ));
+        }
+        catch {
+            rejectSchema('database-corrupt');
+        }
+        if (canonicalTermZone !== termZone || !boundaryInstants.every(isCanonicalInstant)) {
+            rejectSchema('database-corrupt');
+        }
+    }
+
+    const outsideCourseRange = database.prepare(`
+        SELECT count(*) AS count
+        FROM task_segments
+        JOIN task_series ON task_series.task_series_id = task_segments.task_series_id
+        JOIN courses ON courses.course_id = task_series.course_id
+        JOIN terms ON terms.term_id = courses.term_id
+        WHERE task_segments.schedule_kind = 'weekly'
+            AND (
+                task_segments.weekly_start_date < CASE courses.teaching_range_kind
+                    WHEN 'inherit-term' THEN terms.start_date
+                    ELSE courses.teaching_start_date
+                END
+                OR task_segments.weekly_confirmed_end_date > CASE courses.teaching_range_kind
+                    WHEN 'inherit-term' THEN terms.end_date
+                    ELSE courses.teaching_end_date
+                END
+            )
+    `);
+    outsideCourseRange.setReadBigInts(true);
+    const weeklyOccurrenceStates = database.prepare(`
+        SELECT count(*) AS count
+        FROM task_occurrence_states
+        JOIN task_segments ON task_segments.task_series_id = task_occurrence_states.task_series_id
+        WHERE task_segments.schedule_kind = 'weekly'
+    `);
+    weeklyOccurrenceStates.setReadBigInts(true);
+    if ((outsideCourseRange.get() as { count: bigint }).count !== 0n
+        || (weeklyOccurrenceStates.get() as { count: bigint }).count !== 0n) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -1453,6 +1761,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 8) {
         validateLevel8TaskFacts(database);
+    }
+    if (level >= 9) {
+        validateLevel9TaskFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -2037,6 +2348,87 @@ export function migrateLevel7To8(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Migrates once-only Task storage to the weekly Task rule union without losing durable records.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel8To9(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_8;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_8;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_8;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_9_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_8;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_8;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_8;
+
+        DROP TABLE receipt_effects_level_8;
+        DROP TABLE durable_followups_level_8;
+        DROP TABLE command_receipts_level_8;
+
+        ALTER TABLE task_segments RENAME TO task_segments_level_8;
+        DROP INDEX task_segments_by_series;
+        ${LEVEL_9_TASK_SEGMENT_DDL}
+        INSERT INTO task_segments (
+            task_segment_id,
+            task_series_id,
+            title,
+            task_size,
+            schedule_kind,
+            deadline_kind,
+            deadline_date,
+            deadline_instant,
+            deadline_display_zone,
+            weekly_start_date,
+            weekly_weekday,
+            weekly_local_deadline_time,
+            weekly_confirmed_end_date,
+            follow_teaching_week
+        ) SELECT
+            task_segment_id,
+            task_series_id,
+            title,
+            task_size,
+            schedule_kind,
+            deadline_kind,
+            deadline_date,
+            deadline_instant,
+            deadline_display_zone,
+            NULL,
+            NULL,
+            NULL,
+            NULL,
+            NULL
+        FROM task_segments_level_8;
+        DROP TABLE task_segments_level_8;
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 9;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -2083,6 +2475,15 @@ export function createSchemaLevel7(database: DatabaseSync): void {
  */
 export function createSchemaLevel8(database: DatabaseSync): void {
     database.exec(LEVEL_8_DDL);
+}
+
+/**
+ * Creates the complete current level 9 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel9(database: DatabaseSync): void {
+    database.exec(LEVEL_9_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -2135,4 +2536,13 @@ export function validateSchemaLevel7(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel8(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 8);
+}
+
+/**
+ * Validates exact level 9 weekly Task rules and existing PLAN facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel9(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 9);
 }

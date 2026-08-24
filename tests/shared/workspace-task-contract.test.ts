@@ -1,5 +1,5 @@
 /**
- * @file Verifies once-task command normalization, stable identity, and receipt digests.
+ * @file Verifies Task command normalization, stable identity, and receipt digests.
  */
 
 import assert from 'node:assert/strict';
@@ -11,6 +11,7 @@ import {
     deleteTaskDigestProjection,
     deriveTaskOccurrenceId,
     isTaskProjection,
+    isTaskSeriesDetailProjection,
     normalizeCompleteTaskCommand,
     normalizeCreateTaskCommand,
     normalizeDeleteTaskCommand,
@@ -37,6 +38,27 @@ const CREATE_COMMAND = {
             title: '  Read Chapter 1  ',
             size: 'small',
             deadline: { kind: 'date-only', date: '2026-09-15' },
+        },
+    },
+} as const;
+
+const WEEKLY_CREATE_COMMAND = {
+    ...COMMAND_BASE,
+    intent: {
+        kind: 'plan.create-task-series',
+        intentSchemaVersion: 2,
+        payload: {
+            courseId: COURSE_ID,
+            title: '  Weekly problem set  ',
+            size: 'large',
+            schedule: {
+                kind: 'weekly',
+                startDate: '2026-09-01',
+                weekday: 'SAT',
+                localDeadlineTime: '23:00',
+                confirmedEndDate: '2026-12-05',
+                followTeachingWeek: true,
+            },
         },
     },
 } as const;
@@ -75,6 +97,51 @@ test('A-TASK-002/003: once Task accepts each exact size and Deadline union varia
             }).intent.payload,
             { ...payload, title: 'Read Chapter 1' },
         );
+    }
+});
+
+test('A-TASK-004/007/010: weekly Task requires one exact confirmed teaching-week rule', () => {
+    const normalized = normalizeCreateTaskCommand(WEEKLY_CREATE_COMMAND);
+
+    assert.deepEqual(normalized.intent, {
+        kind: 'plan.create-task-series',
+        intentSchemaVersion: 2,
+        payload: {
+            courseId: COURSE_ID,
+            title: 'Weekly problem set',
+            size: 'large',
+            schedule: {
+                kind: 'weekly',
+                startDate: '2026-09-01',
+                weekday: 'SAT',
+                localDeadlineTime: '23:00',
+                confirmedEndDate: '2026-12-05',
+                followTeachingWeek: true,
+            },
+        },
+    });
+});
+
+test('A-TASK-004/010: weekly Task rejects malformed, unconfirmed, reversed, and empty rules', () => {
+    const schedule = WEEKLY_CREATE_COMMAND.intent.payload.schedule;
+    for (const invalidSchedule of [
+        { ...schedule, localDeadlineTime: '24:00' },
+        { ...schedule, weekday: 'DAY' },
+        { ...schedule, startDate: '2026-09-31' },
+        { ...schedule, confirmedEndDate: '2026-08-31' },
+        { ...schedule, confirmedEndDate: undefined },
+        { ...schedule, unexpected: true },
+    ]) {
+        assert.throws(() => normalizeCreateTaskCommand({
+            ...WEEKLY_CREATE_COMMAND,
+            intent: {
+                ...WEEKLY_CREATE_COMMAND.intent,
+                payload: {
+                    ...WEEKLY_CREATE_COMMAND.intent.payload,
+                    schedule: invalidSchedule,
+                },
+            },
+        }), TypeError);
     }
 });
 
@@ -145,6 +212,106 @@ test('TEST-PLAN-001: active once Task identity and projection use the stable onc
     assert.equal(isTaskProjection({
         ...projection,
         occurrenceId: { ...occurrenceId, originalLogicalAnchor: '2026-09-15' },
+    }), false);
+});
+
+test('A-TASK-004: weekly Task identity uses the original LocalDate anchor', () => {
+    const first = deriveTaskOccurrenceId(TASK_SERIES_ID, '2026-09-05');
+    const repeated = deriveTaskOccurrenceId(TASK_SERIES_ID, '2026-09-05');
+    const projection = {
+        taskSeriesId: TASK_SERIES_ID,
+        courseId: COURSE_ID,
+        title: 'Weekly problem set',
+        size: 'large',
+        schedule: WEEKLY_CREATE_COMMAND.intent.payload.schedule,
+        entityVersion: '3',
+    } as const;
+
+    assert.deepEqual(first, {
+        taskSeriesId: TASK_SERIES_ID,
+        originalLogicalAnchor: '2026-09-05',
+    });
+    assert.deepEqual(repeated, first);
+    assert.equal(Object.isFrozen(first), true);
+    assert.equal(isTaskProjection(projection), true);
+});
+
+test('FLOW-02: bounded weekly detail carries coherent stable occurrences and TermZone deadlines', () => {
+    const projection = {
+        workspaceRevision: '7',
+        planEntityVersion: '7',
+        requestedWindow: { startDate: '2026-09-01', endDate: '2026-09-30' },
+        termZone: 'America/Toronto',
+        taskSeriesId: TASK_SERIES_ID,
+        courseId: COURSE_ID,
+        title: 'Weekly problem set',
+        size: 'large',
+        schedule: WEEKLY_CREATE_COMMAND.intent.payload.schedule,
+        entityVersion: '3',
+        occurrences: [{
+            occurrenceId: {
+                taskSeriesId: TASK_SERIES_ID,
+                originalLogicalAnchor: '2026-09-05',
+            },
+            deadline: {
+                kind: 'timed',
+                instant: '2026-09-06T03:00:00.000Z',
+                timeZone: 'America/Toronto',
+            },
+        }],
+    } as const;
+
+    assert.equal(isTaskSeriesDetailProjection(projection), true);
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: [{
+            ...projection.occurrences[0],
+            status: 'pending',
+        }],
+    }), false);
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: [{
+            ...projection.occurrences[0],
+            occurrenceId: {
+                taskSeriesId: TASK_SERIES_ID,
+                originalLogicalAnchor: '2026-09-06',
+            },
+        }],
+    }), false);
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        requestedWindow: { startDate: '2026-01-01', endDate: '2027-01-03' },
+    }), false);
+    const sparseOccurrences: unknown[] = [];
+    sparseOccurrences.length = 1;
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: sparseOccurrences,
+    }), false);
+    const accessorOccurrences: unknown[] = [];
+    Object.defineProperty(accessorOccurrences, '0', {
+        enumerable: true,
+        get: () => projection.occurrences[0],
+    });
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: accessorOccurrences,
+    }), false);
+    const extraPropertyOccurrences: unknown[] = [...projection.occurrences];
+    Object.defineProperty(extraPropertyOccurrences, 'extra', {
+        enumerable: true,
+        value: true,
+    });
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: extraPropertyOccurrences,
+    }), false);
+    const foreignPrototypeOccurrences: unknown[] = [...projection.occurrences];
+    Object.setPrototypeOf(foreignPrototypeOccurrences, Object.create(Array.prototype));
+    assert.equal(isTaskSeriesDetailProjection({
+        ...projection,
+        occurrences: foreignPrototypeOccurrences,
     }), false);
 });
 

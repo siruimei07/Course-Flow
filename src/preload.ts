@@ -21,6 +21,7 @@ import {
   makeInitializeWorkspaceRequest,
   makeMeetingOccurrenceImpactRequest,
   makeMeetingSeriesQueryRequest,
+  makeTaskSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
   makeDeleteHolidayRangeRequest,
   makeDeleteTaskRequest,
@@ -48,6 +49,7 @@ import type {
   CreateTaskCommand,
   DeleteTaskCommand,
   UpdateTaskCommand,
+  TaskOccurrenceWindow,
 } from './shared/workspace-task-contract';
 import type {
   AcceptedCreateCourseWithMeetingCommand,
@@ -264,6 +266,27 @@ function queryMeetingSeries(
 }
 
 /**
+ * Queries one Task series through the bounded Workspace channel.
+ * @param {string} taskSeriesId - Stable Task series identity.
+ * @param {TaskOccurrenceWindow} requestedWindow - Physical-date expansion window.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function queryTaskSeries(
+  taskSeriesId: string,
+  requestedWindow: TaskOccurrenceWindow,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeTaskSeriesQueryRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      taskSeriesId,
+      requestedWindow,
+    )
+  ));
+}
+
+/**
  * Requests a version-bound whole-rule impact preview.
  * @param {MeetingOccurrenceImpactDraft} draft - Exact proposed future rule.
  * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
@@ -320,6 +343,7 @@ contextBridge.exposeInMainWorld(
     restoreTermAsCurrent,
     createCourseWithMeeting,
     queryMeetingSeries,
+    queryTaskSeries,
     previewMeetingOccurrence,
     changeMeetingOccurrence,
     cancelMeetingOccurrence,

@@ -79,6 +79,7 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
           || kind === 'workspace.holiday-range.delete'
           || kind === 'workspace.course.create-with-first-meeting'
           || kind === 'workspace.meeting-series.query'
+          || kind === 'workspace.task-series.query'
           || kind === 'workspace.meeting-occurrence.preview'
           || kind === 'workspace.meeting-occurrence.change'
           || kind === 'workspace.meeting-occurrence.cancel')

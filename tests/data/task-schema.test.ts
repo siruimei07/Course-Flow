@@ -1,9 +1,9 @@
 /**
- * @file Verifies the once-only Task schema, constraints, and level 7 migration.
+ * @file Verifies once and weekly Task schema constraints and retained migrations.
  */
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -13,11 +13,17 @@ import {
     COURSEFLOW_APPLICATION_ID,
     createSchemaLevel7,
     createSchemaLevel8,
+    createSchemaLevel9,
     CURRENT_SCHEMA_LEVEL,
     migrateLevel7To8,
     SchemaValidationError,
     validateSchemaLevel8,
+    validateSchemaLevel9,
 } from '../../src/data/schema';
+import {
+    openWorkspaceData,
+    openWorkspaceDataWithMigrations,
+} from '../../src/data/sqlite-data-store';
 
 const COURSE_ID = '22222222-2222-4222-8222-222222222222';
 const TASK_SERIES_ID = '33333333-3333-4333-8333-333333333333';
@@ -26,7 +32,7 @@ const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
 
 /**
  * Inserts the minimal valid Workspace, Term, and Course parents for Task foreign keys.
- * @param {DatabaseSync} database - Open level 8 database.
+ * @param {DatabaseSync} database - Open level 8 or 9 database.
  * @return {void}
  */
 function insertTaskParents(database: DatabaseSync): void {
@@ -82,6 +88,147 @@ function insertOnceTask(
     `).run(taskSegmentId, taskSeriesId, deadlineKind, date, instant, zone);
 }
 
+/**
+ * Creates a valid level 8 Workspace carrying every durable Task-adjacent record migrated at level 9.
+ * @param {string} dataSlotsRoot - Temporary DATA slots root.
+ * @return {void}
+ */
+function createLevel8WorkspaceWithTask(dataSlotsRoot: string): void {
+    const activeDirectory = join(dataSlotsRoot, 'active');
+    mkdirSync(activeDirectory);
+    const database = new DatabaseSync(join(activeDirectory, 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec('BEGIN IMMEDIATE');
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel8(database);
+        database.exec('PRAGMA user_version = 8');
+        insertTaskParents(database);
+        database.exec(`
+            UPDATE workspace_state SET revision = 1 WHERE singleton = 1;
+            UPDATE protection_watermarks SET backup_needed_through = 1 WHERE singleton = 1;
+        `);
+        insertOnceTask(
+            database,
+            TASK_SERIES_ID,
+            TASK_SEGMENT_ID,
+            'date-only',
+            '2026-10-15',
+            null,
+            null,
+        );
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, entity_version
+            ) VALUES (?, 'once', 'completed', 2)
+        `).run(TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES (?, 'plan.create-task-series', 1, 'courseflow-canonical-json-v1', 'sha256',
+                zeroblob(32), 1, 'committed')
+        `).run('55555555-5555-4555-8555-555555555555');
+        database.prepare(`
+            INSERT INTO receipt_effects (
+                command_id, effect_order, effect_code, entity_kind, entity_id, entity_version
+            ) VALUES (?, 0, 'plan.task-series-created', 'task-series', ?, 1)
+        `).run('55555555-5555-4555-8555-555555555555', TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO durable_followups (
+                follow_up_id, originating_command_id, owner, kind, prerequisite_revision, state,
+                follow_up_version
+            ) VALUES (?, ?, 'protect', 'backup-needed-through', 1, 'pending', 0)
+        `).run('66666666-6666-4666-8666-666666666666', '55555555-5555-4555-8555-555555555555');
+        database.exec('COMMIT');
+    }
+    finally {
+        database.close();
+    }
+}
+
+/**
+ * Verifies the exact level 8 facts that migration safety and rollback must retain.
+ * @param {DatabaseSync} database - Read-only level 8 database.
+ * @return {void}
+ */
+function assertLevel8TaskFacts(database: DatabaseSync): void {
+    assert.equal(
+        (database.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+        8,
+    );
+    assert.deepEqual(validateSchemaLevel8(database), {
+        workspaceId: WORKSPACE_ID,
+        revision: 1n,
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT schedule_kind, deadline_kind, deadline_date, deadline_instant, deadline_display_zone
+        FROM task_segments WHERE task_series_id = ?
+    `).get(TASK_SERIES_ID) }, {
+        schedule_kind: 'once',
+        deadline_kind: 'date-only',
+        deadline_date: '2026-10-15',
+        deadline_instant: null,
+        deadline_display_zone: null,
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT original_logical_anchor, status, entity_version
+        FROM task_occurrence_states WHERE task_series_id = ?
+    `).get(TASK_SERIES_ID) }, {
+        original_logical_anchor: 'once',
+        status: 'completed',
+        entity_version: 2,
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT
+            intent_kind,
+            intent_schema_version,
+            canonical_encoding,
+            digest_algorithm,
+            hex(payload_digest) AS payload_digest,
+            committed_revision,
+            result_kind
+        FROM command_receipts WHERE command_id = ?
+    `).get('55555555-5555-4555-8555-555555555555') }, {
+        intent_kind: 'plan.create-task-series',
+        intent_schema_version: 1,
+        canonical_encoding: 'courseflow-canonical-json-v1',
+        digest_algorithm: 'sha256',
+        payload_digest: '0000000000000000000000000000000000000000000000000000000000000000',
+        committed_revision: 1,
+        result_kind: 'committed',
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT effect_order, effect_code, entity_kind, entity_id, entity_version
+        FROM receipt_effects WHERE command_id = ?
+    `).get('55555555-5555-4555-8555-555555555555') }, {
+        effect_order: 0,
+        effect_code: 'plan.task-series-created',
+        entity_kind: 'task-series',
+        entity_id: TASK_SERIES_ID,
+        entity_version: 1,
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT originating_command_id, owner, kind, prerequisite_revision, state, follow_up_version
+        FROM durable_followups WHERE follow_up_id = ?
+    `).get('66666666-6666-4666-8666-666666666666') }, {
+        originating_command_id: '55555555-5555-4555-8555-555555555555',
+        owner: 'protect',
+        kind: 'backup-needed-through',
+        prerequisite_revision: 1,
+        state: 'pending',
+        follow_up_version: 0,
+    });
+    assert.deepEqual({ ...database.prepare(`
+        SELECT backup_needed_through, backup_succeeded_through
+        FROM protection_watermarks WHERE singleton = 1
+    `).get() }, {
+        backup_needed_through: 1,
+        backup_succeeded_through: 0,
+    });
+}
+
 test('ADR-04: level 8 stores once-only Task facts with an exact deadline union', () => {
     const database = new DatabaseSync(':memory:', {
         enableForeignKeyConstraints: true,
@@ -93,7 +240,11 @@ test('ADR-04: level 8 stores once-only Task facts with an exact deadline union',
         database.exec('PRAGMA user_version = 8');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 8);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 9);
+        assert.equal(
+            Number((database.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version),
+            8,
+        );
         const table = database.prepare("PRAGMA table_list('task_segments')").get() as {
             name: string;
             ncol: bigint;
@@ -235,5 +386,484 @@ test('ADR-04/TEST-DATA-006: level 7 Task migration commits atomically and valida
     }
     finally {
         rmSync(dataSlotsRoot, { recursive: true, force: true });
+    }
+});
+
+test('ADR-04: level 9 distinguishes weekly Task segments from once facts', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+
+        assert.equal(CURRENT_SCHEMA_LEVEL, 9);
+        insertOnceTask(
+            database,
+            TASK_SERIES_ID,
+            TASK_SEGMENT_ID,
+            'date-only',
+            '2026-10-15',
+            null,
+            null,
+        );
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run('55555555-5555-4555-8555-555555555555', COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Weekly assignment', 'large', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-07', 'MON', '17:30', '2026-12-14', 1)
+        `).run('66666666-6666-4666-8666-666666666666', '55555555-5555-4555-8555-555555555555');
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run('77777777-7777-4777-8777-777777777777', COURSE_ID);
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Invalid weekly', 'small', 'weekly', 'tba', NULL, NULL, NULL,
+                '2026-09-07', 'MON', '17:30', '2026-12-14', 0)
+        `).run('aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', '77777777-7777-4777-8777-777777777777'));
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run('88888888-8888-4888-8888-888888888888', COURSE_ID);
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Invalid time', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-07', 'MON', '24:00', '2026-12-14', 0)
+        `).run('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '88888888-8888-4888-8888-888888888888'));
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run('99999999-9999-4999-8999-999999999999', COURSE_ID);
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone
+            ) VALUES (?, ?, 'Missing deadline kind', 'small', 'once', NULL, NULL, NULL, NULL)
+        `).run('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '99999999-9999-4999-8999-999999999999'));
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', COURSE_ID);
+        assert.throws(() => database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Malformed time', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-07', 'MON', '12::0', '2026-12-14', 0)
+        `).run('ffffffff-ffff-4fff-8fff-ffffffffffff', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'));
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES (?, 'plan.create-task-series', 2, 'courseflow-canonical-json-v1', 'sha256',
+                zeroblob(32), 1, 'committed')
+        `).run('cccccccc-cccc-4ccc-8ccc-cccccccccccc');
+        database.prepare(`
+            INSERT INTO command_receipts (
+                command_id, intent_kind, intent_schema_version, canonical_encoding, digest_algorithm,
+                payload_digest, committed_revision, result_kind
+            ) VALUES (?, 'plan.update-task-series', 2, 'courseflow-canonical-json-v1', 'sha256',
+                zeroblob(32), 1, 'committed')
+        `).run('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    }
+    finally {
+        database.close();
+    }
+});
+
+test('ADR-04: level 9 rejects a weekly Task outside its Course teaching range', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        assert.deepEqual(validateSchemaLevel9(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 0n,
+        });
+        database.exec(`
+            UPDATE courses
+            SET teaching_range_kind = 'explicit',
+                teaching_start_date = '2026-09-15',
+                teaching_end_date = '2026-11-30'
+            WHERE course_id = '${COURSE_ID}'
+        `);
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run(TASK_SERIES_ID, COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Out of range', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-08', 'TUE', '09:00', '2026-12-01', 1)
+        `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+
+        assert.throws(
+            () => validateSchemaLevel9(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+    }
+    finally {
+        database.close();
+    }
+});
+
+test('ADR-04: level 9 rejects non-canonical or occurrence-free weekly Task rules', () => {
+    const corruptFacts = [
+        {
+            name: 'non-canonical LocalDate',
+            startDate: '2026-09-31',
+            endDate: '2026-09-31',
+            weekday: 'MON',
+            termEndDate: '2026-12-20',
+        },
+        {
+            name: 'no matching weekday',
+            startDate: '2026-09-01',
+            endDate: '2026-09-01',
+            weekday: 'SUN',
+            termEndDate: '2026-09-01',
+        },
+    ] as const;
+
+    for (const facts of corruptFacts) {
+        const database = new DatabaseSync(':memory:', {
+            enableForeignKeyConstraints: true,
+        });
+        try {
+            database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+            createSchemaLevel9(database);
+            database.exec('PRAGMA user_version = 9');
+            insertTaskParents(database);
+            database.prepare('UPDATE terms SET end_date = ?').run(facts.termEndDate);
+            database.prepare(`
+                INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+                VALUES (?, ?, 0, 1)
+            `).run(TASK_SERIES_ID, COURSE_ID);
+            database.prepare(`
+                INSERT INTO task_segments (
+                    task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                    deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                    weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date,
+                    follow_teaching_week
+                ) VALUES (?, ?, 'Corrupt weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                    ?, ?, '09:00', ?, 1)
+            `).run(
+                TASK_SEGMENT_ID,
+                TASK_SERIES_ID,
+                facts.startDate,
+                facts.weekday,
+                facts.endDate,
+            );
+
+            assert.throws(
+                () => validateSchemaLevel9(database),
+                (error: unknown) => error instanceof SchemaValidationError
+                    && error.reason === 'database-corrupt',
+                facts.name,
+            );
+        }
+        finally {
+            database.close();
+        }
+    }
+});
+
+test('ADR-04: level 9 rejects occurrence state attached to any weekly Task', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 1, 1)
+        `).run(TASK_SERIES_ID, COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Retired weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-07', 'MON', '09:00', '2026-09-07', 1)
+        `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+        database.prepare(`
+            INSERT INTO task_occurrence_states (
+                task_series_id, original_logical_anchor, status, entity_version
+            ) VALUES (?, 'once', 'completed', 1)
+        `).run(TASK_SERIES_ID);
+
+        assert.throws(
+            () => validateSchemaLevel9(database),
+            (error: unknown) => error instanceof SchemaValidationError
+                && error.reason === 'database-corrupt',
+        );
+    }
+    finally {
+        database.close();
+    }
+});
+
+test('ADR-04: level 9 rejects a weekly boundary whose TermZone Instant is not canonical', t => {
+    const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-weekly-task-boundary-'));
+    t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
+    const activeDirectory = join(dataSlotsRoot, 'active');
+    mkdirSync(activeDirectory);
+    const database = new DatabaseSync(join(activeDirectory, 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        database.exec(`
+            UPDATE terms
+            SET start_date = '9999-12-31',
+                end_date = '9999-12-31',
+                time_zone = 'America/Toronto';
+        `);
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run(TASK_SERIES_ID, COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Boundary weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '9999-12-31', 'FRI', '23:59', '9999-12-31', 1)
+        `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind !== 'recovery') {
+        throw new Error('Expected boundary weekly Task database to require recovery');
+    }
+    assert.equal(opened.problem.code, 'integrity');
+    assert.equal(opened.problem.details.reason, 'database-corrupt');
+});
+
+test('ADR-04: level 9 rejects a noncanonical weekly TermZone alias before core reads', async t => {
+    const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-weekly-task-zone-'));
+    t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
+    const activeDirectory = join(dataSlotsRoot, 'active');
+    mkdirSync(activeDirectory);
+    const database = new DatabaseSync(join(activeDirectory, 'workspace.sqlite'), {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        database.exec("UPDATE terms SET time_zone = 'US/Eastern'");
+        database.prepare(`
+            INSERT INTO task_series (task_series_id, course_id, retired, entity_version)
+            VALUES (?, ?, 0, 1)
+        `).run(TASK_SERIES_ID, COURSE_ID);
+        database.prepare(`
+            INSERT INTO task_segments (
+                task_segment_id, task_series_id, title, task_size, schedule_kind, deadline_kind,
+                deadline_date, deadline_instant, deadline_display_zone, weekly_start_date,
+                weekly_weekday, weekly_local_deadline_time, weekly_confirmed_end_date, follow_teaching_week
+            ) VALUES (?, ?, 'Alias weekly', 'small', 'weekly', NULL, NULL, NULL, NULL,
+                '2026-09-01', 'TUE', '09:00', '2026-12-15', 1)
+        `).run(TASK_SEGMENT_ID, TASK_SERIES_ID);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = openWorkspaceData(dataSlotsRoot);
+    if (opened.kind === 'ready') {
+        await opened.store.close();
+    }
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind !== 'recovery') {
+        throw new Error('Expected noncanonical weekly TermZone to require recovery');
+    }
+    assert.equal(opened.problem.code, 'integrity');
+    assert.equal(opened.problem.details.reason, 'database-corrupt');
+});
+
+test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durable facts', async t => {
+    const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-weekly-task-schema-'));
+    t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
+    createLevel8WorkspaceWithTask(dataSlotsRoot);
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected level 8 Task migration to open ready');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 9,
+        revision: '2',
+    });
+    await opened.store.close();
+
+    const activeDatabase = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        readOnly: true,
+    });
+    try {
+        assert.deepEqual(validateSchemaLevel9(activeDatabase), {
+            workspaceId: WORKSPACE_ID,
+            revision: 2n,
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT schedule_kind, deadline_kind, deadline_date, weekly_start_date, follow_teaching_week
+            FROM task_segments WHERE task_series_id = ?
+        `).get(TASK_SERIES_ID) }, {
+            schedule_kind: 'once',
+            deadline_kind: 'date-only',
+            deadline_date: '2026-10-15',
+            weekly_start_date: null,
+            follow_teaching_week: null,
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT original_logical_anchor, status, entity_version
+            FROM task_occurrence_states WHERE task_series_id = ?
+        `).get(TASK_SERIES_ID) }, {
+            original_logical_anchor: 'once',
+            status: 'completed',
+            entity_version: 2,
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT
+                intent_kind,
+                intent_schema_version,
+                canonical_encoding,
+                digest_algorithm,
+                hex(payload_digest) AS payload_digest,
+                committed_revision,
+                result_kind
+            FROM command_receipts WHERE command_id = ?
+        `).get('55555555-5555-4555-8555-555555555555') }, {
+            intent_kind: 'plan.create-task-series',
+            intent_schema_version: 1,
+            canonical_encoding: 'courseflow-canonical-json-v1',
+            digest_algorithm: 'sha256',
+            payload_digest: '0000000000000000000000000000000000000000000000000000000000000000',
+            committed_revision: 1,
+            result_kind: 'committed',
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT effect_order, effect_code, entity_kind, entity_id, entity_version
+            FROM receipt_effects WHERE command_id = ?
+        `).get('55555555-5555-4555-8555-555555555555') }, {
+            effect_order: 0,
+            effect_code: 'plan.task-series-created',
+            entity_kind: 'task-series',
+            entity_id: TASK_SERIES_ID,
+            entity_version: 1,
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT originating_command_id, owner, kind, prerequisite_revision, state, follow_up_version
+            FROM durable_followups WHERE follow_up_id = ?
+        `).get('66666666-6666-4666-8666-666666666666') }, {
+            originating_command_id: '55555555-5555-4555-8555-555555555555',
+            owner: 'protect',
+            kind: 'backup-needed-through',
+            prerequisite_revision: 1,
+            state: 'pending',
+            follow_up_version: 0,
+        });
+        assert.deepEqual({ ...activeDatabase.prepare(`
+            SELECT backup_needed_through, backup_succeeded_through
+            FROM protection_watermarks WHERE singleton = 1
+        `).get() }, {
+            backup_needed_through: 2,
+            backup_succeeded_through: 0,
+        });
+    }
+    finally {
+        activeDatabase.close();
+    }
+
+    const safetyDirectories = readdirSync(dataSlotsRoot)
+        .filter(name => name.startsWith('migration-safety-level-8-'));
+    assert.equal(safetyDirectories.length, 1);
+    const safetyDatabase = new DatabaseSync(
+        join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
+        { readOnly: true },
+    );
+    try {
+        assertLevel8TaskFacts(safetyDatabase);
+    }
+    finally {
+        safetyDatabase.close();
+    }
+});
+
+test('ADR-04/TEST-DATA-006: level 8 to 9 before-commit failure rolls back every fact', async t => {
+    const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-weekly-task-rollback-'));
+    t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
+    createLevel8WorkspaceWithTask(dataSlotsRoot);
+
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.before-level-commit') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+
+    const activeDatabase = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        readOnly: true,
+    });
+    try {
+        assertLevel8TaskFacts(activeDatabase);
+    }
+    finally {
+        activeDatabase.close();
+    }
+
+    const safetyDirectories = readdirSync(dataSlotsRoot)
+        .filter(name => name.startsWith('migration-safety-level-8-'));
+    assert.equal(safetyDirectories.length, 1);
+    const safetyDatabase = new DatabaseSync(
+        join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
+        { readOnly: true },
+    );
+    try {
+        assertLevel8TaskFacts(safetyDatabase);
+    }
+    finally {
+        safetyDatabase.close();
     }
 });
