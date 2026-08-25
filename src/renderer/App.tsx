@@ -47,6 +47,7 @@ import {
     initialWorkspaceSurfaceFrom,
     planProjectionStateFrom,
 } from './workspace-view-state';
+import { WindowControls, WindowTitlebar } from './WindowControls';
 import {
     TaskActionNotice,
     WorkspacePage,
@@ -88,76 +89,6 @@ type PlanLoadResult = Readonly<{
 }>;
 
 const MILLISECONDS_PER_DAY = 86_400_000;
-
-/**
- * Renders the three bounded Shell controls for the containing desktop window.
- *
- * @return {ReactElement} Accessible minimize, maximize/restore, and close controls.
- */
-function WindowControls(): ReactElement {
-    return (
-        <div
-            aria-label="窗口控件"
-            className="window-controls"
-            role="group"
-        >
-            <button
-                aria-label="最小化窗口"
-                className="window-control-button window-control-button--minimize"
-                onClick={() => window.courseFlowWindow.control('minimize')}
-                title="最小化"
-                type="button"
-            >
-                <svg
-                    aria-hidden="true"
-                    className="window-control-icon"
-                    focusable="false"
-                    viewBox="0 0 16 16"
-                >
-                    <path d="M4 8h8" />
-                </svg>
-            </button>
-            <button
-                aria-label="最大化或还原窗口"
-                className="window-control-button window-control-button--maximize"
-                onClick={() => window.courseFlowWindow.control('toggle-maximize')}
-                title="最大化或还原"
-                type="button"
-            >
-                <svg
-                    aria-hidden="true"
-                    className="window-control-icon"
-                    focusable="false"
-                    viewBox="0 0 16 16"
-                >
-                    <rect
-                        height="7.5"
-                        rx="1"
-                        width="7.5"
-                        x="4.25"
-                        y="4.25"
-                    />
-                </svg>
-            </button>
-            <button
-                aria-label="关闭窗口"
-                className="window-control-button window-control-button--close"
-                onClick={() => window.courseFlowWindow.control('close')}
-                title="关闭"
-                type="button"
-            >
-                <svg
-                    aria-hidden="true"
-                    className="window-control-icon"
-                    focusable="false"
-                    viewBox="0 0 16 16"
-                >
-                    <path d="m5 5 6 6m0-6-6 6" />
-                </svg>
-            </button>
-        </div>
-    );
-}
 
 export type TaskActionAppBridge = Pick<
     Window['courseFlow'],
@@ -931,36 +862,42 @@ export function App(): ReactElement {
 
     if (state.kind === 'loading') {
         return (
-            <main className="startup-surface">
-                <section
-                    aria-live="polite"
-                    className="status-card"
-                >
-                    <p className="eyebrow">CourseFlow</p>
-                    <h1>正在读取本地工作区</h1>
-                    <p>课程数据仍保存在这台设备上。</p>
-                </section>
-            </main>
+            <div className="startup-frame">
+                <WindowTitlebar />
+                <main className="startup-surface">
+                    <section
+                        aria-live="polite"
+                        className="status-card"
+                    >
+                        <p className="eyebrow">CourseFlow</p>
+                        <h1>正在读取本地工作区</h1>
+                        <p>课程数据仍保存在这台设备上。</p>
+                    </section>
+                </main>
+            </div>
         );
     }
 
     if (state.kind === 'problem') {
         return (
-            <main className="startup-surface">
-                <section
-                    aria-labelledby="workspace-problem-title"
-                    className="status-card status-card--problem"
-                >
-                    <p className="eyebrow">Workspace unavailable</p>
-                    <h1 id="workspace-problem-title">暂时无法打开工作区</h1>
-                    <p role="alert">{state.message}</p>
-                    <button
-                        className="primary-action"
-                        onClick={reload}
-                        type="button"
-                    >重试</button>
-                </section>
-            </main>
+            <div className="startup-frame">
+                <WindowTitlebar />
+                <main className="startup-surface">
+                    <section
+                        aria-labelledby="workspace-problem-title"
+                        className="status-card status-card--problem"
+                    >
+                        <p className="eyebrow">Workspace unavailable</p>
+                        <h1 id="workspace-problem-title">暂时无法打开工作区</h1>
+                        <p role="alert">{state.message}</p>
+                        <button
+                            className="primary-action"
+                            onClick={reload}
+                            type="button"
+                        >重试</button>
+                    </section>
+                </main>
+            </div>
         );
     }
 

@@ -310,6 +310,8 @@ test('setup is a modal checklist with an inner dark current-step layer and early
 
     assert.match(html, /<dialog/);
     assert.match(html, /aria-modal="true"/);
+    assert.match(html, /aria-label="窗口控件"/);
+    assert.match(html, /aria-label="关闭窗口"/);
     assert.match(html, /完成首次设置/);
     assert.match(html, /当前学期/);
     assert.match(html, /添加课程/);

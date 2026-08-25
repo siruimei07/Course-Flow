@@ -136,6 +136,16 @@ test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', 
     assert.match(styles, /@media \(forced-colors:\s*active\)/);
 });
 
+test('custom title chrome remains reachable during startup and native setup modality', () => {
+    assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 2);
+    assert.match(
+        setupDialog,
+        /<header className="setup-modal-header">[\s\S]*<WindowControls \/>[\s\S]*<\/header>/,
+    );
+    assert.match(styles, /\.startup-titlebar\s*\{[^}]*app-region:\s*drag;/s);
+    assert.match(styles, /\.setup-modal-header\s*\{[^}]*app-region:\s*drag;/s);
+});
+
 test('WP-R4-06 closes the native modal before restoring focus and gives the skip target focus', () => {
     assert.match(setupDialog, /const closeDialog = [\s\S]*dialog\.close\(\);[\s\S]*props\.onClose/);
     assert.match(app, /returnTarget\?\.isConnected/);

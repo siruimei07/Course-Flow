@@ -126,7 +126,11 @@ test('the title region exposes three independent window controls outside its dra
     assert.match(html, /aria-label="最大化或还原窗口"/);
     assert.match(html, /aria-label="关闭窗口"/);
     assert.match(html, /class="window-control-icon"/);
-    assert.match(styles, /\.topbar\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*app-region:\s*drag;/s);
+    const dragStart = /\.topbar,\s*\.startup-titlebar\s*\{/s.exec(styles)?.index ?? -1;
+    assert.ok(dragStart >= 0);
+    const dragBlock = styles.slice(dragStart, styles.indexOf('}', dragStart) + 1);
+    assert.match(dragBlock, /-webkit-app-region:\s*drag;/);
+    assert.match(dragBlock, /app-region:\s*drag;/);
     const noDragStart = /\.primary-nav,\s*\.topbar-actions,\s*\.window-controls,/s.exec(styles)?.index ?? -1;
     assert.ok(noDragStart >= 0);
     const noDragBlock = styles.slice(noDragStart, styles.indexOf('}', noDragStart) + 1);
@@ -143,7 +147,7 @@ test('the title region exposes three independent window controls outside its dra
     );
     assert.match(
         reducedTransparency,
-        /\.window-control-button--close\s*\{[^}]*color:\s*#ffffff;[^}]*background:\s*#292a27;/s,
+        /\.window-control-button--close\s*\{[^}]*color:\s*#fff;[^}]*background:\s*#292a27;/s,
     );
     const forcedColors = styles.slice(styles.indexOf('@media (forced-colors: active)'));
     assert.match(

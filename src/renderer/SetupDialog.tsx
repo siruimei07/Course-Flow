@@ -43,6 +43,7 @@ import {
     type TermDraft,
 } from './setup-draft';
 import { setupStateFrom, type SetupState } from './setup-state';
+import { WindowControls } from './WindowControls';
 
 export type ResolvedSetupState = Exclude<
     SetupState,
@@ -1184,19 +1185,22 @@ export function SetupDialog(props: SetupDialogProps) {
                         <p className="eyebrow">First setup</p>
                         <h1 id="setup-dialog-title">完成首次设置</h1>
                     </div>
-                    <div className="setup-modal-actions">
-                        <button
-                            disabled={savingCheckpoint || commandBusy || hasPendingMutation}
-                            onClick={() => void saveAndClose('current')}
-                            type="button"
-                        >{readOnly ? '关闭' : '保存进度并退出'}</button>
-                        <button
-                            aria-label={readOnly ? '关闭设置' : '保存设置草稿并关闭'}
-                            className="icon-button"
-                            disabled={savingCheckpoint || commandBusy || hasPendingMutation}
-                            onClick={() => void saveAndClose('current')}
-                            type="button"
-                        >×</button>
+                    <div className="setup-modal-header-actions">
+                        <div className="setup-modal-actions">
+                            <button
+                                disabled={savingCheckpoint || commandBusy || hasPendingMutation}
+                                onClick={() => void saveAndClose('current')}
+                                type="button"
+                            >{readOnly ? '关闭' : '保存进度并退出'}</button>
+                            <button
+                                aria-label={readOnly ? '关闭设置' : '保存设置草稿并关闭'}
+                                className="icon-button"
+                                disabled={savingCheckpoint || commandBusy || hasPendingMutation}
+                                onClick={() => void saveAndClose('current')}
+                                type="button"
+                            >×</button>
+                        </div>
+                        <WindowControls />
                     </div>
                 </header>
                 <div className="setup-modal-body">
