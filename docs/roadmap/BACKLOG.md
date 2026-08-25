@@ -91,7 +91,146 @@
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-GA-01` | 不含 Attendance/Library 的 A-only 打包剖面通过 G1–G7，并明确其保护证据会在 R11/R12 被替代 | `WP-R6-05` | `WP-R1-05`, 当前双平台 A-only 包 | — | — | — |
+| `WP-GA-01` | 完成已批准桌面窗口 UI 优化后，不含 Attendance/Library 的 A-only 打包剖面通过 G1–G7；其保护证据会在 R11/R12 被替代 | `WP-R6-05` | `WP-R1-05`, 当前双平台 A-only 包、Windows 真实物理鼠标环境 | — | — | — |
+
+#### `WP-GA-01` 桌面窗口 UI 优化 Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. 领取本包后先按 TDD 完成两个独立 UI 切片，再用同一 clean source 的 Windows x64 与 macOS arm64 packaged app 取得真实观察证据，最后运行 A-only G1–G7。不得用模拟截图、DOM 注入或自动生成的指针事件替代人工视觉与物理鼠标验收。
+
+**目标：** 默认恢复窗口为显式 `1120×720`，Renderer 只呈现一个贴合窗口客户区的视觉外壳；正常窗口的四边保持一致，内容较长或窗口较矮时底边仍始终可见，右侧不显示垂直滚动条但滚轮、触控板和键盘滚动继续可用。
+
+**架构：** Main 继续拥有原生窗口尺寸和 `thickFrame`；Renderer 技术根节点只约束客户区，现有 `.workspace-frame` 拥有唯一视觉边界，现有 `.workspace-content` 拥有唯一纵向滚动。设置对话框和业务页面不改变事实或 DOM 所有权。
+
+**技术栈：** 当前锁定的 Electron、React、TypeScript、Vite 与原生 CSS；不新增依赖。
+
+**批准依据：** 2026-08-25 用户对 Windows packaged app 截图和实际边界观察的诊断审批；本节是该 UI 优化的唯一执行计划，Roadmap 只同步顺序与 Gate。
+
+**实现边界：** 复用现有 `BrowserWindow`、`.workspace-frame`、`.startup-frame` 与 `.workspace-content`；保留 `titleBarStyle: 'hidden'`、`thickFrame: true`、自绘窗口按钮、drag/no-drag 区和平台菜单差异。不新增依赖、包装组件、窗口状态持久化、最小窗口尺寸、透明窗口、业务功能、Workspace/DATA 接口或新 Requirement/TEST 主所有权。
+
+**预计文件：**
+
+- `tests/architecture/runtime-boundaries.test.ts`：锁定显式默认窗口尺寸，并继续锁定原生 resize frame。
+- `src/main.ts`：只增加 `width: 1120` 与 `height: 720`。
+- `tests/renderer/workspace-shell.test.ts`：锁定单一视口外壳、唯一内容滚动区和隐藏滚动条但不禁用滚动的 CSS 契约。
+- `src/renderer/styles.css`：移除可见的 `body` 外围留白和根滚动，约束现有 frame 为客户区高度，并让 `.workspace-content` 独立滚动。
+- `docs/roadmap/BACKLOG.md`、`docs/roadmap/ROADMAP.md`：实施完成后只登记实际命令、双平台制品、人工观察、未验证项和状态。预计不修改 `src/renderer/App.tsx`；若既有 DOM 无法承载该布局，先更新本计划并说明可达证据。
+
+##### 切片 1：显式增大默认恢复窗口
+
+- [ ] 在 `runtime-boundaries.test.ts` 先增加 RED：`BrowserWindow` 的 `width` 必须为 `1120`、`height` 必须为 `720`，`thickFrame` 仍为 `true`，且仍没有 `frame: false` 或 `transparent: true`。
+
+```typescript
+const width = objectProperty(state, options, 'width');
+const height = objectProperty(state, options, 'height');
+assert.ok(width && state.is.isNumericLiteral(width));
+assert.ok(height && state.is.isNumericLiteral(height));
+assert.equal(width.text, '1120');
+assert.equal(height.text, '720');
+assert.equal(objectProperty(state, options, 'transparent'), undefined);
+```
+
+- [ ] 运行该聚焦测试并确认它只因当前缺少显式 `width`/`height` 而失败。
+- [ ] 在 `src/main.ts` 的现有唯一 `BrowserWindow` options 中加入两个数值，不增加尺寸计算、显示器探测、持久化或 fallback。
+
+```typescript
+const window = new BrowserWindow({
+  width: 1120,
+  height: 720,
+  show: options?.show ?? true,
+  thickFrame: true,
+  title: 'CourseFlow',
+  titleBarStyle: 'hidden',
+  webPreferences: {
+    preload: path.join(__dirname, 'preload.js'),
+    contextIsolation: true,
+    sandbox: true,
+    nodeIntegration: false,
+    webSecurity: true,
+  },
+});
+```
+
+- [ ] 重跑聚焦测试并确认通过。
+
+##### 切片 2：单一视口外壳与内部滚动
+
+- [ ] 在 `workspace-shell.test.ts` 先增加 RED，锁定：`body` 无外围 padding 且不再拥有文档滚动；`html`、`body`、`#root` 与现有 frame 受窗口客户区高度约束；`.workspace-content` 具有 `min-height: 0` 和 `overflow-y: auto`；可见垂直 scrollbar 被隐藏但不得使用 `overflow-y: hidden` 禁止内容滚动。
+
+```typescript
+const bodyRule = /body\s*\{[^}]*\}/s.exec(styles)?.[0] ?? '';
+const contentRule = /\.workspace-content\s*\{[^}]*\}/s.exec(styles)?.[0] ?? '';
+assert.match(bodyRule, /padding:\s*0;/);
+assert.match(bodyRule, /overflow:\s*hidden;/);
+assert.match(contentRule, /min-height:\s*0;/);
+assert.match(contentRule, /overflow-y:\s*auto;/);
+assert.match(contentRule, /scrollbar-width:\s*none;/);
+assert.match(styles, /\.workspace-content::\-webkit-scrollbar\s*\{[^}]*display:\s*none;/s);
+```
+
+- [ ] 运行该聚焦测试，确认失败分别指向当前 `body` 外围 padding、frame 仅有 `min-height`、以及根页面承担滚动。
+- [ ] 在 `styles.css` 只重分配布局所有权：技术根节点占满客户区且不滚动，现有 frame 成为唯一可见外壳，顶部栏保持可达，`.workspace-content` 成为唯一纵向滚动区，内容底部 padding 保证最后一项完整可见。
+
+```css
+html,
+body,
+#root {
+    height: 100%;
+}
+
+body {
+    overflow: hidden;
+    padding: 0;
+}
+
+#root {
+    min-height: 0;
+}
+
+.workspace-frame,
+.startup-frame {
+    height: 100%;
+    min-height: 0;
+}
+
+.workspace-frame {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 100%;
+    margin: 0;
+}
+
+.startup-frame {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+}
+
+.startup-surface {
+    min-height: 0;
+}
+
+.workspace-content {
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.workspace-content::-webkit-scrollbar {
+    display: none;
+}
+```
+
+- [ ] 为 `.workspace-content` 同时提供 Chromium/WebKit 与标准 scrollbar 隐藏规则；保留 wheel、touchpad、`PageUp`/`PageDown`、`Home`/`End`、焦点跟随和 skip-link 导航。
+- [ ] 重跑聚焦测试；再运行 `pnpm test`、`pnpm typecheck` 与 `git diff --check`，确认既有窗口控制、键盘、forced-colors、对比度、透明度和 reduced-motion 回归仍通过。
+
+##### Packaged 人工验收与 Gate
+
+- [ ] 从同一 clean source 分别在 Windows x64 与 macOS arm64 运行 `pnpm package`、`pnpm smoke:packaged`，记录精确 commit、平台、制品身份和结果；单平台不得推断另一平台通过。
+- [ ] 在两平台真实 packaged app 的首次默认打开中观察恢复窗口约为 `1120×720`；桌面只出现在原生窗口之外，客户区内没有第二层灰白外框或不对称外围留白。
+- [ ] 使用真实长内容分别在默认高度和约 `600px` 的较矮恢复窗口检查页面顶部、中段、末尾：四边属于同一外壳，底边始终留在窗口底部，最后一项可完整到达，最右侧没有可见垂直滚动条。
+- [ ] 用真实鼠标滚轮/触控板和键盘 `PageUp`、`PageDown`、`Home`、`End` 验证内容仍可双向滚动；键盘焦点、skip link、Today/Courses/Calendar/Tasks/Files 与设置对话框不得被内部滚动区困住或遮挡。
+- [ ] Windows 使用真实物理鼠标重验标题栏拖拽、左侧 Snap、右侧 Snap、最大化与恢复；macOS 重验标题栏拖拽、自绘最小化/最大化/关闭和全局菜单。Snap/最大化时服从系统贴边形状，不强制制造圆角空隙。
+- [ ] 在 Windows High Contrast/透明与动画设置、macOS Increase Contrast/Reduce Transparency/Reduced Motion 下抽查单一边界、内容滚动和焦点可见性；只记录真实观察。
+- [ ] 上述 UI 验收全部通过后运行 A-only G1–G7，并将命令、真实观察、未验证项和最终 commit 写入证据台账；`TEST-USABILITY-001` 只作为既有回归重验，不改变其 `WP-R4-06` 主所有权。
 
 ### R7 — 出勤
 

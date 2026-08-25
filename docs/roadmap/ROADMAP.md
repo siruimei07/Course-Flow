@@ -77,7 +77,7 @@ R0 必须先把以下已批准校准写回语义所有者，之后才允许进�
 | R4 完整 MVP-A 计划核心 | `WP-R4-01`–`06` | 任务、重复实例、Today/Week、Calendar/Agenda、可访问核心路径闭环 | R3 完成 | MVP-A 计划功能与基础可用性测试通过 |
 | R5 结构化备份内核 | `WP-R5-01`–`03` | 可配置目的地、不可变结构化快照、保留与状态语义可用 | R4 完成 | ADR-07 的结构化快照子集通过；尚不声称整库保护完成 |
 | R6 恢复/迁移/回退内核 | `WP-R6-01`–`05` | 安全恢复集、整库激活、迁移安全副本、精确版本回退与维护态闭环 | R5 完成 | ADR-04/08/10 的内核恢复路径通过 |
-| G-A MVP-A 内部门 | `WP-GA-01` | 不含 Attendance/Library 的 A-only 安装包通过 G1–G7 | R6 完成 | 仅作为内部剖面证据；其数据保护结论会在 R11/R12 被完整证据替代 |
+| G-A MVP-A 内部门 | `WP-GA-01` | 完成已批准桌面窗口 UI 优化，不含 Attendance/Library 的 A-only 安装包通过 G1–G7 | R6 完成 | 双平台 packaged UI 验收与 A-only G1–G7 通过；数据保护结论会在 R11/R12 被完整证据替代 |
 | R7 出勤 | `WP-R7-01`–`03` | 点名窗口、标记、统计、统一计划降级闭环 | G-A 完成 | MVP-A-P 六条 Requirement 与四条 Attendance 测试通过 |
 | R8 资料库身份与索引 | `WP-R8-01`–`04` | 根身份、分类、扫描/FileId 对账、标签与搜索闭环 | R7 完成 | Library 索引在外部变更和重启后可恢复 |
 | R9 可恢复文件操作 | `WP-R9-01`–`03` | 导入、重命名、移动、回收站、冲突/替换闭环 | R8 完成 | ADR-05 文件事实提交边界与恢复路径通过 |
@@ -94,6 +94,8 @@ R0 必须先把以下已批准校准写回语义所有者，之后才允许进�
 R12 中 `WP-R12-04`（macOS）与 `WP-R12-05`（Windows）在 `WP-R12-03` 完成后可并行；`WP-R12-06` 必须等待二者均为 `Done`。其余硬依赖以 [BACKLOG.md](./BACKLOG.md) 的逐包登记为准。
 
 R1 的双平台烟测是 R2 之后所有实现的持续证据依赖。若某一平台暂时缺少主机或签名资源，代码工作可以继续到不依赖该资源的下一个包，但对应 Gate 不得宣称通过，且 R12 不能发布。
+
+`WP-GA-01` 先执行 [Backlog 中已批准的桌面窗口 UI 优化计划](./BACKLOG.md#wp-ga-01-桌面窗口-ui-优化-implementation-plan)：显式增大默认恢复窗口、消除客户区内的嵌套外框、固定四边一致的单一窗口外壳，并把隐藏 scrollbar 的可用滚动限制在内容区。双平台 packaged 人工验收通过后才运行 A-only G1–G7；不得用增大窗口掩盖底边随文档滚动的问题，也不得移除 Windows Snap/resize 所需的原生 `thickFrame`。
 
 ## 6. Gate 使用规则
 
@@ -126,4 +128,4 @@ Backlog 生命周期为 `Ready → In Progress → Verification → Done`，遇�
 
 R0 与 R1 已经 `Done`。`WP-R1-05` 已在同一源码提交 `cd3a2fd66bca0fbd7e51c9eadef4dac1393484a2` 上取得 Windows x64 与 macOS arm64 的开发 package 证据并关闭 R1 Gate；签名、安装和公开发布仍由 R12 的独立门禁负责。
 
-`WP-R2-01`–`WP-R2-04`、`WP-R3-01`–`WP-R3-04` 与 `WP-R4-01`–`WP-R4-06` 已经 `Done`，R2、R3、R4 里程碑关闭。R3 已交付学期生命周期、Course/Meeting 有效日期范围、跨重启身份稳定的重复 Meeting occurrence/segment、显式 TermZone 的跨日/DST 时间和非阻塞冲突/TBA 语义，以及命名 HolidayRange 对周期 Meeting 的确定性抑制；R4 已进一步交付 once/weekly Task、稳定 `TaskOccurrenceId`、独立 pending/completed/skipped、large 可选进度、only-this/this-and-future 分段、范围删除、精确影响预览、一次性 Undo，以及共享 revision/EvaluationContext 和稳定 occurrence identity 的 Today、Week、Calendar、Agenda、临近截止、next-small/next-large、计数、学期日期进度与独立 TBA 投影。Calendar/Agenda 已完成确定性排序、非突变冲突 warning 和 HolidayRange 连续片段。[`WP-R4-06`](./BACKLOG.md#r4--完整-mvp-a-计划核心) 已实现可中断/恢复/提前进入 Today 的首次设置、Term + Course + Meeting 或 Task 最低条件、五项键盘导航、真实空状态及固定浅色响应式可访问视觉；implementation source `7ae3368a2a9526616d75c7ddd8b7404e30b5b113` 已取得 Windows x64 与 macOS arm64 package/smoke、真实 packaged 交互和同根重启持久化证据，并实际完成 Windows Narrator/系统 High Contrast/透明与动画设置、macOS 全局菜单/traffic lights/VoiceOver/Increase Contrast/Reduce Transparency/Reduced Motion 验证。clean Windows package identity `adc71ccf77784b5f455e4fcc6ac68a249b9c4e41` 又取得 packaged `<6 s` Undo、Toast hover/键盘焦点暂停、Today/Tasks/Calendar 同步与同根重启保持，以及最大合法 Term `0001-01-01`–`9999-12-31` 的 Today/PLAN、Calendar/Agenda 数值样本；规范没有毫秒门槛，未自创性能结论。最终真实首次用户从空隔离数据根完成参考最低设置并进入 Today，耗时 `4 分 07.797 秒`、阻塞点为“无”；真实物理鼠标标题栏拖拽及左、右边缘 Snap 均通过。`WP-R4-06` 因此关闭，R4 里程碑完成，`WP-R5-01` 成为唯一 `Ready` 主链工作包。默认窗口适当增大与移除右侧可见垂直滚动条已按用户要求记录为非阻塞后续改进，不纳入本次关闭实现。工作包生命周期仍只以 [Backlog 注册表与证据台账](./BACKLOG.md#6-证据台账) 为准；本段仅同步当前指针。
+`WP-R2-01`–`WP-R2-04`、`WP-R3-01`–`WP-R3-04` 与 `WP-R4-01`–`WP-R4-06` 已经 `Done`，R2、R3、R4 里程碑关闭。R3 已交付学期生命周期、Course/Meeting 有效日期范围、跨重启身份稳定的重复 Meeting occurrence/segment、显式 TermZone 的跨日/DST 时间和非阻塞冲突/TBA 语义，以及命名 HolidayRange 对周期 Meeting 的确定性抑制；R4 已进一步交付 once/weekly Task、稳定 `TaskOccurrenceId`、独立 pending/completed/skipped、large 可选进度、only-this/this-and-future 分段、范围删除、精确影响预览、一次性 Undo，以及共享 revision/EvaluationContext 和稳定 occurrence identity 的 Today、Week、Calendar、Agenda、临近截止、next-small/next-large、计数、学期日期进度与独立 TBA 投影。Calendar/Agenda 已完成确定性排序、非突变冲突 warning 和 HolidayRange 连续片段。[`WP-R4-06`](./BACKLOG.md#r4--完整-mvp-a-计划核心) 已实现可中断/恢复/提前进入 Today 的首次设置、Term + Course + Meeting 或 Task 最低条件、五项键盘导航、真实空状态及固定浅色响应式可访问视觉；implementation source `7ae3368a2a9526616d75c7ddd8b7404e30b5b113` 已取得 Windows x64 与 macOS arm64 package/smoke、真实 packaged 交互和同根重启持久化证据，并实际完成 Windows Narrator/系统 High Contrast/透明与动画设置、macOS 全局菜单/traffic lights/VoiceOver/Increase Contrast/Reduce Transparency/Reduced Motion 验证。clean Windows package identity `adc71ccf77784b5f455e4fcc6ac68a249b9c4e41` 又取得 packaged `<6 s` Undo、Toast hover/键盘焦点暂停、Today/Tasks/Calendar 同步与同根重启保持，以及最大合法 Term `0001-01-01`–`9999-12-31` 的 Today/PLAN、Calendar/Agenda 数值样本；规范没有毫秒门槛，未自创性能结论。最终真实首次用户从空隔离数据根完成参考最低设置并进入 Today，耗时 `4 分 07.797 秒`、阻塞点为“无”；真实物理鼠标标题栏拖拽及左、右边缘 Snap 均通过。`WP-R4-06` 因此关闭，R4 里程碑完成，`WP-R5-01` 成为唯一 `Ready` 主链工作包。用户随后批准将显式增大默认窗口、隐藏右侧可见垂直滚动条、消除客户区内嵌套外框和让底边在较矮窗口中始终可见的单一外壳方案归入 `WP-GA-01`；本次只登记实施与验收计划，尚未修改产品代码，`WP-GA-01` 状态仍为 `—`。工作包生命周期仍只以 [Backlog 注册表与证据台账](./BACKLOG.md#6-证据台账) 为准；本段仅同步当前指针。
