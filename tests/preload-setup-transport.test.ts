@@ -55,11 +55,17 @@ type PreloadCourseFlow = Readonly<{
     createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
 }>;
 
+type PreloadWindowFrame = Readonly<{
+    control(action: 'minimize' | 'toggle-maximize' | 'close'): void;
+}>;
+
 type SetupResponder = (request: WorkspaceSetupRequest) => Promise<unknown>;
 
 type PreloadHarness = Readonly<{
     courseFlow: PreloadCourseFlow;
+    courseFlowWindow: PreloadWindowFrame | null;
     setupRequests: readonly WorkspaceSetupRequest[];
+    windowControlActions: readonly string[];
 }>;
 
 /**
@@ -95,7 +101,9 @@ function readyOutcome(requestId: string): BootstrapOutcome {
  */
 function loadPreload(respondToSetup: SetupResponder): PreloadHarness {
     const setupRequests: WorkspaceSetupRequest[] = [];
+    const windowControlActions: string[] = [];
     let courseFlow: PreloadCourseFlow | null = null;
+    let courseFlowWindow: PreloadWindowFrame | null = null;
     let nextRequestNumber = 1;
     if (compiledPreloadSource === null) {
         execFileSync(process.execPath, [
@@ -119,8 +127,15 @@ function loadPreload(respondToSetup: SetupResponder): PreloadHarness {
     const electron = {
         contextBridge: {
             exposeInMainWorld(name: string, value: unknown): void {
-                assert.equal(name, 'courseFlow');
-                courseFlow = value as PreloadCourseFlow;
+                if (name === 'courseFlow') {
+                    courseFlow = value as PreloadCourseFlow;
+                    return;
+                }
+                if (name === 'courseFlowWindow') {
+                    courseFlowWindow = value as PreloadWindowFrame;
+                    return;
+                }
+                assert.fail(`Unexpected preload surface: ${name}`);
             },
         },
         ipcRenderer: {
@@ -133,6 +148,10 @@ function loadPreload(respondToSetup: SetupResponder): PreloadHarness {
                 const setupRequest = request as WorkspaceSetupRequest;
                 setupRequests.push(setupRequest);
                 return respondToSetup(setupRequest);
+            },
+            send(channel: string, action: string): void {
+                assert.equal(channel, 'courseflow:window-control');
+                windowControlActions.push(action);
             },
         },
     };
@@ -162,7 +181,9 @@ function loadPreload(respondToSetup: SetupResponder): PreloadHarness {
     assert.notEqual(courseFlow, null);
     return {
         courseFlow: courseFlow as unknown as PreloadCourseFlow,
+        courseFlowWindow,
         setupRequests,
+        windowControlActions,
     };
 }
 
@@ -215,4 +236,19 @@ test('a failed query and a mutation rejected before send remain unchanged', asyn
     assert.equal(queryProblem.dataEffect, 'unchanged');
     assert.equal(mutationProblem.dataEffect, 'unchanged');
     assert.equal(harness.setupRequests.length, requestCountAfterQuery);
+});
+
+test('preload exposes a separate fixed-channel window control surface', () => {
+    const harness = loadPreload(() => Promise.reject(new Error('unused')));
+    assert.notEqual(harness.courseFlowWindow, null);
+
+    harness.courseFlowWindow!.control('minimize');
+    harness.courseFlowWindow!.control('toggle-maximize');
+    harness.courseFlowWindow!.control('close');
+
+    assert.deepEqual(harness.windowControlActions, [
+        'minimize',
+        'toggle-maximize',
+        'close',
+    ]);
 });

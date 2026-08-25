@@ -107,6 +107,51 @@ test('the shell exposes five ordered destinations and a separate Settings action
     assert.match(readOnlyHtml, /只读模式/);
 });
 
+test('the title region exposes three independent window controls outside its drag surface', () => {
+    const html = renderToStaticMarkup(createElement(WorkspaceShell, {
+        activePage: 'calendar',
+        dataMode: 'ready',
+        setup,
+        plan: null,
+        planProblem: null,
+        onNavigate: noop,
+        onCreateTask: noop,
+        onOpenSetup: noop,
+        onRetryPlan: noop,
+        taskActions,
+    }));
+
+    assert.match(html, /aria-label="窗口控件"/);
+    assert.match(html, /aria-label="最小化窗口"/);
+    assert.match(html, /aria-label="最大化或还原窗口"/);
+    assert.match(html, /aria-label="关闭窗口"/);
+    assert.match(html, /class="window-control-icon"/);
+    assert.match(styles, /\.topbar\s*\{[^}]*-webkit-app-region:\s*drag;[^}]*app-region:\s*drag;/s);
+    const noDragStart = /\.primary-nav,\s*\.topbar-actions,\s*\.window-controls,/s.exec(styles)?.index ?? -1;
+    assert.ok(noDragStart >= 0);
+    const noDragBlock = styles.slice(noDragStart, styles.indexOf('}', noDragStart) + 1);
+    assert.match(noDragBlock, /-webkit-app-region:\s*no-drag;/);
+    assert.match(noDragBlock, /app-region:\s*no-drag;/);
+    assert.match(styles, /--titlebar-height:/);
+    assert.match(styles, /--titlebar-surface:/);
+    assert.match(styles, /--titlebar-border:/);
+    assert.match(styles, /--titlebar-safe-inset:/);
+
+    const reducedTransparency = styles.slice(
+        styles.indexOf('@media (prefers-reduced-transparency: reduce)'),
+        styles.indexOf('@media (prefers-contrast: more)'),
+    );
+    assert.match(
+        reducedTransparency,
+        /\.window-control-button--close\s*\{[^}]*color:\s*#ffffff;[^}]*background:\s*#292a27;/s,
+    );
+    const forcedColors = styles.slice(styles.indexOf('@media (forced-colors: active)'));
+    assert.match(
+        forcedColors,
+        /\.window-control-button:hover\s*\{[^}]*color:\s*HighlightText;[^}]*background:\s*Highlight;/s,
+    );
+});
+
 test('Task feedback reserves scroll space while keeping the restored control centered', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'tasks',

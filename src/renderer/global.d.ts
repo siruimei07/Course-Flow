@@ -39,6 +39,7 @@ import type {
   MeetingOccurrenceImpactDraft,
   MeetingOccurrenceWindow,
 } from '../shared/workspace-course-contract';
+import type { WindowControlAction } from '../shared/window-control-contract';
 
 declare global {
   interface Window {
@@ -81,6 +82,9 @@ declare global {
       previewMeetingOccurrence(draft: MeetingOccurrenceImpactDraft): Promise<WorkspaceSetupOutcome>;
       changeMeetingOccurrence(command: ChangeMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
       cancelMeetingOccurrence(command: CancelMeetingOccurrenceCommand): Promise<WorkspaceSetupOutcome>;
+    }>;
+    courseFlowWindow: Readonly<{
+      control(action: WindowControlAction): void;
     }>;
   }
 }

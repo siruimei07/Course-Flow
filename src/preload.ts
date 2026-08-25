@@ -78,6 +78,10 @@ import type {
   MeetingOccurrenceImpactDraft,
   MeetingOccurrenceWindow,
 } from './shared/workspace-course-contract';
+import {
+  WINDOW_CONTROL_CHANNEL,
+  type WindowControlAction,
+} from './shared/window-control-contract';
 
 let workspaceEpoch: string | undefined;
 
@@ -503,6 +507,16 @@ function cancelMeetingOccurrence(
   ));
 }
 
+/**
+ * Sends one bounded native-window action to Main.
+ *
+ * @param {WindowControlAction} action Supported window action.
+ * @return {void}
+ */
+function controlWindow(action: WindowControlAction): void {
+  ipcRenderer.send(WINDOW_CONTROL_CHANNEL, action);
+}
+
 contextBridge.exposeInMainWorld(
   'courseFlow',
   Object.freeze({
@@ -537,4 +551,9 @@ contextBridge.exposeInMainWorld(
     changeMeetingOccurrence,
     cancelMeetingOccurrence,
   }),
+);
+
+contextBridge.exposeInMainWorld(
+  'courseFlowWindow',
+  Object.freeze({ control: controlWindow }),
 );

@@ -279,6 +279,51 @@ function browserWindowOptions(state: CompilerState): TypeScriptAst.ObjectLiteral
   return options[0]!;
 }
 
+function platformBranch(
+  state: CompilerState,
+  source: TypeScriptAst.SourceFile,
+  platform: string,
+): TypeScriptAst.IfStatement {
+  const branches: TypeScriptAst.IfStatement[] = [];
+  visit(source, (node) => {
+    if (
+      state.is.isIfStatement(node) &&
+      state.is.isBinaryExpression(node.expression) &&
+      node.expression.operatorToken.kind === state.ast.SyntaxKind.EqualsEqualsEqualsToken &&
+      state.is.isPropertyAccessExpression(node.expression.left) &&
+      state.is.isIdentifier(node.expression.left.expression) &&
+      node.expression.left.expression.text === 'process' &&
+      node.expression.left.name.text === 'platform' &&
+      stringLiteralText(state, node.expression.right) === platform
+    ) {
+      branches.push(node);
+    }
+  });
+  assert.equal(branches.length, 1, `Main must have exactly one ${platform} platform branch`);
+  return branches[0]!;
+}
+
+function identifierMethodCalls(
+  state: CompilerState,
+  node: TypeScriptAst.Node,
+  receiver: string,
+  method: string,
+): TypeScriptAst.CallExpression[] {
+  const calls: TypeScriptAst.CallExpression[] = [];
+  visit(node, (candidate) => {
+    if (
+      state.is.isCallExpression(candidate) &&
+      state.is.isPropertyAccessExpression(candidate.expression) &&
+      state.is.isIdentifier(candidate.expression.expression) &&
+      candidate.expression.expression.text === receiver &&
+      candidate.expression.name.text === method
+    ) {
+      calls.push(candidate);
+    }
+  });
+  return calls;
+}
+
 function isForbiddenRuntimeModule(specifier: string): boolean {
   const lower = specifier.toLowerCase();
   return (
@@ -546,7 +591,7 @@ test('Main awaits graceful Workspace shutdown for smoke exit and ordinary quit',
   );
 });
 
-test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels', async () => {
+test('preload exposes separate bounded Workspace and window capabilities on fixed IPC channels', async () => {
   const state = await compilerState();
   const preload = sourceFor(state, preloadPath);
   const exposeCalls: TypeScriptAst.CallExpression[] = [];
@@ -567,7 +612,7 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
     }
   });
 
-  assert.equal(exposeCalls.length, 1);
+  assert.equal(exposeCalls.length, 2);
   const contextBridgeReferenceViolations: number[] = [];
   visit(preload, (node) => {
     if (!state.is.isIdentifier(node) || node.text !== 'contextBridge') {
@@ -581,10 +626,10 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
   assert.deepEqual(
     contextBridgeReferenceViolations,
     [],
-    'preload must use contextBridge only for the sole direct courseFlow exposure',
+    'preload must use contextBridge only for the two direct bounded exposures',
   );
-  const exposeCall = exposeCalls[0]!;
-  assert.equal(stringLiteralText(state, exposeCall.arguments[0]), 'courseFlow');
+  const exposeCall = exposeCalls.find(call => stringLiteralText(state, call.arguments[0]) === 'courseFlow');
+  assert.ok(exposeCall, 'preload must expose the bounded Workspace surface');
   const exposedObject = publicObject(state, exposeCall.arguments[1]);
   assert.ok(exposedObject, 'courseFlow must expose an object literal, optionally frozen');
   assert.deepEqual(
@@ -633,7 +678,18 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
     assert.ok(method.body);
   });
 
-  const queryInvokes: TypeScriptAst.CallExpression[] = [];
+  const windowExposeCall = exposeCalls.find(
+    call => stringLiteralText(state, call.arguments[0]) === 'courseFlowWindow',
+  );
+  assert.ok(windowExposeCall, 'preload must expose the bounded window surface separately');
+  const windowObject = publicObject(state, windowExposeCall.arguments[1]);
+  assert.ok(windowObject, 'courseFlowWindow must expose an object literal, optionally frozen');
+  assert.deepEqual(windowObject.properties.map(property => objectElementName(state, property)), ['control']);
+  const windowControl = publicMethod(state, preload, windowObject.properties[0]!);
+  assert.ok(windowControl?.body);
+  assert.equal(windowControl.parameters.length, 1);
+
+  const ipcCalls: TypeScriptAst.CallExpression[] = [];
   const allowedIpcReferences = new Set<TypeScriptAst.Node>();
   visit(preload, (node) => {
     if (
@@ -641,24 +697,29 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
       state.is.isPropertyAccessExpression(node.expression) &&
       state.is.isIdentifier(node.expression.expression) &&
       node.expression.expression.text === 'ipcRenderer' &&
-      node.expression.name.text === 'invoke'
+      (node.expression.name.text === 'invoke' || node.expression.name.text === 'send')
     ) {
-      queryInvokes.push(node);
+      ipcCalls.push(node);
       allowedIpcReferences.add(node.expression.expression);
     }
   });
 
   assert.equal(
-    queryInvokes.length,
-    2,
-    'preload must use exactly one bootstrap invoke and one bounded setup invoke',
+    ipcCalls.length,
+    3,
+    'preload must use two Workspace invokes and one bounded window send',
   );
   assert.deepEqual(
-    queryInvokes.map((invoke) => {
-      const channel = invoke.arguments[0];
-      return state.is.isIdentifier(channel) ? channel.text : undefined;
+    ipcCalls.map((call) => {
+      const channel = call.arguments[0];
+      const name = state.is.isPropertyAccessExpression(call.expression) ? call.expression.name.text : undefined;
+      return state.is.isIdentifier(channel) ? `${name}:${channel.text}` : undefined;
     }).sort(),
-    ['WORKSPACE_QUERY_CHANNEL', 'WORKSPACE_SETUP_CHANNEL'],
+    [
+      'invoke:WORKSPACE_QUERY_CHANNEL',
+      'invoke:WORKSPACE_SETUP_CHANNEL',
+      'send:WINDOW_CONTROL_CHANNEL',
+    ],
   );
 
   const ipcReferenceViolations: number[] = [];
@@ -674,14 +735,16 @@ test('preload exposes only bounded CourseFlow capabilities on fixed IPC channels
   assert.deepEqual(
     ipcReferenceViolations,
     [],
-    'preload must not alias IPC or use it outside the two fixed-channel invocations',
+    'preload must not alias IPC or use it outside the three fixed-channel calls',
   );
 });
 
 test('Main classifies every known Task occurrence request as a setup validation failure', async () => {
   const state = await compilerState();
   const main = sourceFor(state, mainPath).getText();
-  const validationMarker = ")\n          ? 'validation'";
+  const validationMarker = /\)\r?\n          \? 'validation'/.exec(main)?.index ?? -1;
+
+  assert.ok(validationMarker >= 0, 'validation branch must remain explicit');
 
   for (const kind of [
     'workspace.task.set-occurrence-status',
@@ -692,7 +755,7 @@ test('Main classifies every known Task occurrence request as a setup validation 
     'workspace.task-occurrence.preview',
   ]) {
     assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
-    assert.ok(main.indexOf(`kind === '${kind}'`) < main.indexOf(validationMarker), `${kind} must be validation`);
+    assert.ok(main.indexOf(`kind === '${kind}'`) < validationMarker, `${kind} must be validation`);
   }
 });
 
@@ -707,11 +770,55 @@ test('BrowserWindow keeps every required security preference explicit', async ()
   assert.equal(objectProperty(state, webPreferences, 'webSecurity')?.kind, state.ast.SyntaxKind.TrueKeyword);
 });
 
+test('BrowserWindow hides title chrome without disabling the native resize frame', async () => {
+  const state = await compilerState();
+  const options = browserWindowOptions(state);
+
+  assert.equal(stringLiteralText(state, objectProperty(state, options, 'titleBarStyle')), 'hidden');
+  assert.equal(objectProperty(state, options, 'thickFrame')?.kind, state.ast.SyntaxKind.TrueKeyword);
+  assert.equal(objectProperty(state, options, 'frame'), undefined);
+  assert.equal(objectProperty(state, options, 'titleBarOverlay'), undefined);
+});
+
+test('Main removes only the Windows application menu and hides only native macOS window buttons', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath);
+  const windowsBranch = platformBranch(state, main, 'win32');
+  const macBranch = platformBranch(state, main, 'darwin');
+  const menuCalls = identifierMethodCalls(state, main, 'Menu', 'setApplicationMenu');
+  const windowsMenuCalls = identifierMethodCalls(state, windowsBranch, 'Menu', 'setApplicationMenu');
+  const nativeButtonCalls = identifierMethodCalls(state, main, 'window', 'setWindowButtonVisibility');
+  const macButtonCalls = identifierMethodCalls(state, macBranch, 'window', 'setWindowButtonVisibility');
+
+  assert.equal(menuCalls.length, 1);
+  assert.equal(windowsMenuCalls.length, 1);
+  assert.equal(windowsMenuCalls[0]!.arguments[0]?.kind, state.ast.SyntaxKind.NullKeyword);
+  assert.equal(nativeButtonCalls.length, 1);
+  assert.equal(macButtonCalls.length, 1);
+  assert.equal(macButtonCalls[0]!.arguments[0]?.kind, state.ast.SyntaxKind.FalseKeyword);
+});
+
+test('Main accepts window controls only from its active Renderer with a known action', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath);
+  const handlers = identifierMethodCalls(state, main, 'ipcMain', 'on').filter(
+    call => state.is.isIdentifier(call.arguments[0]) && call.arguments[0].text === 'WINDOW_CONTROL_CHANNEL',
+  );
+
+  assert.equal(handlers.length, 1);
+  const handler = handlers[0]!.arguments[1];
+  assert.ok(handler && state.is.isFunctionLikeDeclaration(handler) && handler.body);
+  const body = handler.body.getText(main);
+  assert.match(body, /event\.sender\s*!==\s*window\?\.webContents/);
+  assert.match(body, /!isWindowControlAction\(action\)/);
+  assert.match(body, /applyWindowControl\(window, action\)/);
+});
+
 test('production has no diagnostics, telemetry, remote client, maker, or publisher', async () => {
   const state = await compilerState();
   const sourceViolations: string[] = [];
   const allowedElectronImports = new Map([
-    [mainPath, ['app', 'BrowserWindow', 'ipcMain', 'utilityProcess'].sort()],
+    [mainPath, ['app', 'BrowserWindow', 'ipcMain', 'Menu', 'utilityProcess'].sort()],
     [preloadPath, ['contextBridge', 'ipcRenderer'].sort()],
   ]);
 

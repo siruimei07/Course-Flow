@@ -2,7 +2,7 @@
  * @file Starts the secure Electron shell and supervises its Workspace process.
  */
 
-import { app, BrowserWindow, ipcMain, utilityProcess } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, utilityProcess } from 'electron';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -16,9 +16,14 @@ import {
   WORKSPACE_SETUP_CHANNEL,
   type WorkspaceSetupOutcome,
 } from './shared/workspace-setup-contract';
+import {
+  isWindowControlAction,
+  WINDOW_CONTROL_CHANNEL,
+} from './shared/window-control-contract';
 import { isSupportedSqliteVersion } from './shared/sqlite-version';
 import { resolveDevelopmentRoots, type DevelopmentRoots } from './main/runtime-paths';
 import { createSmokeOutput, writeSmokeLine } from './main/smoke-output';
+import { applyWindowControl } from './main/window-controls';
 import { WorkspaceSupervisor } from './main/workspace-supervisor';
 
 let mainWindow: BrowserWindow | undefined;
@@ -103,7 +108,9 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
 export async function createWindow(options?: { show?: boolean }): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     show: options?.show ?? true,
+    thickFrame: true,
     title: 'CourseFlow',
+    titleBarStyle: 'hidden',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -117,6 +124,10 @@ export async function createWindow(options?: { show?: boolean }): Promise<Browse
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+
+  if (process.platform === 'darwin') {
+    window.setWindowButtonVisibility(false);
+  }
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     await window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
@@ -151,6 +162,7 @@ function initializeDevelopmentRuntime(): DevelopmentRoots | undefined {
     app.setPath('sessionData', sessionRoot);
     if (process.platform === 'win32') {
       app.setAppUserModelId('io.github.siruimei07.courseflow.dev');
+      Menu.setApplicationMenu(null);
     }
     return roots;
   } catch {
@@ -219,6 +231,14 @@ async function startApplication(roots: DevelopmentRoots): Promise<void> {
     serviceName: 'CourseFlow Workspace',
   });
   workspaceSupervisor = new WorkspaceSupervisor(__COURSEFLOW_APP_BUILD_ID__, workspace);
+
+  ipcMain.on(WINDOW_CONTROL_CHANNEL, (event, action) => {
+    const window = mainWindow;
+    if (event.sender !== window?.webContents || !isWindowControlAction(action)) {
+      return;
+    }
+    applyWindowControl(window, action);
+  });
 
   ipcMain.handle(WORKSPACE_QUERY_CHANNEL, async (event, value) => {
     if (event.sender !== mainWindow?.webContents || !isBootstrapRequest(value, __COURSEFLOW_APP_BUILD_ID__)) {
