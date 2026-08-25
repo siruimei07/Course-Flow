@@ -1009,6 +1009,7 @@ export function SetupDialog(props: SetupDialogProps) {
         }
 
         isDirty.current = false;
+        setCheckpointMessage('草稿已保存；下次打开设置会继续保留这些输入。');
         props.onProjection(nextState);
         closeDialog(destination);
     };
@@ -1070,6 +1071,7 @@ export function SetupDialog(props: SetupDialogProps) {
      */
     const refreshAfterCommit = async (): Promise<void> => {
         let outcome: WorkspaceSetupOutcome;
+        let settledMessage = '正式数据已保存；设置进度已刷新。';
         try {
             outcome = await window.courseFlow.querySetup();
         }
@@ -1098,14 +1100,14 @@ export function SetupDialog(props: SetupDialogProps) {
                 outcome = reconciledDiscard;
             }
             else if (discarded !== null && !discarded.ok) {
-                setCheckpointMessage(discarded.problem.dataEffect === 'unknown'
+                settledMessage = discarded.problem.dataEffect === 'unknown'
                     ? `${discarded.problem.message} 正式数据已保存；旧草稿清理结果尚无法确认，`
                         + '请重新打开设置核对。'
                     : `${discarded.problem.message} 正式数据已保存；旧草稿未清理，`
-                        + '下次设置会以正式进度为准。');
+                        + '下次设置会以正式进度为准。';
             }
             else {
-                setCheckpointMessage('正式数据已保存；旧草稿清理结果尚无法确认，请重新打开设置核对。');
+                settledMessage = '正式数据已保存；旧草稿清理结果尚无法确认，请重新打开设置核对。';
             }
         }
 
@@ -1121,6 +1123,7 @@ export function SetupDialog(props: SetupDialogProps) {
 
         isDirty.current = false;
         setDraft(initialDraftFrom(nextState));
+        setCheckpointMessage(settledMessage);
         props.onProjection(nextState);
     };
 

@@ -145,6 +145,34 @@ test('WP-R4-06 blocks competing setup exits and edits while a draft or formal co
     );
 });
 
+test('WP-R4-06 settles setup status text after confirmed draft and formal writes', () => {
+    const saveAndClose = setupDialog.slice(
+        setupDialog.indexOf('const saveAndClose = async'),
+        setupDialog.indexOf('const discardIncompatibleCheckpoint = async'),
+    );
+    const refreshAfterCommit = setupDialog.slice(
+        setupDialog.indexOf('const refreshAfterCommit = async'),
+        setupDialog.indexOf('const retryPendingMutation = async'),
+    );
+    const savedDraftPattern = new RegExp(
+        "isDirty\\.current = false;\\s*setCheckpointMessage\\('草稿已保存；"
+        + "下次打开设置会继续保留这些输入。'\\);\\s*props\\.onProjection\\(nextState\\);"
+        + '\\s*closeDialog\\(destination\\)',
+    );
+    const refreshedFormalPattern = new RegExp(
+        'isDirty\\.current = false;\\s*setDraft\\(initialDraftFrom\\(nextState\\)\\);'
+        + '\\s*setCheckpointMessage\\(settledMessage\\);'
+        + '\\s*props\\.onProjection\\(nextState\\)',
+    );
+
+    assert.match(saveAndClose, savedDraftPattern);
+    assert.match(
+        refreshAfterCommit,
+        /let settledMessage = '正式数据已保存；设置进度已刷新。'/,
+    );
+    assert.match(refreshAfterCommit, refreshedFormalPattern);
+});
+
 test('rejected setup command transport keeps its idempotent request and reports an unknown result', () => {
     assert.match(termSetup, /let command = props\.pendingCommand/);
     assert.match(courseSetup, /let command = props\.pendingCommand/);
