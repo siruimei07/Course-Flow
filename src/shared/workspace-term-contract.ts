@@ -21,9 +21,33 @@ export type TermProjection = Readonly<{
     entityVersion: string;
 }>;
 
+export const SETUP_DRAFT_SCHEMA_VERSION = 1;
+export const MAX_SETUP_DRAFT_PAYLOAD_BYTES = 65_536;
+
+export type SetupDraftCheckpoint = Readonly<{
+    draftId: 'first-setup';
+    kind: 'first-setup';
+    scope: 'setup-step';
+    schemaVersion: typeof SETUP_DRAFT_SCHEMA_VERSION;
+    updatedAt: string;
+    opaquePayload: string;
+}>;
+
+export type SetupMinimumProjection = Readonly<{
+    hasCurrentTerm: boolean;
+    hasCurrentTermCourse: boolean;
+    hasMeetingOrTask: boolean;
+    isSatisfied: boolean;
+}>;
+
 export type SetupProjection = Readonly<{
     workspaceRevision: string;
     planEntityVersion: string;
+    minimum: SetupMinimumProjection;
+    everReachedMinimum: boolean;
+    defaultRoute: 'setup' | 'today';
+    draftCheckpointVersion: string;
+    draftCheckpoint: SetupDraftCheckpoint | null;
     currentTerm: TermProjection | null;
     terms: readonly TermProjection[];
     courses: readonly CourseProjection[];

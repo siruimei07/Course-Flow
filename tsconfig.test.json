@@ -13,6 +13,7 @@
     "src/shared/**/*.ts",
     "src/data/**/*.ts",
     "src/main/runtime-paths.ts",
+    "src/renderer/global.d.ts",
     "tests/**/*.ts"
   ]
 }

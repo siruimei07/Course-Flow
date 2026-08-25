@@ -10,9 +10,10 @@ import {
     normalizeTaskSchedule,
     type WeeklyTaskSchedule,
 } from '../shared/workspace-task-contract';
+import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 10;
+export const CURRENT_SCHEMA_LEVEL = 11;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -1222,6 +1223,10 @@ const LEVEL_10_TASK_OVERRIDE_AND_HISTORY_DDL = `
         ON task_state_history(originating_command_id);
 `;
 
+const LEVEL_10_TASK_STATE_HISTORY_DDL = LEVEL_10_TASK_OVERRIDE_AND_HISTORY_DDL.slice(
+    LEVEL_10_TASK_OVERRIDE_AND_HISTORY_DDL.indexOf('    CREATE TABLE task_state_history'),
+);
+
 const LEVEL_10_TASK_DDL = LEVEL_9_TASK_DDL
     .replace(LEVEL_9_TASK_SEGMENT_DDL, LEVEL_10_TASK_SEGMENT_DDL)
     .replace(LEVEL_8_TASK_OCCURRENCE_STATE_DDL, LEVEL_10_TASK_OCCURRENCE_STATE_DDL)
@@ -1230,6 +1235,31 @@ const LEVEL_10_TASK_DDL = LEVEL_9_TASK_DDL
 const LEVEL_10_DDL = LEVEL_9_DDL
     .replace(LEVEL_9_RECEIPT_DDL, LEVEL_10_RECEIPT_DDL)
     .replace(LEVEL_9_TASK_DDL, LEVEL_10_TASK_DDL);
+
+const LEVEL_11_SETUP_DRAFT_DDL = `
+    CREATE TABLE setup_draft_checkpoint (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        checkpoint_version INTEGER NOT NULL CHECK (checkpoint_version >= 0),
+        schema_version INTEGER CHECK (schema_version IS NULL OR schema_version = 1),
+        updated_at TEXT,
+        opaque_payload TEXT,
+        CHECK (
+            (schema_version IS NULL AND updated_at IS NULL AND opaque_payload IS NULL)
+            OR (schema_version = 1 AND updated_at IS NOT NULL AND opaque_payload IS NOT NULL)
+        ),
+        FOREIGN KEY (singleton) REFERENCES workspace_state(singleton) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_11_RECEIPT_DDL = LEVEL_10_RECEIPT_DDL.replace(
+    "                'plan.undo-task-occurrence-state'",
+    `                'plan.undo-task-occurrence-state',
+                'plan.create-course',
+                'plan.create-meeting-series'`,
+);
+
+const LEVEL_11_DDL = LEVEL_10_DDL.replace(LEVEL_10_RECEIPT_DDL, LEVEL_11_RECEIPT_DDL)
+    + LEVEL_11_SETUP_DRAFT_DDL;
 
 const TABLE_COLUMNS = {
     workspace_state: [
@@ -1242,6 +1272,13 @@ const TABLE_COLUMNS = {
         ['last_decision', 'TEXT', 0, 0],
         ['setup_decision_version', 'INTEGER', 1, 0],
         ['ever_reached_minimum', 'INTEGER', 1, 0],
+    ],
+    setup_draft_checkpoint: [
+        ['singleton', 'INTEGER', 0, 1],
+        ['checkpoint_version', 'INTEGER', 1, 0],
+        ['schema_version', 'INTEGER', 0, 0],
+        ['updated_at', 'TEXT', 0, 0],
+        ['opaque_payload', 'TEXT', 0, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1505,6 +1542,7 @@ const LEVEL_4_TABLE_COLUMNS: Partial<Record<keyof typeof TABLE_COLUMNS, readonly
 const FOREIGN_KEYS = {
     workspace_state: [],
     setup_state: [['singleton', 'workspace_state', 'singleton']],
+    setup_draft_checkpoint: [['singleton', 'workspace_state', 'singleton']],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -1576,6 +1614,11 @@ const LEVEL_10_TABLES = [
     'task_state_history',
 ] as const;
 
+const LEVEL_11_TABLES = [
+    ...LEVEL_10_TABLES,
+    'setup_draft_checkpoint',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1596,7 +1639,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1617,7 +1660,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 8) {
         return LEVEL_8_TABLES;
     }
-    return level === 9 ? LEVEL_9_TABLES : LEVEL_10_TABLES;
+    if (level === 9) {
+        return LEVEL_9_TABLES;
+    }
+    return level === 10 ? LEVEL_10_TABLES : LEVEL_11_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1656,7 +1702,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                     ? LEVEL_8_DDL
                                     : level === 9
                                         ? LEVEL_9_DDL
-                                        : LEVEL_10_DDL;
+                                        : level === 10
+                                            ? LEVEL_10_DDL
+                                            : LEVEL_11_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -1765,7 +1813,7 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable, level: Sch
         meeting_segments: [['meeting_segments_by_series', 0, ['meeting_series_id']]],
         holiday_ranges: [['holiday_ranges_by_term', 0, ['term_id']]],
         task_series: [['task_series_by_course', 0, ['course_id']]],
-        task_segments: level === 10
+        task_segments: level >= 10
             ? [['task_segments_by_series_start', 1, ['task_series_id', 'logical_start_anchor']]]
             : [['task_segments_by_series', 0, ['task_series_id']]],
         task_state_history: [['task_state_history_by_command', 1, ['originating_command_id']]],
@@ -1880,6 +1928,45 @@ function validateBootstrapFacts(database: DatabaseSync, level: SchemaLevel): Sch
             || planRow.plan_entity_version < 0n
             || (planRow.current_term_id !== null && !isCanonicalUuid(planRow.current_term_id))) {
             rejectSchema();
+        }
+    }
+
+    if (level >= 11) {
+        const draft = database.prepare(`
+            SELECT checkpoint_version, schema_version, updated_at, opaque_payload
+            FROM setup_draft_checkpoint
+            WHERE singleton = 1
+        `);
+        draft.setReadBigInts(true);
+        const draftRow = draft.get() as {
+            checkpoint_version: bigint;
+            schema_version: bigint | null;
+            updated_at: string | null;
+            opaque_payload: string | null;
+        } | undefined;
+        const draftCount = database.prepare('SELECT count(*) AS count FROM setup_draft_checkpoint');
+        draftCount.setReadBigInts(true);
+        let payloadIsJson = draftRow?.opaque_payload === null;
+        if (draftRow?.opaque_payload !== null && draftRow?.opaque_payload !== undefined) {
+            try {
+                JSON.parse(draftRow.opaque_payload);
+                payloadIsJson = true;
+            }
+            catch {
+                payloadIsJson = false;
+            }
+        }
+        if (!draftRow
+            || (draftCount.get() as { count: bigint }).count !== 1n
+            || draftRow.checkpoint_version < 0n
+            || (draftRow.schema_version !== null && draftRow.schema_version !== 1n)
+            || ((draftRow.schema_version === null) !== (draftRow.updated_at === null))
+            || ((draftRow.schema_version === null) !== (draftRow.opaque_payload === null))
+            || (draftRow.updated_at !== null && !isCanonicalInstant(draftRow.updated_at))
+            || (draftRow.opaque_payload !== null
+                && Buffer.byteLength(draftRow.opaque_payload, 'utf8') > MAX_SETUP_DRAFT_PAYLOAD_BYTES)
+            || !payloadIsJson) {
+            rejectSchema('database-corrupt');
         }
     }
 
@@ -2246,7 +2333,7 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     if (level === 9) {
         validateLevel9TaskFacts(database);
     }
-    if (level === 10) {
+    if (level >= 10) {
         validateLevel10TaskFacts(database);
     }
 
@@ -3106,6 +3193,87 @@ export function migrateLevel9To10(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds the setup draft stream and derives the retained minimum milestone from historical PLAN facts.
+ * Archived Courses and retired activities still prove that the one-way minimum was once reached.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel10To11(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE task_state_history RENAME TO task_state_history_level_10;
+        DROP INDEX task_state_history_by_command;
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_10;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_10;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_10;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_11_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        ${LEVEL_10_TASK_STATE_HISTORY_DDL}
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_10;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_10;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_10;
+        INSERT INTO task_state_history SELECT * FROM task_state_history_level_10;
+
+        DROP TABLE task_state_history_level_10;
+        DROP TABLE receipt_effects_level_10;
+        DROP TABLE durable_followups_level_10;
+        DROP TABLE command_receipts_level_10;
+
+        ${LEVEL_11_SETUP_DRAFT_DDL}
+
+        INSERT INTO setup_draft_checkpoint (
+            singleton,
+            checkpoint_version,
+            schema_version,
+            updated_at,
+            opaque_payload
+        ) VALUES (1, 0, NULL, NULL, NULL);
+
+        UPDATE setup_state
+        SET ever_reached_minimum = 1
+        WHERE singleton = 1
+            AND ever_reached_minimum = 0
+            AND EXISTS (
+                SELECT 1
+                FROM courses
+                WHERE EXISTS (
+                    SELECT 1
+                    FROM meeting_series
+                    WHERE meeting_series.course_id = courses.course_id
+                )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM task_series
+                        WHERE task_series.course_id = courses.course_id
+                    )
+            );
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 11;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -3170,6 +3338,15 @@ export function createSchemaLevel9(database: DatabaseSync): void {
  */
 export function createSchemaLevel10(database: DatabaseSync): void {
     database.exec(LEVEL_10_DDL);
+}
+
+/**
+ * Creates the complete current level 11 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel11(database: DatabaseSync): void {
+    database.exec(LEVEL_11_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -3240,4 +3417,13 @@ export function validateSchemaLevel9(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel10(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 10);
+}
+
+/**
+ * Validates the level 11 setup milestone and draft-checkpoint storage.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel11(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 11);
 }

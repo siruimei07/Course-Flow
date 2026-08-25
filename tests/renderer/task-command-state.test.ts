@@ -339,6 +339,16 @@ function setupProjectionOutcome(workspaceRevision: string): WorkspaceSetupOutcom
             projection: {
                 workspaceRevision,
                 planEntityVersion: workspaceRevision,
+                minimum: {
+                    hasCurrentTerm: true,
+                    hasCurrentTermCourse: true,
+                    hasMeetingOrTask: false,
+                    isSatisfied: false,
+                },
+                everReachedMinimum: true,
+                defaultRoute: 'today',
+                draftCheckpointVersion: '0',
+                draftCheckpoint: null,
                 currentTerm: {
                     termId,
                     name: 'Fall 2026',

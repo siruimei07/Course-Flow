@@ -18,10 +18,12 @@ import {
     CURRENT_SCHEMA_LEVEL,
     migrateLevel7To8,
     migrateLevel9To10,
+    migrateLevel10To11,
     SchemaValidationError,
     validateSchemaLevel8,
     validateSchemaLevel9,
     validateSchemaLevel10,
+    validateSchemaLevel11,
 } from '../../src/data/schema';
 import {
     openWorkspaceData,
@@ -281,7 +283,7 @@ test('ADR-04: level 8 stores once-only Task facts with an exact deadline union',
         database.exec('PRAGMA user_version = 8');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 11);
         assert.equal(
             Number((database.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version),
             8,
@@ -440,7 +442,7 @@ test('ADR-04: level 9 distinguishes weekly Task segments from once facts', () =>
         database.exec('PRAGMA user_version = 9');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 11);
         insertOnceTask(
             database,
             TASK_SERIES_ID,
@@ -705,6 +707,9 @@ test('ADR-04: level 9 rejects a weekly boundary whose TermZone Instant is not ca
         database.exec('BEGIN IMMEDIATE');
         migrateLevel9To10(database);
         database.exec('COMMIT');
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel10To11(database);
+        database.exec('COMMIT');
     }
     finally {
         database.close();
@@ -748,6 +753,9 @@ test('ADR-04: level 9 rejects a noncanonical weekly TermZone alias before core r
         database.exec('BEGIN IMMEDIATE');
         migrateLevel9To10(database);
         database.exec('COMMIT');
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel10To11(database);
+        database.exec('COMMIT');
     }
     finally {
         database.close();
@@ -778,8 +786,8 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 10,
-        revision: '3',
+        schemaLevel: 11,
+        revision: '4',
     });
     await opened.store.close();
 
@@ -787,9 +795,9 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
         readOnly: true,
     });
     try {
-        assert.deepEqual(validateSchemaLevel10(activeDatabase), {
+        assert.deepEqual(validateSchemaLevel11(activeDatabase), {
             workspaceId: WORKSPACE_ID,
-            revision: 3n,
+            revision: 4n,
         });
         assert.deepEqual({ ...activeDatabase.prepare(`
             SELECT schedule_kind, deadline_kind, deadline_date, weekly_start_date, follow_teaching_week
@@ -854,7 +862,7 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
             SELECT backup_needed_through, backup_succeeded_through
             FROM protection_watermarks WHERE singleton = 1
         `).get() }, {
-            backup_needed_through: 3,
+            backup_needed_through: 4,
             backup_succeeded_through: 0,
         });
     }
@@ -926,7 +934,7 @@ test('ADR-04: level 10 stores Task occurrence overrides, state, and one-time Und
         database.exec('PRAGMA user_version = 10');
         insertTaskParents(database);
 
-        assert.equal(CURRENT_SCHEMA_LEVEL, 10);
+        assert.equal(CURRENT_SCHEMA_LEVEL, 11);
         assert.deepEqual(validateSchemaLevel10(database), {
             workspaceId: WORKSPACE_ID,
             revision: 0n,
@@ -1299,6 +1307,60 @@ test('ADR-04: level 9 to 10 migration retains Task facts and derives weekly segm
     }
 });
 
+test('ADR-04/FLOW-00: level 10 migration backfills setup minimum from a current Course Task', () => {
+    const database = new DatabaseSync(':memory:', {
+        enableForeignKeyConstraints: true,
+    });
+    try {
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel9(database);
+        database.exec('PRAGMA user_version = 9');
+        insertTaskParents(database);
+        insertOnceTask(
+            database,
+            TASK_SERIES_ID,
+            TASK_SEGMENT_ID,
+            'tba',
+            null,
+            null,
+            null,
+        );
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel9To10(database);
+        database.exec('COMMIT');
+        assert.equal(validateSchemaLevel10(database).revision, 1n);
+
+        database.exec('BEGIN IMMEDIATE');
+        migrateLevel10To11(database);
+        database.exec('COMMIT');
+
+        assert.deepEqual(validateSchemaLevel11(database), {
+            workspaceId: WORKSPACE_ID,
+            revision: 2n,
+        });
+        assert.deepEqual({ ...database.prepare(`
+            SELECT last_decision, setup_decision_version, ever_reached_minimum
+            FROM setup_state WHERE singleton = 1
+        `).get() }, {
+            last_decision: null,
+            setup_decision_version: 0,
+            ever_reached_minimum: 1,
+        });
+        assert.deepEqual({ ...database.prepare(`
+            SELECT checkpoint_version, schema_version, updated_at, opaque_payload
+            FROM setup_draft_checkpoint WHERE singleton = 1
+        `).get() }, {
+            checkpoint_version: 0,
+            schema_version: null,
+            updated_at: null,
+            opaque_payload: null,
+        });
+    }
+    finally {
+        database.close();
+    }
+});
+
 test('ADR-04/TEST-DATA-006: level 9 to 10 interruption rolls back and restarts deterministically', async t => {
     for (const failpoint of ['migration.after-safety-copy', 'migration.before-level-commit'] as const) {
         const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-task-level-10-rollback-'));
@@ -1350,9 +1412,9 @@ test('ADR-04/TEST-DATA-006: level 9 to 10 interruption rolls back and restarts d
         const migrated = await openWorkspaceDataWithMigrations(dataSlotsRoot);
         assert.equal(migrated.kind, 'ready');
         if (migrated.kind !== 'ready') {
-            throw new Error('Expected deterministic level 10 migration retry');
+            throw new Error('Expected deterministic current migration retry');
         }
-        assert.equal(migrated.store.status().schemaLevel, 10);
+        assert.equal(migrated.store.status().schemaLevel, 11);
         assert.equal(
             migrated.store.readTaskSeriesDetail(TASK_SERIES_ID, {
                 startDate: '2026-10-01',
@@ -1365,9 +1427,9 @@ test('ADR-04/TEST-DATA-006: level 9 to 10 interruption rolls back and restarts d
         const restarted = openWorkspaceData(dataSlotsRoot);
         assert.equal(restarted.kind, 'ready');
         if (restarted.kind !== 'ready') {
-            throw new Error('Expected migrated level 10 Workspace to restart');
+            throw new Error('Expected migrated current Workspace to restart');
         }
-        assert.equal(restarted.store.status().schemaLevel, 10);
+        assert.equal(restarted.store.status().schemaLevel, 11);
         await restarted.store.close();
     }
 });

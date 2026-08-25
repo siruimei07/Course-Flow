@@ -17,7 +17,16 @@ export type SetupState =
         dataMode: 'ready' | 'read-only';
         projection: SetupProjection;
     }>
-    | Readonly<{ kind: 'complete'; projection: SetupProjection }>
+    | Readonly<{
+        kind: 'activity';
+        dataMode: 'ready' | 'read-only';
+        projection: SetupProjection;
+    }>
+    | Readonly<{
+        kind: 'complete';
+        dataMode: 'ready' | 'read-only';
+        projection: SetupProjection;
+    }>
     | Readonly<{ kind: 'problem'; message: string }>;
 
 /**
@@ -34,13 +43,15 @@ export function setupStateFrom(outcome: WorkspaceSetupOutcome): SetupState {
     if (!projection.currentTerm) {
         return { kind: 'term', dataMode: outcome.value.dataMode, projection };
     }
-    const hasCurrentCourse = projection.courses.some(
-        course => course.termId === projection.currentTerm?.termId,
-    );
-    if (!hasCurrentCourse) {
+    if (!projection.minimum.hasCurrentTermCourse) {
         return { kind: 'course', dataMode: outcome.value.dataMode, projection };
     }
-    return outcome.value.dataMode === 'ready'
-        ? { kind: 'complete', projection }
-        : { kind: 'problem', message: '本地数据为只读；当前不能确认设置流程完成。' };
+    if (!projection.minimum.hasMeetingOrTask) {
+        return { kind: 'activity', dataMode: outcome.value.dataMode, projection };
+    }
+    return {
+        kind: 'complete',
+        dataMode: outcome.value.dataMode,
+        projection,
+    };
 }

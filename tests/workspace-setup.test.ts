@@ -13,7 +13,9 @@ import { makeBootstrapRequest } from '../src/shared/bootstrap-contract';
 import {
     makeCreateCourseWithMeetingRequest,
     makeCreateTermRequest,
+    makeDiscardSetupDraftCheckpointRequest,
     makeInitializeWorkspaceRequest,
+    makeSaveSetupDraftCheckpointRequest,
     makeSetupQueryRequest,
 } from '../src/shared/workspace-setup-contract';
 
@@ -122,6 +124,16 @@ test('FLOW-00/01: setup creates Current Term, Course, and first Meeting through 
     }
     assert.equal(before.value.projection.currentTerm, null);
     assert.equal(before.value.projection.workspaceRevision, '0');
+    assert.deepEqual(before.value.projection.minimum, {
+        hasCurrentTerm: false,
+        hasCurrentTermCourse: false,
+        hasMeetingOrTask: false,
+        isSatisfied: false,
+    });
+    assert.equal(before.value.projection.everReachedMinimum, false);
+    assert.equal(before.value.projection.defaultRoute, 'setup');
+    assert.equal(before.value.projection.draftCheckpointVersion, '0');
+    assert.equal(before.value.projection.draftCheckpoint, null);
 
     const committed = await application.handle(makeCreateTermRequest(
         'create-term',
@@ -172,6 +184,14 @@ test('FLOW-00/01: setup creates Current Term, Course, and first Meeting through 
         after.value.projection.courses[0]?.meetings[0]?.meetingSeriesId,
         courseCommitted.value.outcome.effects[1]?.entity.id,
     );
+    assert.deepEqual(after.value.projection.minimum, {
+        hasCurrentTerm: true,
+        hasCurrentTermCourse: true,
+        hasMeetingOrTask: true,
+        isSatisfied: true,
+    });
+    assert.equal(after.value.projection.everReachedMinimum, true);
+    assert.equal(after.value.projection.defaultRoute, 'today');
     assert.doesNotMatch(
         JSON.stringify(after),
         /workspace\.sqlite|DataSlots|[A-Za-z]:[\\/]|\/Users\//,
@@ -231,7 +251,262 @@ test('FLOW-00/Q-CONTINUITY-01: restart preserves Term, Course, and Meeting ident
         projection.value.projection.courses[0]?.meetings[0]?.meetingSeriesId,
         meetingSeriesId,
     );
+    assert.equal(projection.value.projection.everReachedMinimum, true);
+    assert.equal(projection.value.projection.defaultRoute, 'today');
     await restarted.close();
+
+    const ended = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        clock: { now: () => '2027-01-05T12:00:00.000Z' },
+    });
+    const endedBootstrap = await bootstrap(ended);
+    const endedProjection = await ended.handle(makeSetupQueryRequest(
+        'setup-after-term-ended',
+        APP_BUILD_ID,
+        endedBootstrap.workspaceEpoch,
+    ));
+    assert.equal(endedProjection.ok, true);
+    if (!endedProjection.ok || endedProjection.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected setup projection after Term reconciliation');
+    }
+    assert.equal(endedProjection.value.projection.minimum.isSatisfied, false);
+    assert.equal(endedProjection.value.projection.everReachedMinimum, true);
+    assert.equal(endedProjection.value.projection.defaultRoute, 'today');
+    await ended.close();
+});
+
+test('FLOW-00: setup draft saves, conflicts, resumes, and discards outside formal revision', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        clock: { now: () => '2026-08-24T12:00:00.000Z' },
+    });
+    const initial = await bootstrap(application);
+    await application.handle(makeInitializeWorkspaceRequest(
+        'initialize',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    const incompatible = await application.handle({
+        ...makeSaveSetupDraftCheckpointRequest(
+            'save-incompatible-draft',
+            APP_BUILD_ID,
+            initial.workspaceEpoch,
+            { expectedVersion: '0', schemaVersion: 1, opaquePayload: '{}' },
+        ),
+        input: { expectedVersion: '0', schemaVersion: 2, opaquePayload: '{}' },
+    });
+    assert.equal(incompatible.ok, false);
+    if (incompatible.ok) {
+        throw new Error('Expected incompatible setup draft schema rejection');
+    }
+    assert.equal(incompatible.problem.code, 'validation');
+
+    const payload = JSON.stringify({ schemaVersion: 1, step: 'term', termDraft: { name: 'Fall 2026' } });
+    const saved = await application.handle(makeSaveSetupDraftCheckpointRequest(
+        'save-draft',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: payload },
+    ));
+    assert.equal(saved.ok, true);
+    if (!saved.ok || saved.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected saved setup draft projection');
+    }
+    assert.equal(saved.value.projection.workspaceRevision, '0');
+    assert.equal(saved.value.projection.planEntityVersion, '0');
+    assert.equal(saved.value.projection.draftCheckpointVersion, '1');
+    assert.deepEqual(saved.value.projection.draftCheckpoint, {
+        draftId: 'first-setup',
+        kind: 'first-setup',
+        scope: 'setup-step',
+        schemaVersion: 1,
+        updatedAt: '2026-08-24T12:00:00.000Z',
+        opaquePayload: payload,
+    });
+
+    const stale = await application.handle(makeSaveSetupDraftCheckpointRequest(
+        'save-stale-draft',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: '{}' },
+    ));
+    assert.equal(stale.ok, false);
+    if (stale.ok) {
+        throw new Error('Expected stale setup draft conflict');
+    }
+    assert.equal(stale.problem.code, 'conflict');
+    await application.close();
+
+    const restarted = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
+    const restartedBootstrap = await bootstrap(restarted);
+    const resumed = await restarted.handle(makeSetupQueryRequest(
+        'resume-draft',
+        APP_BUILD_ID,
+        restartedBootstrap.workspaceEpoch,
+    ));
+    assert.equal(resumed.ok, true);
+    if (!resumed.ok || resumed.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected resumed setup draft');
+    }
+    assert.equal(resumed.value.projection.draftCheckpoint?.opaquePayload, payload);
+    assert.equal(resumed.value.projection.workspaceRevision, '0');
+
+    const discarded = await restarted.handle(makeDiscardSetupDraftCheckpointRequest(
+        'discard-draft',
+        APP_BUILD_ID,
+        restartedBootstrap.workspaceEpoch,
+        '1',
+    ));
+    assert.equal(discarded.ok, true);
+    if (!discarded.ok || discarded.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected discarded setup draft projection');
+    }
+    assert.equal(discarded.value.projection.draftCheckpointVersion, '2');
+    assert.equal(discarded.value.projection.draftCheckpoint, null);
+    assert.equal(discarded.value.projection.workspaceRevision, '0');
+    await restarted.close();
+
+    const readOnly = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, { readOnly: true });
+    const readOnlyBootstrap = await bootstrap(readOnly);
+    const rejected = await readOnly.handle(makeSaveSetupDraftCheckpointRequest(
+        'save-read-only-draft',
+        APP_BUILD_ID,
+        readOnlyBootstrap.workspaceEpoch,
+        { expectedVersion: '2', schemaVersion: 1, opaquePayload: '{}' },
+    ));
+    assert.equal(rejected.ok, false);
+    if (rejected.ok) {
+        throw new Error('Expected read-only setup draft rejection');
+    }
+    assert.equal(rejected.problem.code, 'permission');
+    await readOnly.close();
+});
+
+test('FLOW-00: setup draft post-COMMIT uncertainty reconciles after Workspace restart', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const payload = JSON.stringify({ schemaVersion: 1, step: 'term' });
+    let loseResponse = false;
+    const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        clock: { now: () => '2026-08-24T12:00:00.000Z' },
+        commitOptions: {
+            failpoint(point) {
+                if (loseResponse && point === 'commit.after-sqlite-commit') {
+                    throw new Error('simulated setup draft response loss');
+                }
+            },
+        },
+    });
+    const initial = await bootstrap(application);
+    await application.handle(makeInitializeWorkspaceRequest(
+        'initialize-draft-unknown',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+
+    loseResponse = true;
+    const saved = await application.handle(makeSaveSetupDraftCheckpointRequest(
+        'save-draft-unknown',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: payload },
+    ));
+    assert.equal(saved.ok, false);
+    if (saved.ok) {
+        throw new Error('Expected unknown setup draft result');
+    }
+    assert.equal(saved.problem.code, 'recovery-required');
+    assert.equal(saved.problem.dataEffect, 'unknown');
+    await application.close();
+
+    const restarted = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
+    const restartedBootstrap = await bootstrap(restarted);
+    const reconciled = await restarted.handle(makeSetupQueryRequest(
+        'reconcile-draft-after-restart',
+        APP_BUILD_ID,
+        restartedBootstrap.workspaceEpoch,
+    ));
+    assert.equal(reconciled.ok, true);
+    if (!reconciled.ok || reconciled.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected reconciled setup draft projection');
+    }
+    assert.equal(reconciled.value.projection.draftCheckpointVersion, '1');
+    assert.equal(reconciled.value.projection.draftCheckpoint?.opaquePayload, payload);
+    await restarted.close();
+});
+
+test('FLOW-00: successful setup draft save and discard report unknown when projection refresh fails', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const payload = JSON.stringify({ schemaVersion: 1, step: 'course' });
+    let failNextProjectionRead = false;
+    const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        clock: { now: () => '2026-08-24T12:00:00.000Z' },
+        setupProjectionReadOptions: {
+            failpoint() {
+                if (failNextProjectionRead) {
+                    failNextProjectionRead = false;
+                    throw new Error('simulated setup projection refresh failure');
+                }
+            },
+        },
+    });
+    const initial = await bootstrap(application);
+    await application.handle(makeInitializeWorkspaceRequest(
+        'initialize-draft-refresh',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+
+    failNextProjectionRead = true;
+    const saved = await application.handle(makeSaveSetupDraftCheckpointRequest(
+        'save-before-refresh-failure',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: payload },
+    ));
+    assert.equal(saved.ok, false);
+    if (saved.ok) {
+        throw new Error('Expected unknown save result after projection refresh failure');
+    }
+    assert.equal(saved.problem.code, 'recovery-required');
+    assert.equal(saved.problem.dataEffect, 'unknown');
+
+    const savedProjection = await application.handle(makeSetupQueryRequest(
+        'reconcile-saved-draft',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(savedProjection.ok, true);
+    if (!savedProjection.ok || savedProjection.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected saved checkpoint reconciliation');
+    }
+    assert.equal(savedProjection.value.projection.draftCheckpointVersion, '1');
+    assert.equal(savedProjection.value.projection.draftCheckpoint?.opaquePayload, payload);
+
+    failNextProjectionRead = true;
+    const discarded = await application.handle(makeDiscardSetupDraftCheckpointRequest(
+        'discard-before-refresh-failure',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        '1',
+    ));
+    assert.equal(discarded.ok, false);
+    if (discarded.ok) {
+        throw new Error('Expected unknown discard result after projection refresh failure');
+    }
+    assert.equal(discarded.problem.code, 'recovery-required');
+    assert.equal(discarded.problem.dataEffect, 'unknown');
+
+    const discardedProjection = await application.handle(makeSetupQueryRequest(
+        'reconcile-discarded-draft',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(discardedProjection.ok, true);
+    if (!discardedProjection.ok || discardedProjection.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected discarded checkpoint reconciliation');
+    }
+    assert.equal(discardedProjection.value.projection.draftCheckpointVersion, '2');
+    assert.equal(discardedProjection.value.projection.draftCheckpoint, null);
+    await application.close();
 });
 
 test('FLOW-01/Q-CONTINUITY-01: post-COMMIT response loss resolves through the durable receipt', async (t) => {

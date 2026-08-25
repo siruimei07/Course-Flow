@@ -8,10 +8,14 @@ import { canonicalJson } from '../shared/canonical-json';
 import {
     cancelMeetingOccurrenceDigestProjection,
     changeMeetingOccurrenceDigestProjection,
+    createCourseDigestProjection,
     createCourseWithMeetingDigestProjection,
+    createMeetingSeriesDigestProjection,
     type AcceptedChangeMeetingOccurrenceCommand,
     type AcceptedCreateCourseWithMeetingCommand,
     type CancelMeetingOccurrenceCommand,
+    type CreateCourseCommand,
+    type CreateMeetingSeriesCommand,
 } from '../shared/workspace-course-contract';
 import {
     recordSetupDecisionDigestProjection,
@@ -69,6 +73,24 @@ export function digestCreateTerm(command: CreateTermCommand): Uint8Array {
 export function digestCreateCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Uint8Array {
     const canonicalText = canonicalJson(createCourseWithMeetingDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical Course creation receipt payload.
+ * @param {CreateCourseCommand} command - Normalized Course creation command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestCreateCourse(command: CreateCourseCommand): Uint8Array {
+    return createHash('sha256').update(canonicalJson(createCourseDigestProjection(command)), 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical Meeting-series creation receipt payload.
+ * @param {CreateMeetingSeriesCommand} command - Normalized Meeting-series creation command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestCreateMeetingSeries(command: CreateMeetingSeriesCommand): Uint8Array {
+    return createHash('sha256').update(canonicalJson(createMeetingSeriesDigestProjection(command)), 'utf8').digest();
 }
 
 /**

@@ -12,12 +12,16 @@ import {
     normalizeAcceptedChangeMeetingOccurrenceCommand,
     normalizeMeetingOccurrenceWindow,
     normalizeMeetingOccurrenceImpactDraft,
+    normalizeCreateCourseCommand,
+    normalizeCreateMeetingSeriesCommand,
     normalizeAcceptedCreateCourseWithMeetingCommand,
     type AcceptedCreateCourseWithMeetingCommand,
     type AcceptedChangeMeetingOccurrenceCommand,
     type CancelMeetingOccurrenceCommand,
     type ChangeMeetingOccurrenceCommand,
+    type CreateCourseCommand,
     type CreateCourseWithMeetingCommand,
+    type CreateMeetingSeriesCommand,
     type CourseColor,
     type CourseTeachingRangeIntent,
     type MeetingEffectiveRangeIntent,
@@ -32,6 +36,7 @@ import {
     type MeetingTypeCode,
     type MeetingWeekday,
     deriveMeetingOccurrenceId,
+    MAX_MEETING_OCCURRENCE_WINDOW_DAYS,
     MAX_MEETING_OVERLAP_WARNINGS,
 } from '../shared/workspace-course-contract';
 import {
@@ -44,6 +49,7 @@ import {
 } from '../shared/meeting-time';
 import { canonicalJson } from '../shared/canonical-json';
 import {
+    isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
     normalizeRecordSetupDecisionCommand,
     type RecordSetupDecisionCommand,
@@ -65,6 +71,7 @@ import {
 } from '../shared/workspace-plan-contract';
 import {
     localDateInTermZone,
+    MAX_SETUP_DRAFT_PAYLOAD_BYTES,
     normalizeCreateTermCommand,
     normalizeReconcileWorkspaceLifecycleCommand,
     normalizeRestoreTermAsCurrentCommand,
@@ -72,6 +79,7 @@ import {
     type CreateTermCommand,
     type ReconcileWorkspaceLifecycleCommand,
     type RestoreTermAsCurrentCommand,
+    type SetupDraftCheckpoint,
     type SetupProjection,
     type TermProjection,
     type UpdateTermEndDateCommand,
@@ -117,7 +125,9 @@ import {
     digestCancelMeetingOccurrence,
     digestChangeMeetingOccurrence,
     digestChangeTaskOccurrence,
+    digestCreateCourse,
     digestCreateCourseWithMeeting,
+    digestCreateMeetingSeries,
     digestCreateHolidayRange,
     digestCreateTerm,
     digestDeleteHolidayRange,
@@ -138,7 +148,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel10,
+    createSchemaLevel11,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -148,6 +158,7 @@ import {
     migrateLevel7To8,
     migrateLevel8To9,
     migrateLevel9To10,
+    migrateLevel10To11,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -159,6 +170,7 @@ import {
     validateSchemaLevel8,
     validateSchemaLevel9,
     validateSchemaLevel10,
+    validateSchemaLevel11,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -208,7 +220,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 10 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 11 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -241,13 +253,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 10;
+        schemaLevel: 11;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 10;
+        schemaLevel: 11;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -275,6 +287,7 @@ export type CommitFailpoint =
     | 'commit.after-followup'
     | 'commit.after-watermark'
     | 'commit.before-sqlite-commit'
+    | 'setup-draft.commit-attempted'
     | 'commit.after-sqlite-commit';
 
 export type CommitOptions = Readonly<{
@@ -285,6 +298,13 @@ export class CommittedCommandOutcomeUnknownError extends Error {
     public constructor(public readonly commandId: string) {
         super('Committed command outcome requires receipt recovery');
         this.name = 'CommittedCommandOutcomeUnknownError';
+    }
+}
+
+export class SetupDraftCheckpointOutcomeUnknownError extends Error {
+    public constructor() {
+        super('Setup draft checkpoint outcome requires projection reconciliation');
+        this.name = 'SetupDraftCheckpointOutcomeUnknownError';
     }
 }
 
@@ -416,12 +436,44 @@ export type DataCommitResult =
         problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem | DecisionRequiredProblem;
     }>;
 
+export type SetupDraftCheckpointWriteResult =
+    | Readonly<{
+        ok: true;
+        value: Readonly<{ draftCheckpointVersion: string }>;
+    }>
+    | Readonly<{
+        ok: false;
+        problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem;
+    }>;
+
 type CommitWork = {
+    kind: 'commit';
     command: WorkspaceDataCommand;
     options: CommitOptions;
     resolve: (result: DataCommitResult) => void;
     reject: (error: unknown) => void;
 };
+
+type SetupDraftWork = {
+    kind: 'setup-draft';
+    mutation:
+        | Readonly<{
+            kind: 'save';
+            expectedVersion: string;
+            schemaVersion: 1;
+            updatedAt: string;
+            opaquePayload: string;
+        }>
+        | Readonly<{
+            kind: 'discard';
+            expectedVersion: string;
+        }>;
+    options: CommitOptions;
+    resolve: (result: SetupDraftCheckpointWriteResult) => void;
+    reject: (error: unknown) => void;
+};
+
+type StoreWriteWork = CommitWork | SetupDraftWork;
 
 type TermMutationCommand =
     | ReconcileWorkspaceLifecycleCommand
@@ -450,6 +502,8 @@ type TaskOccurrenceRuleMutationCommand =
 type WorkspaceDataCommand =
     | RecordSetupDecisionCommand
     | CreateTermCommand
+    | CreateCourseCommand
+    | CreateMeetingSeriesCommand
     | AcceptedCreateCourseWithMeetingCommand
     | MeetingOccurrenceMutationCommand
     | HolidayRangeCommand
@@ -602,6 +656,33 @@ function addClampedLocalDateDays(value: string, days: number): string {
     const minimum = localDateMilliseconds('0000-01-01');
     const maximum = localDateMilliseconds('9999-12-31');
     return new Date(Math.min(maximum, Math.max(minimum, shifted))).toISOString().slice(0, 10);
+}
+
+/**
+ * Splits one legal Term into non-overlapping bounded occurrence-query windows.
+ * @param {string} startDate - Inclusive canonical Term start date.
+ * @param {string} endDate - Inclusive canonical Term end date.
+ * @return {readonly MeetingOccurrenceWindow[]} Stable windows covering the Term exactly once.
+ */
+function planOccurrenceWindows(
+    startDate: string,
+    endDate: string,
+): readonly MeetingOccurrenceWindow[] {
+    const windows: MeetingOccurrenceWindow[] = [];
+    let windowStart = startDate;
+    while (windowStart <= endDate) {
+        const maximumWindowEnd = addClampedLocalDateDays(
+            windowStart,
+            MAX_MEETING_OCCURRENCE_WINDOW_DAYS - 1,
+        );
+        const windowEnd = maximumWindowEnd < endDate ? maximumWindowEnd : endDate;
+        windows.push(Object.freeze({ startDate: windowStart, endDate: windowEnd }));
+        if (windowEnd === endDate) {
+            break;
+        }
+        windowStart = addLocalDateDays(windowEnd, 1);
+    }
+    return Object.freeze(windows);
 }
 
 /**
@@ -1509,6 +1590,16 @@ function isCourseWithMeetingCommand(
     return command.intent.kind === 'plan.create-course-with-first-meeting';
 }
 
+function isCreateCourseCommand(command: WorkspaceDataCommand): command is CreateCourseCommand {
+    return command.intent.kind === 'plan.create-course';
+}
+
+function isCreateMeetingSeriesCommand(
+    command: WorkspaceDataCommand,
+): command is CreateMeetingSeriesCommand {
+    return command.intent.kind === 'plan.create-meeting-series';
+}
+
 /**
  * Narrows an accepted Course creation to the current writable schema.
  * @param {AcceptedCreateCourseWithMeetingCommand} command - Accepted creation command.
@@ -1825,6 +1916,73 @@ function permissionCommitResult(revision: bigint): DataCommitResult {
 }
 
 /**
+ * Reports the authoritative draft-stream version after an optimistic conflict.
+ * @param {string} workspaceId - Stable Workspace identity.
+ * @param {bigint} revision - Unchanged formal Workspace revision.
+ * @param {bigint} draftVersion - Current setup draft version.
+ * @return {SetupDraftCheckpointWriteResult} Unchanged conflict result.
+ */
+function setupDraftConflictResult(
+    workspaceId: string,
+    revision: bigint,
+    draftVersion: bigint,
+): SetupDraftCheckpointWriteResult {
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context: Object.freeze({
+            revision: revision.toString(),
+            entityVersions: freezeTuple([Object.freeze({
+                kind: 'workspace-setup' as const,
+                id: workspaceId,
+                version: draftVersion.toString(),
+            })]),
+        }),
+        details: Object.freeze({ reason: 'expected-entity-version' as const }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+/**
+ * Reports a saturated Workspace write queue without changing the draft.
+ * @param {bigint} revision - Unchanged formal Workspace revision.
+ * @return {SetupDraftCheckpointWriteResult} Retryable unchanged result.
+ */
+function setupDraftWriterBusyResult(revision: bigint): SetupDraftCheckpointWriteResult {
+    const problem = Object.freeze({
+        code: 'operation-in-progress' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['retry' as const]),
+        context: Object.freeze({ revision: revision.toString() }),
+        details: Object.freeze({ reason: 'writer-busy' as const }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+/**
+ * Reports that the open Workspace mode cannot persist a setup draft.
+ * @param {bigint} revision - Unchanged formal Workspace revision.
+ * @return {SetupDraftCheckpointWriteResult} Permission result.
+ */
+function setupDraftPermissionResult(revision: bigint): SetupDraftCheckpointWriteResult {
+    const problem = Object.freeze({
+        code: 'permission' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeEmptyTuple(),
+        context: Object.freeze({ revision: revision.toString() }),
+        details: Object.freeze({ reason: 'read-only' as const }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+/**
  * Builds an unchanged result requiring a fresh whole-rule impact preview.
  * @param {bigint} revision - Current Workspace revision.
  * @return {DataCommitResult} Decision-required result.
@@ -1915,7 +2073,7 @@ class SqliteDataStoreImplementation {
     private closePromise: Promise<void> | undefined;
     private finishClose: (() => void) | undefined;
     private failClose: ((error: unknown) => void) | undefined;
-    private readonly queue: CommitWork[] = [];
+    private readonly queue: StoreWriteWork[] = [];
     private revision: bigint;
     private running = false;
     private terminalError: Error | undefined;
@@ -1994,9 +2152,20 @@ class SqliteDataStoreImplementation {
         try {
             this.database.exec('BEGIN');
             const state = this.database.prepare(`
-                SELECT workspace_state.revision, plan_state.current_term_id, plan_state.plan_entity_version
+                SELECT
+                    workspace_state.revision,
+                    plan_state.current_term_id,
+                    plan_state.plan_entity_version,
+                    setup_state.ever_reached_minimum,
+                    setup_draft_checkpoint.checkpoint_version,
+                    setup_draft_checkpoint.schema_version,
+                    setup_draft_checkpoint.updated_at,
+                    setup_draft_checkpoint.opaque_payload
                 FROM workspace_state
                 JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+                JOIN setup_state ON setup_state.singleton = workspace_state.singleton
+                JOIN setup_draft_checkpoint
+                    ON setup_draft_checkpoint.singleton = workspace_state.singleton
                 WHERE workspace_state.singleton = 1
             `);
             state.setReadBigInts(true);
@@ -2004,6 +2173,11 @@ class SqliteDataStoreImplementation {
                 revision: bigint;
                 current_term_id: string | null;
                 plan_entity_version: bigint;
+                ever_reached_minimum: bigint;
+                checkpoint_version: bigint;
+                schema_version: bigint | null;
+                updated_at: string | null;
+                opaque_payload: string | null;
             };
             options.failpoint?.('read.after-revision');
 
@@ -2123,6 +2297,7 @@ class SqliteDataStoreImplementation {
                 FROM meeting_series
                 JOIN meeting_segments
                     ON meeting_segments.meeting_series_id = meeting_series.meeting_series_id
+                WHERE meeting_series.retired = 0
                 ORDER BY
                     meeting_series.course_id,
                     meeting_series.meeting_series_id,
@@ -2309,9 +2484,38 @@ class SqliteDataStoreImplementation {
             }));
             this.database.exec('COMMIT');
 
+            const currentTermCourses = currentTerm === null
+                ? []
+                : courses.filter(course => course.termId === currentTerm.termId && !course.archived);
+            const hasCurrentTerm = currentTerm !== null;
+            const hasCurrentTermCourse = currentTermCourses.length > 0;
+            const hasMeetingOrTask = currentTermCourses.some(course => course.meetings.length > 0
+                || tasks.some(task => task.courseId === course.courseId));
+            const minimum = Object.freeze({
+                hasCurrentTerm,
+                hasCurrentTermCourse,
+                hasMeetingOrTask,
+                isSatisfied: hasCurrentTerm && hasCurrentTermCourse && hasMeetingOrTask,
+            });
+            const draftCheckpoint = stateRow.schema_version === null
+                ? null
+                : Object.freeze({
+                    draftId: 'first-setup' as const,
+                    kind: 'first-setup' as const,
+                    scope: 'setup-step' as const,
+                    schemaVersion: Number(stateRow.schema_version) as SetupDraftCheckpoint['schemaVersion'],
+                    updatedAt: stateRow.updated_at!,
+                    opaquePayload: stateRow.opaque_payload!,
+                });
+
             return Object.freeze({
                 workspaceRevision: stateRow.revision.toString(),
                 planEntityVersion: stateRow.plan_entity_version.toString(),
+                minimum,
+                everReachedMinimum: stateRow.ever_reached_minimum === 1n,
+                defaultRoute: stateRow.ever_reached_minimum === 1n ? 'today' : 'setup',
+                draftCheckpointVersion: stateRow.checkpoint_version.toString(),
+                draftCheckpoint,
                 currentTerm,
                 terms,
                 courses,
@@ -2378,10 +2582,7 @@ class SqliteDataStoreImplementation {
                 archived: termRow.archived === 1n,
                 entityVersion: termRow.entity_version.toString(),
             });
-            const requestedWindow = Object.freeze({
-                startDate: term.startDate,
-                endDate: term.endDate,
-            });
+            const requestedWindows = planOccurrenceWindows(term.startDate, term.endDate);
 
             const taskSeriesRows = this.database.prepare(`
                 SELECT task_series.task_series_id, courses.course_id, courses.code
@@ -2395,14 +2596,22 @@ class SqliteDataStoreImplementation {
                 code: string;
             }>;
             const taskSources: PlanTaskSource[] = [];
+            const seenTaskOccurrences = new Set<string>();
             for (const row of taskSeriesRows) {
-                const detail = this.readTaskSeriesDetail(row.task_series_id, requestedWindow);
-                for (const occurrence of detail.occurrences) {
-                    taskSources.push(Object.freeze({
-                        courseId: row.course_id,
-                        courseCode: row.code,
-                        occurrence,
-                    }));
+                for (const requestedWindow of requestedWindows) {
+                    const detail = this.readTaskSeriesDetail(row.task_series_id, requestedWindow);
+                    for (const occurrence of detail.occurrences) {
+                        const identity = `${occurrence.occurrenceId.taskSeriesId}\u0000`
+                            + occurrence.occurrenceId.originalLogicalAnchor;
+                        if (!seenTaskOccurrences.has(identity)) {
+                            seenTaskOccurrences.add(identity);
+                            taskSources.push(Object.freeze({
+                                courseId: row.course_id,
+                                courseCode: row.code,
+                                occurrence,
+                            }));
+                        }
+                    }
                 }
             }
 
@@ -2418,14 +2627,22 @@ class SqliteDataStoreImplementation {
                 code: string;
             }>;
             const meetingSources: PlanMeetingSource[] = [];
+            const seenMeetingOccurrences = new Set<string>();
             for (const row of meetingSeriesRows) {
-                const detail = this.readMeetingSeriesDetail(row.meeting_series_id, requestedWindow);
-                for (const occurrence of detail.occurrences) {
-                    meetingSources.push(Object.freeze({
-                        courseId: row.course_id,
-                        courseCode: row.code,
-                        occurrence,
-                    }));
+                for (const requestedWindow of requestedWindows) {
+                    const detail = this.readMeetingSeriesDetail(row.meeting_series_id, requestedWindow);
+                    for (const occurrence of detail.occurrences) {
+                        const identity = `${occurrence.occurrenceId.meetingSeriesId}\u0000`
+                            + occurrence.occurrenceId.originalLogicalAnchor;
+                        if (!seenMeetingOccurrences.has(identity)) {
+                            seenMeetingOccurrences.add(identity);
+                            meetingSources.push(Object.freeze({
+                                courseId: row.course_id,
+                                courseCode: row.code,
+                                occurrence,
+                            }));
+                        }
+                    }
                 }
             }
 
@@ -3647,6 +3864,12 @@ class SqliteDataStoreImplementation {
             case 'plan.create-course-with-first-meeting':
                 command = normalizeAcceptedCreateCourseWithMeetingCommand(candidate);
                 break;
+            case 'plan.create-course':
+                command = normalizeCreateCourseCommand(candidate);
+                break;
+            case 'plan.create-meeting-series':
+                command = normalizeCreateMeetingSeriesCommand(candidate);
+                break;
             case 'plan.change-meeting-occurrence':
                 command = normalizeAcceptedChangeMeetingOccurrenceCommand(candidate);
                 break;
@@ -3708,7 +3931,99 @@ class SqliteDataStoreImplementation {
         }
 
         const pending = new Promise<DataCommitResult>((resolve, reject) => {
-            this.queue.push({ command, options, resolve, reject });
+            this.queue.push({ kind: 'commit', command, options, resolve, reject });
+        });
+        if (!this.running) {
+            this.running = true;
+            queueMicrotask(() => this.drain());
+        }
+        return pending;
+    }
+
+    /**
+     * Saves the bounded Shell-owned first-setup draft without changing formal Workspace facts.
+     * @param {object} input - Versioned opaque JSON draft envelope.
+     * @param {string} updatedAt - Workspace-clock Instant for the checkpoint.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {Promise<SetupDraftCheckpointWriteResult>} New draft version or unchanged problem.
+     */
+    public saveSetupDraftCheckpoint(
+        input: Readonly<{
+            expectedVersion: string;
+            schemaVersion: 1;
+            opaquePayload: string;
+        }>,
+        updatedAt: string,
+        options: CommitOptions = {},
+    ): Promise<SetupDraftCheckpointWriteResult> {
+        if (!isCanonicalUnsignedSqliteInteger(input.expectedVersion)
+            || input.schemaVersion !== 1
+            || !isCanonicalInstant(updatedAt)
+            || Buffer.byteLength(input.opaquePayload, 'utf8') > MAX_SETUP_DRAFT_PAYLOAD_BYTES) {
+            throw new TypeError('Setup draft checkpoint is invalid or incompatible');
+        }
+        try {
+            JSON.parse(input.opaquePayload);
+        }
+        catch {
+            throw new TypeError('Setup draft checkpoint payload is not JSON');
+        }
+        return this.enqueueSetupDraftMutation({
+            kind: 'save',
+            expectedVersion: input.expectedVersion,
+            schemaVersion: input.schemaVersion,
+            updatedAt,
+            opaquePayload: input.opaquePayload,
+        }, options);
+    }
+
+    /**
+     * Discards the first-setup draft while preserving its optimistic version stream.
+     * @param {string} expectedVersion - Last observed draft-stream version.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {Promise<SetupDraftCheckpointWriteResult>} New draft version or unchanged problem.
+     */
+    public discardSetupDraftCheckpoint(
+        expectedVersion: string,
+        options: CommitOptions = {},
+    ): Promise<SetupDraftCheckpointWriteResult> {
+        if (!isCanonicalUnsignedSqliteInteger(expectedVersion)) {
+            throw new TypeError('Setup draft checkpoint version is invalid');
+        }
+        return this.enqueueSetupDraftMutation({ kind: 'discard', expectedVersion }, options);
+    }
+
+    /**
+     * Serializes setup-draft mutations with formal Workspace writes on the sole SQLite connection.
+     * @param {SetupDraftWork['mutation']} mutation - Validated save or discard mutation.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {Promise<SetupDraftCheckpointWriteResult>} Queued write result.
+     */
+    private enqueueSetupDraftMutation(
+        mutation: SetupDraftWork['mutation'],
+        options: CommitOptions,
+    ): Promise<SetupDraftCheckpointWriteResult> {
+        if (this.terminalError) {
+            return Promise.reject(this.terminalError);
+        }
+        if (this.readOnly) {
+            try {
+                this.requireOpen();
+                return Promise.resolve(setupDraftPermissionResult(this.revision));
+            }
+            catch (error) {
+                return Promise.reject(error);
+            }
+        }
+        if (!this.accepting) {
+            return Promise.reject(new Error('Workspace data store is closing'));
+        }
+        if (this.queue.length >= COMMIT_QUEUE_CAPACITY) {
+            return Promise.resolve(setupDraftWriterBusyResult(this.revision));
+        }
+
+        const pending = new Promise<SetupDraftCheckpointWriteResult>((resolve, reject) => {
+            this.queue.push({ kind: 'setup-draft', mutation, options, resolve, reject });
         });
         if (!this.running) {
             this.running = true;
@@ -3820,6 +4135,40 @@ class SqliteDataStoreImplementation {
         };
     }
 
+    /**
+     * Advances the one-way setup milestone from current formal PLAN facts.
+     * @return {void}
+     */
+    private advanceSetupMinimumMilestone(): void {
+        this.database.exec(`
+            UPDATE setup_state
+            SET ever_reached_minimum = 1
+            WHERE singleton = 1
+                AND ever_reached_minimum = 0
+                AND EXISTS (
+                    SELECT 1
+                    FROM plan_state
+                    JOIN courses ON courses.term_id = plan_state.current_term_id
+                        AND courses.archived = 0
+                    WHERE plan_state.singleton = 1
+                        AND (
+                            EXISTS (
+                                SELECT 1
+                                FROM meeting_series
+                                WHERE meeting_series.course_id = courses.course_id
+                                    AND meeting_series.retired = 0
+                            )
+                            OR EXISTS (
+                                SELECT 1
+                                FROM task_series
+                                WHERE task_series.course_id = courses.course_id
+                                    AND task_series.retired = 0
+                            )
+                        )
+                )
+        `);
+    }
+
     private readReceiptOutcome(commandId: string): CommandReceiptOutcome | null {
         const receipt = this.database.prepare(`
             SELECT committed_revision
@@ -3921,6 +4270,12 @@ class SqliteDataStoreImplementation {
         if (isCourseWithMeetingCommand(command)) {
             return this.commitCourseWithMeetingSynchronously(command, options);
         }
+        if (isCreateCourseCommand(command)) {
+            return this.commitCourseSynchronously(command, options);
+        }
+        if (isCreateMeetingSeriesCommand(command)) {
+            return this.commitMeetingSeriesSynchronously(command, options);
+        }
         if (isMeetingOccurrenceMutationCommand(command)) {
             return this.commitMeetingOccurrenceMutationSynchronously(command, options);
         }
@@ -3940,6 +4295,91 @@ class SqliteDataStoreImplementation {
             return this.commitTaskSynchronously(command, options);
         }
         return this.commitTermSynchronously(command, options);
+    }
+
+    /**
+     * Commits one setup-draft stream update without advancing formal revision or follow-ups.
+     * @param {SetupDraftWork['mutation']} mutation - Validated queued mutation.
+     * @param {CommitOptions} options - Transaction failpoint controls used by tests.
+     * @return {SetupDraftCheckpointWriteResult} Committed version or unchanged problem.
+     */
+    private writeSetupDraftSynchronously(
+        mutation: SetupDraftWork['mutation'],
+        options: CommitOptions,
+    ): SetupDraftCheckpointWriteResult {
+        let commitAttempted = false;
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const draft = this.database.prepare(`
+                SELECT workspace_state.revision, setup_draft_checkpoint.checkpoint_version
+                FROM workspace_state
+                JOIN setup_draft_checkpoint
+                    ON setup_draft_checkpoint.singleton = workspace_state.singleton
+                WHERE workspace_state.singleton = 1
+            `);
+            draft.setReadBigInts(true);
+            const row = draft.get() as { revision: bigint; checkpoint_version: bigint };
+            if (row.checkpoint_version !== BigInt(mutation.expectedVersion)) {
+                this.rollbackOrRequireReopen();
+                return setupDraftConflictResult(this.workspaceId, row.revision, row.checkpoint_version);
+            }
+            if (row.checkpoint_version === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newVersion = row.checkpoint_version + 1n;
+            if (mutation.kind === 'save') {
+                this.database.prepare(`
+                    UPDATE setup_draft_checkpoint
+                    SET checkpoint_version = ?, schema_version = ?, updated_at = ?, opaque_payload = ?
+                    WHERE singleton = 1
+                `).run(
+                    newVersion,
+                    mutation.schemaVersion,
+                    mutation.updatedAt,
+                    mutation.opaquePayload,
+                );
+            }
+            else {
+                this.database.prepare(`
+                    UPDATE setup_draft_checkpoint
+                    SET checkpoint_version = ?, schema_version = NULL, updated_at = NULL, opaque_payload = NULL
+                    WHERE singleton = 1
+                `).run(newVersion);
+            }
+
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+            commitAttempted = true;
+            fireCommitFailpoint(options, 'setup-draft.commit-attempted');
+            this.database.exec('COMMIT');
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            return Object.freeze({
+                ok: true as const,
+                value: Object.freeze({ draftCheckpointVersion: newVersion.toString() }),
+            });
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new SetupDraftCheckpointOutcomeUnknownError());
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return setupDraftWriterBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return setupDraftPermissionResult(this.revision);
+            }
+            throw new Error('Workspace setup draft write failed');
+        }
     }
 
     private commitSetupSynchronously(
@@ -4252,6 +4692,501 @@ class SqliteDataStoreImplementation {
         }
     }
 
+    private commitCourseSynchronously(
+        command: CreateCourseCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = digestCreateCourse(command);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const term = this.database.prepare(`
+                SELECT terms.term_id, terms.start_date, terms.end_date
+                FROM plan_state
+                JOIN terms ON terms.term_id = plan_state.current_term_id
+                WHERE plan_state.singleton = 1
+            `).get() as {
+                term_id: string;
+                start_date: string;
+                end_date: string;
+            } | undefined;
+            if (!term) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Course requires a Current Term');
+            }
+            const course = command.intent.payload.course;
+            const teachingStartDate = course.teachingRange.kind === 'inherit-term'
+                ? term.start_date
+                : course.teachingRange.startDate;
+            const teachingEndDate = course.teachingRange.kind === 'inherit-term'
+                ? term.end_date
+                : course.teachingRange.endDate;
+            if (teachingStartDate < term.start_date || teachingEndDate > term.end_date) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Course range must remain inside its Current Term');
+            }
+            if (versions.revision === SQLITE_INTEGER_MAX || versions.planVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const courseId = randomUUID();
+            const [creditsCoefficient, creditsScale] = decimalToCoefficient(course.credits);
+            this.database.prepare(`
+                INSERT INTO courses (
+                    course_id,
+                    term_id,
+                    code,
+                    name,
+                    section,
+                    instructor,
+                    color,
+                    credits_coefficient,
+                    credits_scale,
+                    teaching_range_kind,
+                    teaching_start_date,
+                    teaching_end_date,
+                    archived,
+                    entity_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1)
+            `).run(
+                courseId,
+                term.term_id,
+                course.code,
+                course.name,
+                course.section,
+                course.instructor,
+                course.color,
+                creditsCoefficient,
+                creditsScale,
+                course.teachingRange.kind,
+                course.teachingRange.kind === 'explicit' ? course.teachingRange.startDate : null,
+                course.teachingRange.kind === 'explicit' ? course.teachingRange.endDate : null,
+            );
+            this.database.prepare(`
+                UPDATE plan_state
+                SET plan_entity_version = ?
+                WHERE singleton = 1
+            `).run(newPlanVersion);
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, 'plan.create-course', 1,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, 'plan.course-created', 'course', ?, 1)
+            `).run(command.commandId, courseId);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
+    private commitMeetingSeriesSynchronously(
+        command: CreateMeetingSeriesCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = digestCreateMeetingSeries(command);
+        let commitAttempted = false;
+
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return planConflictResult('command-id-reused', versions);
+                }
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored receipt outcome is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-revision', versions);
+            }
+            if (versions.planVersion !== BigInt(command.expectedPlanVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            const courseStatement = this.database.prepare(`
+                SELECT
+                    courses.course_id,
+                    courses.code,
+                    courses.teaching_range_kind,
+                    courses.teaching_start_date,
+                    courses.teaching_end_date,
+                    courses.entity_version,
+                    terms.term_id,
+                    terms.start_date AS term_start_date,
+                    terms.end_date AS term_end_date,
+                    terms.time_zone
+                FROM courses
+                JOIN plan_state ON plan_state.current_term_id = courses.term_id
+                JOIN terms ON terms.term_id = courses.term_id
+                WHERE plan_state.singleton = 1
+                    AND courses.course_id = ?
+                    AND courses.archived = 0
+            `);
+            courseStatement.setReadBigInts(true);
+            const course = courseStatement.get(command.intent.payload.courseId) as {
+                course_id: string;
+                code: string;
+                teaching_range_kind: CourseTeachingRangeIntent['kind'];
+                teaching_start_date: string | null;
+                teaching_end_date: string | null;
+                entity_version: bigint;
+                term_id: string;
+                term_start_date: string;
+                term_end_date: string;
+                time_zone: string;
+            } | undefined;
+            if (!course) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Meeting requires an active Course in the Current Term');
+            }
+            if (course.entity_version !== BigInt(command.expectedCourseVersion)) {
+                this.rollbackOrRequireReopen();
+                return planConflictResult('expected-entity-version', versions);
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            const teachingStartDate = course.teaching_range_kind === 'inherit-term'
+                ? course.term_start_date
+                : course.teaching_start_date!;
+            const teachingEndDate = course.teaching_range_kind === 'inherit-term'
+                ? course.term_end_date
+                : course.teaching_end_date!;
+            const meeting = command.intent.payload.meeting;
+            const effectiveStartDate = meeting.effectiveRange.kind === 'inherit-course'
+                ? teachingStartDate
+                : meeting.effectiveRange.startDate;
+            const effectiveEndDate = meeting.effectiveRange.kind === 'inherit-course'
+                ? teachingEndDate
+                : meeting.effectiveRange.endDate;
+            if (effectiveStartDate < teachingStartDate || effectiveEndDate > teachingEndDate) {
+                this.rollbackOrRequireReopen();
+                throw new TypeError('Meeting range must remain inside its Course');
+            }
+            const logicalStartAnchor = firstWeeklyLogicalAnchor(effectiveStartDate, meeting.weekday);
+            const proposedOccurrences = expandConflictMeetingOccurrences(
+                Object.freeze({
+                    courseId: null,
+                    courseCode: course.code,
+                    meetingSeriesId: null,
+                }),
+                course.time_zone,
+                [Object.freeze({
+                    meeting_segment_id: command.commandId,
+                    meeting_type: meeting.type,
+                    weekday: meeting.weekday,
+                    local_start: meeting.localStart,
+                    local_end: meeting.localEnd,
+                    end_day_offset: meeting.endDayOffset,
+                    logical_start_anchor: logicalStartAnchor,
+                    logical_end_anchor: null,
+                    effective_range_kind: meeting.effectiveRange.kind,
+                    effective_start_date: meeting.effectiveRange.kind === 'explicit'
+                        ? meeting.effectiveRange.startDate
+                        : null,
+                    effective_end_date: meeting.effectiveRange.kind === 'explicit'
+                        ? meeting.effectiveRange.endDate
+                        : null,
+                    resolved_start_date: effectiveStartDate,
+                    resolved_end_date: effectiveEndDate,
+                    location_kind: meeting.location.kind,
+                    location_value: meeting.location.kind === 'known' ? meeting.location.value : null,
+                })],
+                [],
+                this.readActiveHolidayRanges(course.term_id),
+                Object.freeze({ startDate: effectiveStartDate, endDate: effectiveEndDate }),
+            );
+            const overlapWindow = Object.freeze({
+                startDate: addClampedLocalDateDays(effectiveStartDate, -3),
+                endDate: addClampedLocalDateDays(effectiveEndDate, 3),
+            });
+            const overlapWarnings = meetingOverlapWarnings(
+                command.commandId,
+                proposedOccurrences,
+                this.readConflictMeetingOccurrences(overlapWindow, course.term_id),
+            );
+            if (command.overlapDecision === 'review' && overlapWarnings.length > 0) {
+                this.rollbackOrRequireReopen();
+                return meetingOverlapDecisionRequiredResult(versions.revision, overlapWarnings);
+            }
+            if (versions.revision === SQLITE_INTEGER_MAX || versions.planVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+
+            const newRevision = versions.revision + 1n;
+            const newPlanVersion = versions.planVersion + 1n;
+            const meetingSeriesId = randomUUID();
+            const meetingSegmentId = randomUUID();
+            this.database.prepare(`
+                INSERT INTO meeting_series (
+                    meeting_series_id,
+                    course_id,
+                    retired,
+                    entity_version
+                ) VALUES (?, ?, 0, 1)
+            `).run(meetingSeriesId, course.course_id);
+            this.database.prepare(`
+                INSERT INTO meeting_segments (
+                    meeting_segment_id,
+                    meeting_series_id,
+                    meeting_type,
+                    weekday,
+                    local_start,
+                    local_end,
+                    end_day_offset,
+                    logical_start_anchor,
+                    logical_end_anchor,
+                    effective_range_kind,
+                    effective_start_date,
+                    effective_end_date,
+                    location_kind,
+                    location_value
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                meetingSegmentId,
+                meetingSeriesId,
+                meeting.type,
+                meeting.weekday,
+                meeting.localStart,
+                meeting.localEnd,
+                meeting.endDayOffset,
+                logicalStartAnchor,
+                null,
+                meeting.effectiveRange.kind,
+                meeting.effectiveRange.kind === 'explicit' ? meeting.effectiveRange.startDate : null,
+                meeting.effectiveRange.kind === 'explicit' ? meeting.effectiveRange.endDate : null,
+                meeting.location.kind,
+                meeting.location.kind === 'known' ? meeting.location.value : null,
+            );
+            this.database.prepare(`
+                UPDATE plan_state
+                SET plan_entity_version = ?
+                WHERE singleton = 1
+            `).run(newPlanVersion);
+            this.advanceSetupMinimumMilestone();
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, 'plan.create-meeting-series', 1,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (?, 0, 'plan.meeting-series-created', 'meeting-series', ?, 1)
+            `).run(command.commandId, meetingSeriesId);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed receipt outcome is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            if (error instanceof TypeError) {
+                throw error;
+            }
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace data commit failed');
+        }
+    }
+
     private commitCourseWithMeetingSynchronously(
         command: AcceptedCreateCourseWithMeetingCommand,
         options: CommitOptions,
@@ -4481,6 +5416,7 @@ class SqliteDataStoreImplementation {
                 SET plan_entity_version = ?
                 WHERE singleton = 1
             `).run(newPlanVersion);
+            this.advanceSetupMinimumMilestone();
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -5001,6 +5937,7 @@ class SqliteDataStoreImplementation {
             this.database.prepare(`
                 UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
             `).run(newPlanVersion);
+            this.advanceSetupMinimumMilestone();
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -5338,6 +6275,7 @@ class SqliteDataStoreImplementation {
             this.database.prepare(`
                 UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
             `).run(newPlanVersion);
+            this.advanceSetupMinimumMilestone();
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -6683,6 +7621,7 @@ class SqliteDataStoreImplementation {
             this.database.prepare(`
                 UPDATE plan_state SET plan_entity_version = ? WHERE singleton = 1
             `).run(newPlanVersion);
+            this.advanceSetupMinimumMilestone();
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -7037,6 +7976,7 @@ class SqliteDataStoreImplementation {
                     WHERE singleton = 1
                 `).run(termRow.term_id, newPlanVersion);
             }
+            this.advanceSetupMinimumMilestone();
             fireCommitFailpoint(options, 'commit.after-facts');
 
             this.database.prepare(
@@ -7132,7 +8072,12 @@ class SqliteDataStoreImplementation {
         let work = this.queue.shift();
         while (work) {
             try {
-                work.resolve(this.commitSynchronously(work.command, work.options));
+                if (work.kind === 'commit') {
+                    work.resolve(this.commitSynchronously(work.command, work.options));
+                }
+                else {
+                    work.resolve(this.writeSetupDraftSynchronously(work.mutation, work.options));
+                }
             } catch (error) {
                 work.reject(error);
                 if (this.terminalError) {
@@ -7322,7 +8267,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel10(stagingDatabase);
+        createSchemaLevel11(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -7334,6 +8279,13 @@ export function initializeWorkspaceData(
                 setup_decision_version,
                 ever_reached_minimum
             ) VALUES (1, NULL, 0, 0);
+            INSERT INTO setup_draft_checkpoint (
+                singleton,
+                checkpoint_version,
+                schema_version,
+                updated_at,
+                opaque_payload
+            ) VALUES (1, 0, NULL, NULL, NULL);
             INSERT INTO protection_watermarks (
                 singleton,
                 backup_needed_through,
@@ -7354,7 +8306,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel10(validationDatabase);
+            validateSchemaLevel11(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -7363,7 +8315,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel10(activeDatabase);
+        const facts = validateSchemaLevel11(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -7436,7 +8388,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel10(validationDatabase);
+        const facts = validateSchemaLevel11(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -7486,7 +8438,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel10(activeDatabase);
+        const facts = validateSchemaLevel11(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -7530,7 +8482,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 6
                 && identity.schemaLevel !== 7
                 && identity.schemaLevel !== 8
-                && identity.schemaLevel !== 9)) {
+                && identity.schemaLevel !== 9
+                && identity.schemaLevel !== 10)) {
             closeBestEffort(source);
             return opened;
         }
@@ -7558,8 +8511,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 8) {
             validateSchemaLevel8(source);
         }
-        else {
+        else if (identity.schemaLevel === 9) {
             validateSchemaLevel9(source);
+        }
+        else {
+            validateSchemaLevel10(source);
         }
         if (options.readOnly) {
             closeBestEffort(source);
@@ -7598,8 +8554,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 8) {
                 validateSchemaLevel8(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 9) {
                 validateSchemaLevel9(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel10(safetyDatabase);
             }
         }
         finally {
@@ -7661,10 +8620,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel8To9(maintenance);
                         validateSchemaLevel9(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 9) {
                         validateSchemaLevel9(maintenance);
                         migrateLevel9To10(maintenance);
                         validateSchemaLevel10(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel10(maintenance);
+                        migrateLevel10To11(maintenance);
+                        validateSchemaLevel11(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -7688,7 +8652,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel10(maintenance);
+            validateSchemaLevel11(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

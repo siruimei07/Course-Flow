@@ -281,6 +281,55 @@ export type CourseProjection = Readonly<{
     meetings: readonly MeetingSeriesProjection[];
 }>;
 
+export type CourseCreationFacts = Readonly<{
+    code: string;
+    name: string;
+    section: string | null;
+    instructor: string | null;
+    color: CourseColor | null;
+    credits: string | null;
+    teachingRange: CourseTeachingRangeIntent;
+}>;
+
+export type MeetingSeriesCreationFacts = Readonly<{
+    type: MeetingTypeCode;
+    weekday: MeetingWeekday;
+    localStart: string;
+    localEnd: string;
+    endDayOffset: MeetingEndDayOffset;
+    effectiveRange: MeetingEffectiveRangeIntent;
+    location: MeetingLocation;
+}>;
+
+export type CreateCourseCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    intent: Readonly<{
+        kind: 'plan.create-course';
+        intentSchemaVersion: 1;
+        payload: Readonly<{ course: CourseCreationFacts }>;
+    }>;
+}>;
+
+export type CreateMeetingSeriesCommand = Readonly<{
+    commandId: string;
+    followUpId: string;
+    overlapDecision: 'review' | 'continue';
+    expectedRevision: string;
+    expectedPlanVersion: string;
+    expectedCourseVersion: string;
+    intent: Readonly<{
+        kind: 'plan.create-meeting-series';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            courseId: string;
+            meeting: MeetingSeriesCreationFacts;
+        }>;
+    }>;
+}>;
+
 export type LegacyCreateCourseWithMeetingCommand = Readonly<{
     commandId: string;
     followUpId: string;
@@ -1064,6 +1113,88 @@ function canonicalMeetingEffectiveRange(value: unknown): MeetingEffectiveRangeIn
 }
 
 /**
+ * Normalizes the exact Course facts shared by independent and atomic setup commands.
+ * @param {unknown} value - Candidate Course creation facts.
+ * @return {CourseCreationFacts | null} Canonical facts, or null when invalid.
+ */
+function canonicalCourseCreationFacts(value: unknown): CourseCreationFacts | null {
+    if (!hasExactDataKeys(value, [
+        'code',
+        'name',
+        'section',
+        'instructor',
+        'color',
+        'credits',
+        'teachingRange',
+    ])) {
+        return null;
+    }
+    const code = canonicalText(value.code, 32);
+    const name = canonicalText(value.name, 120);
+    const section = canonicalOptionalText(value.section, 64);
+    const instructor = canonicalOptionalText(value.instructor, 120);
+    const color = value.color === null
+        ? null
+        : COURSE_COLORS.has(value.color as CourseColor)
+            ? value.color as CourseColor
+            : undefined;
+    const credits = canonicalCredits(value.credits);
+    const teachingRange = canonicalCourseTeachingRange(value.teachingRange);
+    if (code === null
+        || name === null
+        || section === undefined
+        || instructor === undefined
+        || color === undefined
+        || credits === undefined
+        || teachingRange === null) {
+        return null;
+    }
+    return { code, name, section, instructor, color, credits, teachingRange };
+}
+
+/**
+ * Normalizes the exact Meeting facts shared by independent and atomic setup commands.
+ * @param {unknown} value - Candidate Meeting series creation facts.
+ * @return {MeetingSeriesCreationFacts | null} Canonical facts, or null when invalid.
+ */
+function canonicalMeetingSeriesCreationFacts(value: unknown): MeetingSeriesCreationFacts | null {
+    if (!hasExactDataKeys(value, [
+        'type',
+        'weekday',
+        'localStart',
+        'localEnd',
+        'endDayOffset',
+        'effectiveRange',
+        'location',
+    ])) {
+        return null;
+    }
+    const effectiveRange = canonicalMeetingEffectiveRange(value.effectiveRange);
+    const location = canonicalLocation(value.location);
+    if (!MEETING_TYPES.has(value.type as MeetingTypeCode)
+        || !MEETING_WEEKDAYS.has(value.weekday as MeetingWeekday)
+        || typeof value.localStart !== 'string'
+        || typeof value.localEnd !== 'string'
+        || !LOCAL_TIME_PATTERN.test(value.localStart)
+        || !LOCAL_TIME_PATTERN.test(value.localEnd)
+        || (value.endDayOffset !== 0 && value.endDayOffset !== 1)
+        || (value.endDayOffset === 0 && value.localEnd <= value.localStart)
+        || effectiveRange === null
+        || location === null) {
+        return null;
+    }
+    return {
+        type: value.type as MeetingTypeCode,
+        weekday: value.weekday as MeetingWeekday,
+        localStart: value.localStart,
+        localEnd: value.localEnd,
+        endDayOffset: value.endDayOffset,
+        effectiveRange,
+        location,
+    };
+}
+
+/**
  * Checks a resolved date range projection and its allowed inheritance discriminator.
  */
 function isResolvedDateRange(
@@ -1557,6 +1688,97 @@ export function isCourseProjection(value: unknown): value is CourseProjection {
 }
 
 /**
+ * Normalizes a Course-only creation command used before the setup activity choice.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {CreateCourseCommand} Canonical Course command.
+ */
+export function normalizeCreateCourseCommand(value: unknown): CreateCourseCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.create-course'
+        || value.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(value.intent.payload, ['course'])) {
+        throw new TypeError('CreateCourseCommand has invalid fields');
+    }
+    const course = canonicalCourseCreationFacts(value.intent.payload.course);
+    if (course === null) {
+        throw new TypeError('CreateCourseCommand has invalid Course facts');
+    }
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        intent: {
+            kind: 'plan.create-course',
+            intentSchemaVersion: 1,
+            payload: { course },
+        },
+    };
+}
+
+/**
+ * Normalizes a Meeting-only creation command for one existing current Course.
+ * @param {unknown} value - Untrusted command DTO.
+ * @return {CreateMeetingSeriesCommand} Canonical Meeting series command.
+ */
+export function normalizeCreateMeetingSeriesCommand(value: unknown): CreateMeetingSeriesCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'followUpId',
+        'overlapDecision',
+        'expectedRevision',
+        'expectedPlanVersion',
+        'expectedCourseVersion',
+        'intent',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.followUpId)
+        || (value.overlapDecision !== 'review' && value.overlapDecision !== 'continue')
+        || !isCanonicalUnsignedSqliteInteger(value.expectedRevision)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedPlanVersion)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedCourseVersion)
+        || value.expectedCourseVersion === '0'
+        || !hasExactDataKeys(value.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || value.intent.kind !== 'plan.create-meeting-series'
+        || value.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(value.intent.payload, ['courseId', 'meeting'])
+        || !isCanonicalUuid(value.intent.payload.courseId)) {
+        throw new TypeError('CreateMeetingSeriesCommand has invalid fields');
+    }
+    const meeting = canonicalMeetingSeriesCreationFacts(value.intent.payload.meeting);
+    if (meeting === null) {
+        throw new TypeError('CreateMeetingSeriesCommand has invalid Meeting facts');
+    }
+    return {
+        commandId: value.commandId,
+        followUpId: value.followUpId,
+        overlapDecision: value.overlapDecision,
+        expectedRevision: value.expectedRevision,
+        expectedPlanVersion: value.expectedPlanVersion,
+        expectedCourseVersion: value.expectedCourseVersion,
+        intent: {
+            kind: 'plan.create-meeting-series',
+            intentSchemaVersion: 1,
+            payload: {
+                courseId: value.intent.payload.courseId,
+                meeting,
+            },
+        },
+    };
+}
+
+/**
  * Decodes the published schema-2 Course command for receipt replay.
  */
 export function normalizeLegacyCreateCourseWithMeetingCommandV2(
@@ -1881,6 +2103,60 @@ export function normalizeAcceptedCreateCourseWithMeetingCommand(
             : normalizeLegacyCreateCourseWithMeetingCommandV2(value);
     }
     return normalizeCreateCourseWithMeetingCommand(value);
+}
+
+/**
+ * Builds the canonical receipt digest projection for Course-only creation.
+ * @param {CreateCourseCommand} command - Normalized Course command.
+ * @return {CanonicalValue} Canonical payload covered by the durable receipt digest.
+ */
+export function createCourseDigestProjection(command: CreateCourseCommand): CanonicalValue {
+    return {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: command.intent,
+        expectedRevision: command.expectedRevision,
+        expectedEntityVersions: [{
+            entityKind: 'plan-state',
+            entityId: 'singleton',
+            version: command.expectedPlanVersion,
+        }],
+        durableFollowUps: [{
+            followUpId: command.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    };
+}
+
+/**
+ * Builds the canonical receipt digest projection for Meeting series creation.
+ * @param {CreateMeetingSeriesCommand} command - Normalized Meeting command.
+ * @return {CanonicalValue} Canonical payload covered by the durable receipt digest.
+ */
+export function createMeetingSeriesDigestProjection(command: CreateMeetingSeriesCommand): CanonicalValue {
+    return {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: command.intent,
+        overlapDecision: command.overlapDecision,
+        expectedRevision: command.expectedRevision,
+        expectedEntityVersions: [
+            {
+                entityKind: 'plan-state',
+                entityId: 'singleton',
+                version: command.expectedPlanVersion,
+            },
+            {
+                entityKind: 'course',
+                entityId: command.intent.payload.courseId,
+                version: command.expectedCourseVersion,
+            },
+        ],
+        durableFollowUps: [{
+            followUpId: command.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    };
 }
 
 /**

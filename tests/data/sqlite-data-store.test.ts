@@ -20,6 +20,7 @@ import test from 'node:test';
 
 import {
     classifySqliteFailure,
+    SetupDraftCheckpointOutcomeUnknownError,
     initializeWorkspaceData,
     openWorkspaceData,
     type CommandReceiptOutcome,
@@ -164,7 +165,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
             async prepare(dataSlotsRoot: string) {
                 await initializeAndClose(dataSlotsRoot);
                 const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
-                database.exec('PRAGMA user_version = 11');
+                database.exec('PRAGMA user_version = 12');
                 database.close();
             },
             options: undefined,
@@ -177,7 +178,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                     affectedCapabilities: ['workspace.read', 'workspace.write'],
                     allowedActions: [],
                     context: {},
-                    details: { actualSchemaLevel: 11, requiredSchemaLevel: 10 },
+                    details: { actualSchemaLevel: 12, requiredSchemaLevel: 11 },
                 },
             },
         },
@@ -342,7 +343,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                 assert.deepEqual(opened.store.status(), {
                     kind: 'read-only',
                     workspaceId: WORKSPACE_ID,
-                    schemaLevel: 10,
+                    schemaLevel: 11,
                     revision: '0',
                     problem: {
                         code: 'permission',
@@ -387,6 +388,76 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
             }
         });
     }
+});
+
+test('FLOW-00: setup drafts use their own version stream and never create formal follow-ups', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
+    const payload = JSON.stringify({ schemaVersion: 1, step: 'course' });
+
+    const saved = await store.saveSetupDraftCheckpoint({
+        expectedVersion: '0',
+        schemaVersion: 1,
+        opaquePayload: payload,
+    }, '2026-08-24T12:00:00.000Z');
+    assert.deepEqual(saved, { ok: true, value: { draftCheckpointVersion: '1' } });
+    assert.equal(store.status().revision, '0');
+    assert.equal(store.readSetupProjection().planEntityVersion, '0');
+    assert.equal(store.readSetupProjection().draftCheckpoint?.opaquePayload, payload);
+    assert.deepEqual(store.readPendingFollowUps(), []);
+
+    const discarded = await store.discardSetupDraftCheckpoint('1');
+    assert.deepEqual(discarded, { ok: true, value: { draftCheckpointVersion: '2' } });
+    assert.equal(store.readSetupProjection().workspaceRevision, '0');
+    assert.equal(store.readSetupProjection().draftCheckpoint, null);
+    assert.deepEqual(store.readPendingFollowUps(), []);
+    await store.close();
+});
+
+test('FLOW-00: setup draft commit uncertainty requires checkpoint reconciliation', async (t) => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const payload = JSON.stringify({ schemaVersion: 1, step: 'course' });
+    let store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
+
+    await assert.rejects(store.saveSetupDraftCheckpoint({
+        expectedVersion: '0',
+        schemaVersion: 1,
+        opaquePayload: payload,
+    }, '2026-08-24T12:00:00.000Z', {
+        failpoint(point) {
+            if (point === 'setup-draft.commit-attempted') {
+                throw new Error('simulated uncertain SQLite commit attempt');
+            }
+        },
+    }), SetupDraftCheckpointOutcomeUnknownError);
+    await store.close();
+
+    store = reopenReady(dataSlotsRoot);
+    assert.equal(store.readSetupProjection().draftCheckpointVersion, '0');
+    assert.equal(store.readSetupProjection().draftCheckpoint, null);
+    assert.deepEqual(await store.saveSetupDraftCheckpoint({
+        expectedVersion: '0',
+        schemaVersion: 1,
+        opaquePayload: payload,
+    }, '2026-08-24T12:01:00.000Z'), {
+        ok: true,
+        value: { draftCheckpointVersion: '1' },
+    });
+
+    await assert.rejects(store.discardSetupDraftCheckpoint('1', {
+        failpoint(point) {
+            if (point === 'commit.after-sqlite-commit') {
+                throw new Error('simulated post-COMMIT response loss');
+            }
+        },
+    }), SetupDraftCheckpointOutcomeUnknownError);
+    await store.close();
+
+    store = reopenReady(dataSlotsRoot);
+    const reconciled = store.readSetupProjection();
+    assert.equal(reconciled.draftCheckpointVersion, '2');
+    assert.equal(reconciled.draftCheckpoint, null);
+    await store.close();
 });
 
 test('TEST-DATA-005: SQLite owner maps only primary code and commit stage', () => {

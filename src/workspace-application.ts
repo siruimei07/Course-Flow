@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
     CommittedCommandOutcomeUnknownError,
+    SetupDraftCheckpointOutcomeUnknownError,
     initializeWorkspaceData,
     openWorkspaceDataWithMigrations,
     type CommandReceiptOutcome,
@@ -13,6 +14,7 @@ import {
     type DataCommitResult,
     type DataOpenResult,
     type OpenWorkspaceDataOptions,
+    type ReadSnapshotOptions,
     type SqliteDataStore,
 } from './data/sqlite-data-store';
 import {
@@ -28,16 +30,20 @@ import {
     type ChangeMeetingOccurrenceRequest,
     type ChangeTaskOccurrenceRequest,
     type CompleteTaskRequest,
+    type CreateCourseRequest,
     type CreateHolidayRangeRequest,
     type CreateCourseWithMeetingRequest,
+    type CreateMeetingSeriesRequest,
     type CreateTaskRequest,
     type CreateTermRequest,
     type DeleteHolidayRangeRequest,
+    type DiscardSetupDraftCheckpointRequest,
     type DeleteTaskRequest,
     type DeleteTaskOccurrenceOrSeriesRequest,
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type PlanQueryRequest,
+    type SaveSetupDraftCheckpointRequest,
     type SetTaskOccurrenceStatusRequest,
     type SetTaskProgressRequest,
     type TaskOccurrenceImpactRequest,
@@ -78,6 +84,7 @@ const SYSTEM_CLOCK: ClockPort = {
 export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     commitOptions?: CommitOptions;
     clock?: ClockPort;
+    setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
 
 type WorkspaceDataState = Readonly<{
@@ -170,9 +177,13 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.task.delete-occurrence-or-series'
                         || requestKind === 'workspace.task.undo-occurrence-state'
                         || requestKind === 'workspace.plan.query'
+                        || requestKind === 'workspace.setup-draft.save'
+                        || requestKind === 'workspace.setup-draft.discard'
                         || requestKind === 'workspace.task-series.query'
-                        || requestKind === 'workspace.task-occurrence.preview'
-                        || requestKind === 'workspace.course.create-with-first-meeting'
+                         || requestKind === 'workspace.task-occurrence.preview'
+                         || requestKind === 'workspace.course.create'
+                         || requestKind === 'workspace.meeting-series.create'
+                         || requestKind === 'workspace.course.create-with-first-meeting'
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
                         || requestKind === 'workspace.meeting-occurrence.change'
@@ -187,6 +198,10 @@ export class WorkspaceApplication {
                 return this.initialize(request.requestId);
             case 'workspace.setup.query':
                 return this.querySetup(request.requestId);
+            case 'workspace.setup-draft.save':
+                return this.saveSetupDraftCheckpoint(request.requestId, request.input);
+            case 'workspace.setup-draft.discard':
+                return this.discardSetupDraftCheckpoint(request.requestId, request.expectedVersion);
             case 'workspace.plan.query':
                 return this.queryPlan(request.requestId);
             case 'workspace.term.create':
@@ -219,6 +234,10 @@ export class WorkspaceApplication {
                 return this.commitTask(request.requestId, request.command);
             case 'workspace.task.undo-occurrence-state':
                 return this.commitTask(request.requestId, request.command);
+            case 'workspace.course.create':
+                return this.createCourse(request.requestId, request.command);
+            case 'workspace.meeting-series.create':
+                return this.createMeetingSeries(request.requestId, request.command);
             case 'workspace.course.create-with-first-meeting':
                 return this.createCourseWithMeeting(request.requestId, request.command);
             case 'workspace.meeting-series.query':
@@ -321,13 +340,120 @@ export class WorkspaceApplication {
                     requestId,
                     workspaceEpoch: this.workspaceEpoch,
                     dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
-                    projection: this.dataState.store.readSetupProjection(),
+                    projection: this.dataState.store.readSetupProjection(this.options.setupProjectionReadOptions),
                 },
             };
         }
         catch {
             return this.problem('recovery-required', '无法读取一致的 setup 数据。', requestId);
         }
+    }
+
+    /**
+     * Saves a Shell-owned setup checkpoint using the Workspace Clock.
+     * @param {string} requestId - Request correlation identity.
+     * @param {SaveSetupDraftCheckpointRequest['input']} input - Validated opaque checkpoint input.
+     * @return {Promise<WorkspaceSetupOutcome>} Updated projection or structured problem.
+     */
+    private async saveSetupDraftCheckpoint(
+        requestId: string,
+        input: SaveSetupDraftCheckpointRequest['input'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可保存设置草稿的数据。', requestId);
+        }
+        let writeSucceeded = false;
+        try {
+            const written = await this.dataState.store.saveSetupDraftCheckpoint(
+                input,
+                (this.options.clock ?? SYSTEM_CLOCK).now(),
+                this.options.commitOptions,
+            );
+            writeSucceeded = written.ok;
+            this.dataState = { ...this.dataState, status: this.dataState.store.status() };
+            if (!written.ok) {
+                return this.commitProblem(written.problem, requestId, '设置草稿未保存，现有数据没有改变。');
+            }
+            return this.setupProjectionAfterDraftWrite(requestId);
+        }
+        catch (error) {
+            if (writeSucceeded || error instanceof SetupDraftCheckpointOutcomeUnknownError) {
+                return this.problem(
+                    'recovery-required',
+                    '设置草稿结果无法确认；请重新查询设置状态。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法保存设置草稿。', requestId);
+        }
+    }
+
+    /**
+     * Clears the setup checkpoint through its independent optimistic version stream.
+     * @param {string} requestId - Request correlation identity.
+     * @param {string} expectedVersion - Last observed draft version.
+     * @return {Promise<WorkspaceSetupOutcome>} Updated projection or structured problem.
+     */
+    private async discardSetupDraftCheckpoint(
+        requestId: string,
+        expectedVersion: DiscardSetupDraftCheckpointRequest['expectedVersion'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可丢弃设置草稿的数据。', requestId);
+        }
+        let writeSucceeded = false;
+        try {
+            const written = await this.dataState.store.discardSetupDraftCheckpoint(
+                expectedVersion,
+                this.options.commitOptions,
+            );
+            writeSucceeded = written.ok;
+            this.dataState = { ...this.dataState, status: this.dataState.store.status() };
+            if (!written.ok) {
+                return this.commitProblem(written.problem, requestId, '设置草稿未丢弃，现有数据没有改变。');
+            }
+            return this.setupProjectionAfterDraftWrite(requestId);
+        }
+        catch (error) {
+            if (writeSucceeded || error instanceof SetupDraftCheckpointOutcomeUnknownError) {
+                return this.problem(
+                    'recovery-required',
+                    '设置草稿丢弃结果无法确认；请重新查询设置状态。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '无法丢弃设置草稿。', requestId);
+        }
+    }
+
+    /**
+     * Reads the projection returned after a successful draft-only write.
+     * @param {string} requestId - Request correlation identity.
+     * @return {WorkspaceSetupOutcome} Current setup projection.
+     */
+    private setupProjectionAfterDraftWrite(requestId: string): WorkspaceSetupOutcome {
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.setup-projection',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                projection: this.dataState.store!.readSetupProjection(this.options.setupProjectionReadOptions),
+            },
+        };
     }
 
     /**
@@ -828,6 +954,105 @@ export class WorkspaceApplication {
         }
     }
 
+    private async createCourse(
+        requestId: string,
+        command: CreateCourseRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = { ...this.dataState, status: this.dataState.store.status() };
+            if (!committed.ok) {
+                return this.commitProblem(committed.problem, requestId, '课程未保存，正式数据没有改变。');
+            }
+            return this.singleCreationCommandOutcome(
+                requestId,
+                committed.value,
+                'plan.course-created',
+                'course',
+            );
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.singleCreationCommandOutcome(
+                        requestId,
+                        receipt,
+                        'plan.course-created',
+                        'course',
+                    );
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '课程未保存，正式数据没有改变。', requestId);
+        }
+    }
+
+    private async createMeetingSeries(
+        requestId: string,
+        command: CreateMeetingSeriesRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        try {
+            const committed = await this.dataState.store.commit(command, this.options.commitOptions);
+            this.dataState = { ...this.dataState, status: this.dataState.store.status() };
+            if (!committed.ok) {
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '课节未保存，正式数据没有改变。',
+                    '检测到课节时间重叠；确认继续后可按原时间保存。',
+                );
+            }
+            return this.singleCreationCommandOutcome(
+                requestId,
+                committed.value,
+                'plan.meeting-series-created',
+                'meeting-series',
+            );
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.singleCreationCommandOutcome(
+                        requestId,
+                        receipt,
+                        'plan.meeting-series-created',
+                        'meeting-series',
+                    );
+                }
+                return this.problem(
+                    'recovery-required',
+                    '提交结果无法从持久回执确认；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '课节未保存，正式数据没有改变。', requestId);
+        }
+    }
+
     private async createCourseWithMeeting(
         requestId: string,
         command: CreateCourseWithMeetingRequest['command'],
@@ -1082,6 +1307,49 @@ export class WorkspaceApplication {
             ...(committed.undoCapability === undefined
                 ? {}
                 : { undoCapability: committed.undoCapability }),
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
+    }
+
+    private singleCreationCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+        expectedEffect: 'plan.course-created' | 'plan.meeting-series-created',
+        expectedEntityKind: 'course' | 'meeting-series',
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== expectedEffect
+            || effect.entity.kind !== expectedEntityKind) {
+            return this.problem(
+                'recovery-required',
+                '命令回执与课程或课节事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: expectedEffect,
+                entity: {
+                    kind: expectedEntityKind,
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
         };
         return {
             ok: true,

@@ -11,12 +11,16 @@ import {
     MAX_MEETING_OVERLAP_WARNINGS,
     normalizeCancelMeetingOccurrenceCommand,
     normalizeChangeMeetingOccurrenceCommand,
+    normalizeCreateCourseCommand,
+    normalizeCreateMeetingSeriesCommand,
     normalizeMeetingOccurrenceImpactDraft,
     normalizeAcceptedCreateCourseWithMeetingCommand,
     type AcceptedCreateCourseWithMeetingCommand,
     type CancelMeetingOccurrenceCommand,
     type ChangeMeetingOccurrenceCommand,
     type CourseProjection,
+    type CreateCourseCommand,
+    type CreateMeetingSeriesCommand,
     type MeetingSeriesDetailProjection,
     type MeetingOccurrenceWindow,
     type MeetingOccurrenceImpactDraft,
@@ -45,6 +49,7 @@ import {
     isPlanProjection,
     type PlanProjection,
 } from './workspace-plan-contract';
+import { isCanonicalInstant } from './meeting-time';
 import {
     isTaskOccurrenceWindow,
     isTaskOccurrenceImpactProjection,
@@ -78,9 +83,12 @@ import {
 } from './workspace-task-contract';
 import {
     isCanonicalLocalDate,
+    MAX_SETUP_DRAFT_PAYLOAD_BYTES,
     normalizeCreateTermCommand,
     normalizeUpdateTermEndDateCommand,
+    SETUP_DRAFT_SCHEMA_VERSION,
     type CreateTermCommand,
+    type SetupDraftCheckpoint,
     type SetupProjection,
     type TermProjection,
     type UpdateTermEndDateCommand,
@@ -101,6 +109,22 @@ export type InitializeWorkspaceRequest = WorkspaceRequestBase & Readonly<{
 
 export type SetupQueryRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.setup.query';
+}>;
+
+export type SaveSetupDraftCheckpointInput = Readonly<{
+    expectedVersion: string;
+    schemaVersion: typeof SETUP_DRAFT_SCHEMA_VERSION;
+    opaquePayload: string;
+}>;
+
+export type SaveSetupDraftCheckpointRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.setup-draft.save';
+    input: SaveSetupDraftCheckpointInput;
+}>;
+
+export type DiscardSetupDraftCheckpointRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.setup-draft.discard';
+    expectedVersion: string;
 }>;
 
 export type PlanQueryRequest = WorkspaceRequestBase & Readonly<{
@@ -195,6 +219,16 @@ export type RestoreTermAsCurrentRequest = WorkspaceRequestBase & Readonly<{
     command: RestoreTermAsCurrentRequestCommand;
 }>;
 
+export type CreateCourseRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.course.create';
+    command: CreateCourseCommand;
+}>;
+
+export type CreateMeetingSeriesRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.meeting-series.create';
+    command: CreateMeetingSeriesCommand;
+}>;
+
 export type CreateCourseWithMeetingRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.course.create-with-first-meeting';
     command: AcceptedCreateCourseWithMeetingCommand;
@@ -235,6 +269,8 @@ export type CancelMeetingOccurrenceRequest = WorkspaceRequestBase & Readonly<{
 export type WorkspaceSetupRequest =
     | InitializeWorkspaceRequest
     | SetupQueryRequest
+    | SaveSetupDraftCheckpointRequest
+    | DiscardSetupDraftCheckpointRequest
     | PlanQueryRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
@@ -251,6 +287,8 @@ export type WorkspaceSetupRequest =
     | DeleteTaskOccurrenceOrSeriesRequest
     | UndoTaskOccurrenceStateRequest
     | RestoreTermAsCurrentRequest
+    | CreateCourseRequest
+    | CreateMeetingSeriesRequest
     | CreateCourseWithMeetingRequest
     | MeetingSeriesQueryRequest
     | TaskSeriesQueryRequest
@@ -442,6 +480,47 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
         });
 }
 
+/**
+ * Accepts JSON syntax within the first-setup draft byte boundary without interpreting Shell fields.
+ * @param {unknown} value - Candidate opaque payload.
+ * @return {boolean} Whether the payload is bounded JSON text.
+ */
+function isSetupDraftPayload(value: unknown): value is string {
+    if (typeof value !== 'string'
+        || new TextEncoder().encode(value).byteLength > MAX_SETUP_DRAFT_PAYLOAD_BYTES) {
+        return false;
+    }
+    try {
+        JSON.parse(value);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
+/**
+ * Validates the exact Workspace projection envelope around a Shell-owned setup draft.
+ * @param {unknown} value - Candidate checkpoint projection.
+ * @return {boolean} Whether the checkpoint matches the supported version.
+ */
+function isSetupDraftCheckpoint(value: unknown): value is SetupDraftCheckpoint {
+    return hasExactDataKeys(value, [
+        'draftId',
+        'kind',
+        'scope',
+        'schemaVersion',
+        'updatedAt',
+        'opaquePayload',
+    ])
+        && value.draftId === 'first-setup'
+        && value.kind === 'first-setup'
+        && value.scope === 'setup-step'
+        && value.schemaVersion === SETUP_DRAFT_SCHEMA_VERSION
+        && isCanonicalInstant(value.updatedAt)
+        && isSetupDraftPayload(value.opaquePayload);
+}
+
 function isRequestBase(value: Record<string, unknown>): boolean {
     return value.protocolVersion === BOOTSTRAP_PROTOCOL_VERSION
         && typeof value.appBuildId === 'string'
@@ -513,6 +592,67 @@ export function makeSetupQueryRequest(
         appBuildId,
         requestId,
         workspaceEpoch,
+    };
+}
+
+/**
+ * Builds one bounded save for the Shell-owned first-setup draft.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {SaveSetupDraftCheckpointInput} input - Opaque JSON and expected draft-stream version.
+ * @return {SaveSetupDraftCheckpointRequest} Exact Workspace request.
+ */
+export function makeSaveSetupDraftCheckpointRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    input: SaveSetupDraftCheckpointInput,
+): SaveSetupDraftCheckpointRequest {
+    if (!hasExactDataKeys(input, ['expectedVersion', 'schemaVersion', 'opaquePayload'])
+        || !isCanonicalUnsignedSqliteInteger(input.expectedVersion)
+        || input.schemaVersion !== SETUP_DRAFT_SCHEMA_VERSION
+        || !isSetupDraftPayload(input.opaquePayload)) {
+        throw new TypeError('Setup draft checkpoint is invalid or incompatible');
+    }
+    return {
+        kind: 'workspace.setup-draft.save',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        input: {
+            expectedVersion: input.expectedVersion,
+            schemaVersion: input.schemaVersion,
+            opaquePayload: input.opaquePayload,
+        },
+    };
+}
+
+/**
+ * Builds one optimistic discard for the first-setup draft stream.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {string} expectedVersion - Last observed draft-stream version.
+ * @return {DiscardSetupDraftCheckpointRequest} Exact Workspace request.
+ */
+export function makeDiscardSetupDraftCheckpointRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    expectedVersion: string,
+): DiscardSetupDraftCheckpointRequest {
+    if (!isCanonicalUnsignedSqliteInteger(expectedVersion)) {
+        throw new TypeError('Setup draft checkpoint version is invalid');
+    }
+    return {
+        kind: 'workspace.setup-draft.discard',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        expectedVersion,
     };
 }
 
@@ -833,6 +973,54 @@ export function makeRestoreTermAsCurrentRequest(
     };
 }
 
+/**
+ * Builds the Course-only request used before first setup asks for an activity.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CreateCourseCommand} command - Candidate Course command.
+ * @return {CreateCourseRequest} Canonical Workspace request.
+ */
+export function makeCreateCourseRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CreateCourseCommand,
+): CreateCourseRequest {
+    return {
+        kind: 'workspace.course.create',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCreateCourseCommand(command),
+    };
+}
+
+/**
+ * Builds a Meeting series creation request for an existing Course.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {CreateMeetingSeriesCommand} command - Candidate Meeting series command.
+ * @return {CreateMeetingSeriesRequest} Canonical Workspace request.
+ */
+export function makeCreateMeetingSeriesRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CreateMeetingSeriesCommand,
+): CreateMeetingSeriesRequest {
+    return {
+        kind: 'workspace.meeting-series.create',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCreateMeetingSeriesCommand(command),
+    };
+}
+
 export function makeCreateCourseWithMeetingRequest(
     requestId: string,
     appBuildId: string,
@@ -1020,6 +1208,30 @@ export function isWorkspaceSetupRequest(
             'workspaceEpoch',
         ]);
     }
+    if (value.kind === 'workspace.setup-draft.save') {
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'input',
+        ])
+            && hasExactDataKeys(value.input, ['expectedVersion', 'schemaVersion', 'opaquePayload'])
+            && isCanonicalUnsignedSqliteInteger(value.input.expectedVersion)
+            && value.input.schemaVersion === SETUP_DRAFT_SCHEMA_VERSION
+            && isSetupDraftPayload(value.input.opaquePayload);
+    }
+    if (value.kind === 'workspace.setup-draft.discard') {
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'expectedVersion',
+        ]) && isCanonicalUnsignedSqliteInteger(value.expectedVersion);
+    }
     if (value.kind === 'workspace.meeting-series.query') {
         return hasExactDataKeys(value, [
             'kind',
@@ -1099,6 +1311,8 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.task.change-occurrence'
             && value.kind !== 'workspace.task.delete-occurrence-or-series'
             && value.kind !== 'workspace.task.undo-occurrence-state'
+            && value.kind !== 'workspace.course.create'
+            && value.kind !== 'workspace.meeting-series.create'
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
             && value.kind !== 'workspace.meeting-occurrence.cancel')
@@ -1159,6 +1373,12 @@ export function isWorkspaceSetupRequest(
         else if (value.kind === 'workspace.task.undo-occurrence-state') {
             normalizeUndoTaskOccurrenceStateCommand(value.command);
         }
+        else if (value.kind === 'workspace.course.create') {
+            normalizeCreateCourseCommand(value.command);
+        }
+        else if (value.kind === 'workspace.meeting-series.create') {
+            normalizeCreateMeetingSeriesCommand(value.command);
+        }
         else if (value.kind === 'workspace.course.create-with-first-meeting') {
             normalizeAcceptedCreateCourseWithMeetingCommand(value.command);
         }
@@ -1208,6 +1428,11 @@ function isSetupProjection(value: unknown): boolean {
     if (!hasExactDataKeys(value, [
         'workspaceRevision',
         'planEntityVersion',
+        'minimum',
+        'everReachedMinimum',
+        'defaultRoute',
+        'draftCheckpointVersion',
+        'draftCheckpoint',
         'currentTerm',
         'terms',
         'courses',
@@ -1216,6 +1441,20 @@ function isSetupProjection(value: unknown): boolean {
     ])
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
+        || !hasExactDataKeys(value.minimum, [
+            'hasCurrentTerm',
+            'hasCurrentTermCourse',
+            'hasMeetingOrTask',
+            'isSatisfied',
+        ])
+        || typeof value.minimum.hasCurrentTerm !== 'boolean'
+        || typeof value.minimum.hasCurrentTermCourse !== 'boolean'
+        || typeof value.minimum.hasMeetingOrTask !== 'boolean'
+        || typeof value.minimum.isSatisfied !== 'boolean'
+        || typeof value.everReachedMinimum !== 'boolean'
+        || (value.defaultRoute !== 'setup' && value.defaultRoute !== 'today')
+        || !isCanonicalUnsignedSqliteInteger(value.draftCheckpointVersion)
+        || (value.draftCheckpoint !== null && !isSetupDraftCheckpoint(value.draftCheckpoint))
         || (value.currentTerm !== null && !isTermProjection(value.currentTerm))
         || !Array.isArray(value.terms)
         || !value.terms.every(isTermProjection)
@@ -1228,6 +1467,7 @@ function isSetupProjection(value: unknown): boolean {
         return false;
     }
 
+    const minimum = value.minimum as SetupProjection['minimum'];
     const terms = value.terms as TermProjection[];
     const courses = value.courses as CourseProjection[];
     const holidayRanges = value.holidayRanges as HolidayRangeProjection[];
@@ -1238,6 +1478,21 @@ function isSetupProjection(value: unknown): boolean {
         if (!storedTerm || !sameTermProjection(currentTerm, storedTerm)) {
             return false;
         }
+    }
+    const currentTerm = value.currentTerm as TermProjection | null;
+    const currentTermCourses = currentTerm === null
+        ? []
+        : courses.filter(course => course.termId === currentTerm.termId && !course.archived);
+    const hasMeetingOrTask = currentTermCourses.some(course => course.meetings.length > 0
+        || tasks.some(task => task.courseId === course.courseId));
+    if (minimum.hasCurrentTerm !== (currentTerm !== null)
+        || minimum.hasCurrentTermCourse !== (currentTermCourses.length > 0)
+        || minimum.hasMeetingOrTask !== hasMeetingOrTask
+        || minimum.isSatisfied !== (minimum.hasCurrentTerm
+            && minimum.hasCurrentTermCourse
+            && minimum.hasMeetingOrTask)
+        || value.defaultRoute !== (value.everReachedMinimum ? 'today' : 'setup')) {
+        return false;
     }
     return courses.every(course => {
         const term = terms.find(candidate => candidate.termId === course.termId);
@@ -1303,6 +1558,8 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
         ? isEffect(value.effects[0], 'plan.term-created-current', 'term')
             || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
             || isEffect(value.effects[0], 'plan.term-restored-current', 'term')
+            || isEffect(value.effects[0], 'plan.course-created', 'course')
+            || isEffect(value.effects[0], 'plan.meeting-series-created', 'meeting-series')
             || isEffect(value.effects[0], 'plan.meeting-occurrence-changed', 'meeting-series')
             || isEffect(value.effects[0], 'plan.meeting-occurrence-cancelled', 'meeting-series')
             || isEffect(value.effects[0], 'plan.holiday-range-created', 'holiday-range')

@@ -5,6 +5,7 @@
 import type { BootstrapOutcome } from '../shared/bootstrap-contract';
 import type {
   RestoreTermAsCurrentRequestCommand,
+  SaveSetupDraftCheckpointInput,
   WorkspaceSetupOutcome,
 } from '../shared/workspace-setup-contract';
 import type {
@@ -33,6 +34,8 @@ import type {
   AcceptedCreateCourseWithMeetingCommand,
   CancelMeetingOccurrenceCommand,
   ChangeMeetingOccurrenceCommand,
+  CreateCourseCommand,
+  CreateMeetingSeriesCommand,
   MeetingOccurrenceImpactDraft,
   MeetingOccurrenceWindow,
 } from '../shared/workspace-course-contract';
@@ -43,6 +46,8 @@ declare global {
       query(): Promise<BootstrapOutcome>;
       initialize(): Promise<WorkspaceSetupOutcome>;
       querySetup(): Promise<WorkspaceSetupOutcome>;
+      saveSetupDraftCheckpoint(input: SaveSetupDraftCheckpointInput): Promise<WorkspaceSetupOutcome>;
+      discardSetupDraftCheckpoint(expectedVersion: string): Promise<WorkspaceSetupOutcome>;
       queryPlan(): Promise<WorkspaceSetupOutcome>;
       createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
@@ -61,6 +66,8 @@ declare global {
       ): Promise<WorkspaceSetupOutcome>;
       undoTaskOccurrenceState(command: UndoTaskOccurrenceStateCommand): Promise<WorkspaceSetupOutcome>;
       restoreTermAsCurrent(command: RestoreTermAsCurrentRequestCommand): Promise<WorkspaceSetupOutcome>;
+      createCourse(command: CreateCourseCommand): Promise<WorkspaceSetupOutcome>;
+      createMeetingSeries(command: CreateMeetingSeriesCommand): Promise<WorkspaceSetupOutcome>;
       createCourseWithMeeting(command: AcceptedCreateCourseWithMeetingCommand): Promise<WorkspaceSetupOutcome>;
       queryMeetingSeries(
         meetingSeriesId: string,

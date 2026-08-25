@@ -10,9 +10,12 @@ import {
     isWorkspaceSetupRequest,
     makeChangeTaskOccurrenceRequest,
     makeCreateCourseWithMeetingRequest,
+    makeDiscardSetupDraftCheckpointRequest,
     makePlanQueryRequest,
+    makeSaveSetupDraftCheckpointRequest,
     makeTaskSeriesQueryRequest,
 } from '../../src/shared/workspace-setup-contract';
+import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../../src/shared/workspace-term-contract';
 import {
     buildPlanProjection,
     createPlanEvaluationContext,
@@ -91,6 +94,47 @@ const TASK_WINDOW = {
     startDate: '2026-09-01',
     endDate: '2026-09-30',
 } as const;
+
+test('FLOW-00: setup draft requests keep opaque JSON bounded and versioned', () => {
+    const saved = makeSaveSetupDraftCheckpointRequest(
+        REQUEST_ID,
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+        {
+            expectedVersion: '0',
+            schemaVersion: 1,
+            opaquePayload: JSON.stringify({ schemaVersion: 1, step: 'term', termDraft: { name: 'Fall' } }),
+        },
+    );
+    assert.equal(isWorkspaceSetupRequest(saved, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(
+        isWorkspaceSetupRequest(
+            makeDiscardSetupDraftCheckpointRequest(
+                'discard',
+                APP_BUILD_ID,
+                WORKSPACE_EPOCH,
+                '1',
+            ),
+            APP_BUILD_ID,
+            WORKSPACE_EPOCH,
+        ),
+        true,
+    );
+    assert.throws(() => makeSaveSetupDraftCheckpointRequest(
+        'invalid-json',
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: '{' },
+    ), TypeError);
+    assert.throws(() => makeSaveSetupDraftCheckpointRequest(
+        'too-large',
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+        { expectedVersion: '0', schemaVersion: 1, opaquePayload: JSON.stringify('x'.repeat(
+            MAX_SETUP_DRAFT_PAYLOAD_BYTES,
+        )) },
+    ), TypeError);
+});
 
 const TASK_SERIES_DETAIL = {
     workspaceRevision: '2',
@@ -204,6 +248,16 @@ function outcomeWithCourse(course: unknown): unknown {
             projection: {
                 workspaceRevision: '2',
                 planEntityVersion: '2',
+                minimum: {
+                    hasCurrentTerm: true,
+                    hasCurrentTermCourse: true,
+                    hasMeetingOrTask: true,
+                    isSatisfied: true,
+                },
+                everReachedMinimum: true,
+                defaultRoute: 'today',
+                draftCheckpointVersion: '0',
+                draftCheckpoint: null,
                 currentTerm: TERM,
                 terms: [TERM],
                 courses: [course],
@@ -225,6 +279,10 @@ function accepts(course: unknown): boolean {
 
 test('A-COURSE-007: Workspace projection accepts exact inherited owner boundaries', () => {
     assert.equal(accepts(COURSE), true);
+});
+
+test('FLOW-00: a current Course Task satisfies setup minimum without a MeetingSeries', () => {
+    assert.equal(accepts({ ...COURSE, meetings: [] }), true);
 });
 
 test('A-TERM-004: Workspace projection validates active HolidayRange ownership and bounds', () => {

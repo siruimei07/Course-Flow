@@ -12,7 +12,10 @@ import {
 } from './shared/bootstrap-contract';
 import {
   isWorkspaceSetupOutcome,
+    makeDiscardSetupDraftCheckpointRequest,
+  makeCreateCourseRequest,
   makeCreateCourseWithMeetingRequest,
+  makeCreateMeetingSeriesRequest,
   makeCreateHolidayRangeRequest,
   makeCreateTaskRequest,
   makeSetTaskOccurrenceStatusRequest,
@@ -34,11 +37,13 @@ import {
   makeDeleteTaskRequest,
   makeCompleteTaskRequest,
   makeSetupQueryRequest,
+    makeSaveSetupDraftCheckpointRequest,
   makeUpdateTermEndDateRequest,
   makeUpdateHolidayRangeRequest,
   makeUpdateTaskRequest,
   WORKSPACE_SETUP_CHANNEL,
   type RestoreTermAsCurrentRequestCommand,
+    type SaveSetupDraftCheckpointInput,
   type WorkspaceSetupOutcome,
   type WorkspaceSetupRequest,
 } from './shared/workspace-setup-contract';
@@ -68,6 +73,8 @@ import type {
   AcceptedCreateCourseWithMeetingCommand,
   CancelMeetingOccurrenceCommand,
   ChangeMeetingOccurrenceCommand,
+  CreateCourseCommand,
+  CreateMeetingSeriesCommand,
   MeetingOccurrenceImpactDraft,
   MeetingOccurrenceWindow,
 } from './shared/workspace-course-contract';
@@ -110,27 +117,47 @@ async function invokeSetup(
     return unavailableSetupOutcome(requestId, epoch);
   }
 
+  let request: WorkspaceSetupRequest;
   try {
-    const request = makeRequest(requestId, workspaceEpoch);
-    const outcome = await ipcRenderer.invoke(WORKSPACE_SETUP_CHANNEL, request);
-    return isWorkspaceSetupOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, requestId, workspaceEpoch)
-      ? outcome
-      : unavailableSetupOutcome(requestId, workspaceEpoch);
+    request = makeRequest(requestId, workspaceEpoch);
   } catch {
     return unavailableSetupOutcome(requestId, workspaceEpoch);
   }
+
+  const failureDataEffect = request.kind === 'workspace.setup.query'
+    || request.kind === 'workspace.plan.query'
+    || request.kind === 'workspace.task-series.query'
+    || request.kind === 'workspace.task-occurrence.preview'
+    || request.kind === 'workspace.meeting-series.query'
+    || request.kind === 'workspace.meeting-occurrence.preview'
+    ? 'unchanged'
+    : 'unknown';
+  try {
+    const outcome = await ipcRenderer.invoke(WORKSPACE_SETUP_CHANNEL, request);
+    return isWorkspaceSetupOutcome(outcome, __COURSEFLOW_APP_BUILD_ID__, requestId, workspaceEpoch)
+      ? outcome
+      : unavailableSetupOutcome(requestId, workspaceEpoch, failureDataEffect);
+  } catch {
+    return unavailableSetupOutcome(requestId, workspaceEpoch, failureDataEffect);
+  }
 }
 
-function unavailableSetupOutcome(requestId: string, epoch: string): WorkspaceSetupOutcome {
+function unavailableSetupOutcome(
+  requestId: string,
+  epoch: string,
+  dataEffect: 'unchanged' | 'unknown' = 'unchanged',
+): WorkspaceSetupOutcome {
   return {
     ok: false,
     problem: {
-      code: 'workspace-unavailable',
-      message: 'Workspace is unavailable. Please try again.',
+      code: dataEffect === 'unknown' ? 'recovery-required' : 'workspace-unavailable',
+      message: dataEffect === 'unknown'
+        ? 'Workspace request result is unknown. Please retry to reconcile.'
+        : 'Workspace is unavailable. Please try again.',
       requestId,
       appBuildId: __COURSEFLOW_APP_BUILD_ID__,
       workspaceEpoch: epoch,
-      dataEffect: 'unchanged',
+      dataEffect,
     },
   };
 }
@@ -145,6 +172,40 @@ function querySetup(): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeSetupQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
   ));
+}
+
+/**
+ * Persists a versioned first-setup draft through the bounded Workspace channel.
+ * @param {SaveSetupDraftCheckpointInput} input - Opaque JSON and observed draft version.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function saveSetupDraftCheckpoint(
+    input: SaveSetupDraftCheckpointInput,
+): Promise<WorkspaceSetupOutcome> {
+    return invokeSetup((requestId, epoch) => (
+        makeSaveSetupDraftCheckpointRequest(
+            requestId,
+            __COURSEFLOW_APP_BUILD_ID__,
+            epoch,
+            input,
+        )
+    ));
+}
+
+/**
+ * Clears a first-setup draft at its observed version.
+ * @param {string} expectedVersion - Last observed draft version.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function discardSetupDraftCheckpoint(expectedVersion: string): Promise<WorkspaceSetupOutcome> {
+    return invokeSetup((requestId, epoch) => (
+        makeDiscardSetupDraftCheckpointRequest(
+            requestId,
+            __COURSEFLOW_APP_BUILD_ID__,
+            epoch,
+            expectedVersion,
+        )
+    ));
 }
 
 /**
@@ -327,6 +388,28 @@ function createCourseWithMeeting(
 }
 
 /**
+ * Creates a Course without forcing an activity choice in the same transaction.
+ * @param {CreateCourseCommand} command - Course-only creation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function createCourse(command: CreateCourseCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateCourseRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Creates one Meeting series for an existing Course.
+ * @param {CreateMeetingSeriesCommand} command - Meeting series creation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
+ */
+function createMeetingSeries(command: CreateMeetingSeriesCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCreateMeetingSeriesRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
  * Queries one Meeting series through the bounded Workspace channel.
  * @param {string} meetingSeriesId - Stable Meeting series identity.
  * @param {MeetingOccurrenceWindow} requestedWindow - Physical-date expansion window.
@@ -426,6 +509,8 @@ contextBridge.exposeInMainWorld(
     query: queryWorkspaceStatus,
     initialize: initializeWorkspace,
     querySetup,
+    saveSetupDraftCheckpoint,
+    discardSetupDraftCheckpoint,
     queryPlan,
     createTerm,
     updateTermEndDate,
@@ -442,6 +527,8 @@ contextBridge.exposeInMainWorld(
     deleteTaskOccurrenceOrSeries,
     undoTaskOccurrenceState,
     restoreTermAsCurrent,
+    createCourse,
+    createMeetingSeries,
     createCourseWithMeeting,
     queryMeetingSeries,
     queryTaskSeries,

@@ -130,6 +130,16 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
       projection: {
         workspaceRevision: '0',
         planEntityVersion: '0',
+        minimum: {
+          hasCurrentTerm: false,
+          hasCurrentTermCourse: false,
+          hasMeetingOrTask: false,
+          isSatisfied: false,
+        },
+        everReachedMinimum: false,
+        defaultRoute: 'setup',
+        draftCheckpointVersion: '0',
+        draftCheckpoint: null,
         currentTerm: null,
         terms: [],
         courses: [],
@@ -151,6 +161,16 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
       projection: {
         workspaceRevision: '0',
         planEntityVersion: '0',
+        minimum: {
+          hasCurrentTerm: false,
+          hasCurrentTermCourse: false,
+          hasMeetingOrTask: false,
+          isSatisfied: false,
+        },
+        everReachedMinimum: false,
+        defaultRoute: 'setup',
+        draftCheckpointVersion: '0',
+        draftCheckpoint: null,
         currentTerm: null,
         terms: [],
         courses: [],
