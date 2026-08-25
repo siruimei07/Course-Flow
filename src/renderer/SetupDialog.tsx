@@ -1465,35 +1465,43 @@ function SetupProgress(props: Readonly<{
             >
                 <span />
             </div>
-            <div className="setup-current-layer">
-                <p>当前重点</p>
-                <strong>{currentLabel}</strong>
-                <span>{completedCount} / 3 个最低条件已完成</span>
+            <div className="setup-progress-stack">
+                <div
+                    className="setup-progress-pad"
+                    aria-hidden="true"
+                />
+                <div className="setup-current-layer">
+                    <div className="setup-current-heading">
+                        <p>当前任务</p>
+                        <strong>{completedCount}/3</strong>
+                    </div>
+                    <span className="setup-current-label">{currentLabel}</span>
+                    <ol className="setup-step-list">
+                        <ProgressStep
+                            complete={minimum.hasCurrentTerm}
+                            current={activeStep === 'term'}
+                            label="当前学期"
+                        />
+                        <ProgressStep
+                            complete={minimum.hasCurrentTermCourse}
+                            current={activeStep === 'course'}
+                            label="添加课程"
+                        />
+                        <ProgressStep
+                            complete={minimum.hasMeetingOrTask}
+                            current={activeStep === 'activity'}
+                            label="课节或任务"
+                        />
+                        <li data-status={activeStep === 'holiday' ? '当前' : 'optional'}>
+                            <span aria-hidden="true">4</span>
+                            <span>
+                                <strong>假期（可稍后）</strong>
+                                <small>{activeStep === 'holiday' ? '当前' : '不阻止进入 Today'}</small>
+                            </span>
+                        </li>
+                    </ol>
+                </div>
             </div>
-            <ol className="setup-step-list">
-                <ProgressStep
-                    complete={minimum.hasCurrentTerm}
-                    current={activeStep === 'term'}
-                    label="当前学期"
-                />
-                <ProgressStep
-                    complete={minimum.hasCurrentTermCourse}
-                    current={activeStep === 'course'}
-                    label="添加课程"
-                />
-                <ProgressStep
-                    complete={minimum.hasMeetingOrTask}
-                    current={activeStep === 'activity'}
-                    label="课节或任务"
-                />
-                <li data-status={activeStep === 'holiday' ? '当前' : 'optional'}>
-                    <span aria-hidden="true">4</span>
-                    <span>
-                        <strong>假期（可稍后）</strong>
-                        <small>{activeStep === 'holiday' ? '当前' : '不阻止进入 Today'}</small>
-                    </span>
-                </li>
-            </ol>
         </aside>
     );
 }

@@ -18,6 +18,11 @@ const setupDialog = readFileSync(path.join(repositoryRoot, 'src/renderer/SetupDi
 const pages = readFileSync(path.join(repositoryRoot, 'src/renderer/workspace-pages.tsx'), 'utf8');
 const renderer = [main, app, setupDialog, pages].join('\n');
 const styles = readFileSync(path.join(repositoryRoot, 'src/renderer/styles.css'), 'utf8');
+const compactStyles = styles.slice(
+    styles.indexOf('@media (max-width: 620px)'),
+    styles.indexOf('@media (prefers-reduced-motion: reduce)'),
+);
+const forcedColorStyles = styles.slice(styles.indexOf('@media (forced-colors: active)'));
 const termSetup = setupDialog.slice(
     setupDialog.indexOf('function TermForm'),
     setupDialog.indexOf('function CourseForm'),
@@ -87,6 +92,29 @@ test('UI-SETUP-01 keeps the confirmed light surface and keyboard/reduced-motion 
     assert.match(styles, /\.setup-modal/);
     assert.match(styles, /\.setup-progress-card/);
     assert.match(styles, /\.setup-form/);
+});
+
+test('compact setup footer releases the desktop checkpoint flex basis', () => {
+    assert.match(
+        compactStyles,
+        /\.checkpoint-message\s*\{[^}]*flex:\s*0 0 auto;/,
+    );
+});
+
+test('forced colors lets the elevated setup card use system surface colors', () => {
+    const systemSurfaceRule = forcedColorStyles.slice(
+        0,
+        forcedColorStyles.indexOf('}'),
+    );
+    const highlightedControlRule = forcedColorStyles.slice(
+        forcedColorStyles.indexOf('.navigation-button'),
+        forcedColorStyles.indexOf(':focus-visible'),
+    );
+
+    assert.match(systemSurfaceRule, /\.setup-current-layer/);
+    assert.match(systemSurfaceRule, /color:\s*CanvasText;/);
+    assert.match(systemSurfaceRule, /background:\s*Canvas;/);
+    assert.doesNotMatch(highlightedControlRule, /\.setup-current-layer/);
 });
 
 test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', () => {

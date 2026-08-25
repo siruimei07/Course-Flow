@@ -323,6 +323,36 @@ test('setup is a modal checklist with an inner dark current-step layer and early
     assert.doesNotMatch(html, /保护数据|备份|Grade|Attendance|即将推出/);
 });
 
+test('setup progress nests its real checklist inside the elevated task card over a light pad', () => {
+    const html = renderToStaticMarkup(createElement(SetupDialog, {
+        open: true,
+        state,
+        onClose(): void {},
+        onProjection(): void {},
+    }));
+    const elevatedChecklistPattern = new RegExp([
+        'class="setup-current-layer"[^>]*>',
+        '当前任务',
+        '0/3',
+        '当前学期',
+        'class="setup-step-list"',
+        '</ol></div></div></aside>',
+    ].join('[\\s\\S]*'));
+
+    assert.match(
+        html,
+        /class="setup-progress-card"[^>]*>[\s\S]*设置进度[\s\S]*0%[\s\S]*class="progress-track"/,
+    );
+    assert.match(
+        html,
+        /class="setup-progress-stack"[^>]*>[\s\S]*class="setup-progress-pad"[^>]*aria-hidden="true"/,
+    );
+    assert.match(
+        html,
+        elevatedChecklistPattern,
+    );
+});
+
 test('setup checklist navigation reaches only completed facts and the current step', () => {
     const candidate = setupDialogHelper('setupChecklistNavigationFrom');
     assert.equal(typeof candidate, 'function');
