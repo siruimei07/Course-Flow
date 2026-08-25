@@ -261,7 +261,7 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
                     workspaceData: {
                         kind: 'ready',
                         workspaceId: '22222222-2222-4222-8222-222222222222',
-                        schemaLevel: 11,
+                        schemaLevel: 12,
                         revision: '0',
                     },
                 },

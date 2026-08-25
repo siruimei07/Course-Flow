@@ -342,3 +342,18 @@ test('Workspace entry keeps the trusted process boundary and shared channel cons
   assert.doesNotMatch(renderer, /courseflow:workspace-query/);
   assert.doesNotMatch(renderer, /courseflow:workspace-setup/);
 });
+
+test('backup directory selection stays in Main and only the adapted request reaches Workspace', () => {
+  const main = readFileSync(path.join(repositoryRoot, 'src/main.ts'), 'utf8');
+  const preload = readFileSync(path.join(repositoryRoot, 'src/preload.ts'), 'utf8');
+  const rendererRoot = path.join(repositoryRoot, 'src/renderer');
+  const rendererSources = ['global.d.ts', 'main.tsx', 'App.tsx']
+    .map(file => readFileSync(path.join(rendererRoot, file), 'utf8'))
+    .join('\n');
+
+  assert.match(main, /dialog\.showOpenDialog/);
+  assert.match(main, /makeSelectedBackupDestinationRequest/);
+  assert.match(main, /code:\s*'user-cancelled'/);
+  assert.doesNotMatch(preload, /selectedDirectoryPath/);
+  assert.doesNotMatch(rendererSources, /selectedDirectoryPath|canonicalDestinationPath/);
+});

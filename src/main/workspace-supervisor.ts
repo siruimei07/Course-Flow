@@ -1,3 +1,7 @@
+/**
+ * @file Supervises the single Workspace utility process and its bounded requests.
+ */
+
 import {
   isBootstrapOutcome,
   makeBootstrapProblem,
@@ -8,7 +12,7 @@ import {
 import {
   isWorkspaceSetupOutcome,
   type WorkspaceSetupOutcome,
-  type WorkspaceSetupRequest,
+  type WorkspaceProcessRequest,
 } from '../shared/workspace-setup-contract';
 
 const responseTimeoutMilliseconds = 5_000;
@@ -57,7 +61,10 @@ export class WorkspaceSupervisor {
     }
 
     return new Promise((resolve) => {
-      const timeout = setTimeout(() => this.settle(request.requestId, this.unavailableOutcome(request.requestId)), responseTimeoutMilliseconds);
+      const timeout = setTimeout(
+        () => this.settle(request.requestId, this.unavailableOutcome(request.requestId)),
+        responseTimeoutMilliseconds,
+      );
       this.pending.set(request.requestId, {
         kind: 'bootstrap',
         resolve: (outcome) => resolve(outcome as BootstrapOutcome),
@@ -72,7 +79,7 @@ export class WorkspaceSupervisor {
     });
   }
 
-  request(request: WorkspaceSetupRequest): Promise<WorkspaceSetupOutcome> {
+  request(request: WorkspaceProcessRequest): Promise<WorkspaceSetupOutcome> {
     if (this.unavailable) {
       return Promise.resolve(this.unavailableSetupOutcome(request.requestId, request.workspaceEpoch));
     }

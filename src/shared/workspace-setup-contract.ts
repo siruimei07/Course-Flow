@@ -36,6 +36,12 @@ import {
     isCanonicalUuid,
 } from './workspace-data-contract';
 import {
+    isDataProtectionProjection,
+    normalizeConfigureBackupDestinationCommand,
+    type ConfigureBackupDestinationCommand,
+    type DataProtectionProjection,
+} from './workspace-protection-contract';
+import {
     isHolidayRangeProjection,
     normalizeCreateHolidayRangeCommand,
     normalizeDeleteHolidayRangeCommand,
@@ -129,6 +135,21 @@ export type DiscardSetupDraftCheckpointRequest = WorkspaceRequestBase & Readonly
 
 export type PlanQueryRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.plan.query';
+}>;
+
+export type DataProtectionQueryRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.protection.query';
+}>;
+
+export type ConfigureBackupDestinationRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.protection.configure';
+    command: ConfigureBackupDestinationCommand;
+}>;
+
+export type SelectedBackupDestinationRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.protection.configure-selected';
+    command: ConfigureBackupDestinationCommand;
+    selectedDirectoryPath: string;
 }>;
 
 export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
@@ -272,6 +293,8 @@ export type WorkspaceSetupRequest =
     | SaveSetupDraftCheckpointRequest
     | DiscardSetupDraftCheckpointRequest
     | PlanQueryRequest
+    | DataProtectionQueryRequest
+    | ConfigureBackupDestinationRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
     | CreateHolidayRangeRequest
@@ -297,6 +320,10 @@ export type WorkspaceSetupRequest =
     | ChangeMeetingOccurrenceRequest
     | CancelMeetingOccurrenceRequest;
 
+export type WorkspaceProcessRequest =
+    | Exclude<WorkspaceSetupRequest, ConfigureBackupDestinationRequest>
+    | SelectedBackupDestinationRequest;
+
 type WorkspaceCommandEffect = Readonly<{
     code:
         | 'plan.term-created-current'
@@ -317,9 +344,16 @@ type WorkspaceCommandEffect = Readonly<{
         | 'plan.task-progress-set'
         | 'plan.task-occurrence-changed'
         | 'plan.task-occurrence-deleted'
-        | 'plan.task-occurrence-state-undone';
+        | 'plan.task-occurrence-state-undone'
+        | 'protect.backup-destination-configured';
     entity: Readonly<{
-        kind: 'term' | 'course' | 'meeting-series' | 'holiday-range' | 'task-series';
+        kind:
+            | 'term'
+            | 'course'
+            | 'meeting-series'
+            | 'holiday-range'
+            | 'task-series'
+            | 'backup-configuration';
         id: string;
         version: string;
     }>;
@@ -343,6 +377,8 @@ export type WorkspaceSetupProblemCode =
     | 'conflict'
     | 'decision-required'
     | 'operation-in-progress'
+    | 'identity-conflict'
+    | 'user-cancelled'
     | 'recovery-required';
 
 export type WorkspaceSetupProblem = Readonly<{
@@ -356,6 +392,10 @@ export type WorkspaceSetupProblem = Readonly<{
         | Readonly<{
             reason: 'meeting-time-overlap';
             warnings: readonly MeetingOverlapWarning[];
+        }>
+        | Readonly<{
+            reason: 'backup-location-overlap';
+            location: 'active-data' | 'library-root';
         }>
         | Readonly<{ reason: 'writer-busy' }>;
 }>;
@@ -394,6 +434,18 @@ export type WorkspaceSetupOutcome =
             workspaceEpoch: string;
             dataMode: 'ready' | 'read-only';
             projection: PlanProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.data-protection-projection';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            dataMode: 'ready' | 'read-only';
+            projection: DataProtectionProjection;
         }>;
     }>
     | Readonly<{
@@ -674,6 +726,78 @@ export function makePlanQueryRequest(
         appBuildId,
         requestId,
         workspaceEpoch,
+    };
+}
+
+/**
+ * Builds the exact path-free data-protection query.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @return {DataProtectionQueryRequest} Exact Workspace request.
+ */
+export function makeDataProtectionQueryRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+): DataProtectionQueryRequest {
+    return {
+        kind: 'workspace.protection.query',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+    };
+}
+
+/**
+ * Builds the Shell intent that asks Main to choose a backup directory.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {ConfigureBackupDestinationCommand} command - Versioned PROTECT command.
+ * @return {ConfigureBackupDestinationRequest} Path-free Shell request.
+ */
+export function makeConfigureBackupDestinationRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ConfigureBackupDestinationCommand,
+): ConfigureBackupDestinationRequest {
+    return {
+        kind: 'workspace.protection.configure',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeConfigureBackupDestinationCommand(command),
+    };
+}
+
+/**
+ * Adds Main's native-picker result for the trusted Workspace process only.
+ * @param {ConfigureBackupDestinationRequest} request - Validated path-free Shell request.
+ * @param {string} selectedDirectoryPath - Native selected directory path.
+ * @return {SelectedBackupDestinationRequest} Workspace-internal request.
+ */
+export function makeSelectedBackupDestinationRequest(
+    request: ConfigureBackupDestinationRequest,
+    selectedDirectoryPath: string,
+): SelectedBackupDestinationRequest {
+    if (typeof selectedDirectoryPath !== 'string'
+        || selectedDirectoryPath.length === 0
+        || selectedDirectoryPath.length > 32_767
+        || selectedDirectoryPath.includes('\0')) {
+        throw new TypeError('Selected backup directory path is invalid');
+    }
+    return {
+        kind: 'workspace.protection.configure-selected',
+        protocolVersion: request.protocolVersion,
+        appBuildId: request.appBuildId,
+        requestId: request.requestId,
+        workspaceEpoch: request.workspaceEpoch,
+        command: normalizeConfigureBackupDestinationCommand(request.command),
+        selectedDirectoryPath,
     };
 }
 
@@ -1199,7 +1323,8 @@ export function isWorkspaceSetupRequest(
 
     if (value.kind === 'workspace.initialize'
         || value.kind === 'workspace.setup.query'
-        || value.kind === 'workspace.plan.query') {
+        || value.kind === 'workspace.plan.query'
+        || value.kind === 'workspace.protection.query') {
         return hasExactDataKeys(value, [
             'kind',
             'protocolVersion',
@@ -1315,7 +1440,8 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.meeting-series.create'
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
-            && value.kind !== 'workspace.meeting-occurrence.cancel')
+            && value.kind !== 'workspace.meeting-occurrence.cancel'
+            && value.kind !== 'workspace.protection.configure')
         || !hasExactDataKeys(value, [
             'kind',
             'protocolVersion',
@@ -1328,7 +1454,10 @@ export function isWorkspaceSetupRequest(
     }
 
     try {
-        if (value.kind === 'workspace.term.create') {
+        if (value.kind === 'workspace.protection.configure') {
+            normalizeConfigureBackupDestinationCommand(value.command);
+        }
+        else if (value.kind === 'workspace.term.create') {
             normalizeCreateTermCommand(value.command);
         }
         else if (value.kind === 'workspace.term.update-end-date') {
@@ -1388,6 +1517,50 @@ export function isWorkspaceSetupRequest(
         else {
             normalizeCancelMeetingOccurrenceCommand(value.command);
         }
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
+/**
+ * Validates requests accepted by the Workspace utility process after Main adaptation.
+ * @param {unknown} value - Candidate process request.
+ * @param {string} expectedBuildId - Active application build identity.
+ * @param {string} expectedWorkspaceEpoch - Active Workspace process epoch.
+ * @return {boolean} Whether the request is safe for Workspace dispatch.
+ */
+export function isWorkspaceProcessRequest(
+    value: unknown,
+    expectedBuildId: string,
+    expectedWorkspaceEpoch: string,
+): value is WorkspaceProcessRequest {
+    if (isWorkspaceSetupRequest(value, expectedBuildId, expectedWorkspaceEpoch)) {
+        return value.kind !== 'workspace.protection.configure';
+    }
+    if (!isPlainObject(value)
+        || value.kind !== 'workspace.protection.configure-selected'
+        || value.appBuildId !== expectedBuildId
+        || value.workspaceEpoch !== expectedWorkspaceEpoch
+        || !isRequestBase(value)
+        || !hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'command',
+            'selectedDirectoryPath',
+        ])
+        || typeof value.selectedDirectoryPath !== 'string'
+        || value.selectedDirectoryPath.length === 0
+        || value.selectedDirectoryPath.length > 32_767
+        || value.selectedDirectoryPath.includes('\0')) {
+        return false;
+    }
+    try {
+        normalizeConfigureBackupDestinationCommand(value.command);
         return true;
     }
     catch {
@@ -1574,6 +1747,11 @@ function isWorkspaceCommandResult(value: unknown): value is WorkspaceCommandResu
             || isEffect(value.effects[0], 'plan.task-occurrence-changed', 'task-series')
             || isEffect(value.effects[0], 'plan.task-occurrence-deleted', 'task-series')
             || isEffect(value.effects[0], 'plan.task-occurrence-state-undone', 'task-series')
+            || isEffect(
+                value.effects[0],
+                'protect.backup-destination-configured',
+                'backup-configuration',
+            )
         : isEffect(value.effects[0], 'plan.course-created', 'course')
             && isEffect(value.effects[1], 'plan.meeting-series-created', 'meeting-series');
     if (!effectsAreValid || undoCapability === null) {
@@ -1628,10 +1806,17 @@ export function isWorkspaceSetupOutcome(
             && problem.code === 'operation-in-progress'
             && hasExactDataKeys(problem.details, ['reason'])
             && problem.details.reason === 'writer-busy';
+        const backupOverlapDetailsAreValid = hasProblemDetails
+            && problem.code === 'validation'
+            && hasExactDataKeys(problem.details, ['reason', 'location'])
+            && problem.details.reason === 'backup-location-overlap'
+            && (problem.details.location === 'active-data'
+                || problem.details.location === 'library-root');
         return hasExactDataKeys(value, ['ok', 'problem'])
             && ((hasExactDataKeys(problem, problemKeys) && problem.code !== 'operation-in-progress')
                 || overlapDetailsAreValid
-                || writerBusyDetailsAreValid)
+                || writerBusyDetailsAreValid
+                || backupOverlapDetailsAreValid)
             && [
                 'invalid-request',
                 'build-mismatch',
@@ -1642,6 +1827,8 @@ export function isWorkspaceSetupOutcome(
                 'conflict',
                 'decision-required',
                 'operation-in-progress',
+                'identity-conflict',
+                'user-cancelled',
                 'recovery-required',
             ].includes(problem.code as string)
             && typeof problem.message === 'string'
@@ -1690,6 +1877,19 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isPlanProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.data-protection-projection') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'dataMode',
+            'projection',
+        ])
+            && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
+            && isDataProtectionProjection(outcome.projection);
     }
     if (outcome.kind === 'workspace.meeting-series-projection') {
         return hasExactDataKeys(outcome, [

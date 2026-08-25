@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 11;
+export const CURRENT_SCHEMA_LEVEL = 12;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -38,6 +38,7 @@ const meetingSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'meeting_segment
 const holidayRangeIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'holiday_range_id');
 const taskSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_series_id');
 const taskSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_segment_id');
+const backupSetIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'backup_set_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -1261,6 +1262,73 @@ const LEVEL_11_RECEIPT_DDL = LEVEL_10_RECEIPT_DDL.replace(
 const LEVEL_11_DDL = LEVEL_10_DDL.replace(LEVEL_10_RECEIPT_DDL, LEVEL_11_RECEIPT_DDL)
     + LEVEL_11_SETUP_DRAFT_DDL;
 
+const LEVEL_12_RECEIPT_DDL = LEVEL_11_RECEIPT_DDL
+    .replace(
+        "                'plan.create-meeting-series'",
+        `                'plan.create-meeting-series',
+                'protect.configure-backup-destination'`,
+    )
+    .replace(
+        "            OR (effect_code = 'plan.task-occurrence-state-undone' AND entity_kind = 'task-series')",
+        `            OR (effect_code = 'plan.task-occurrence-state-undone' AND entity_kind = 'task-series')
+            OR (effect_code = 'protect.backup-destination-configured'
+                AND entity_kind = 'backup-configuration')`,
+    );
+
+const LEVEL_12_PROTECTION_DDL = `
+    CREATE TABLE backup_configuration (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        configuration_version INTEGER NOT NULL CHECK (configuration_version >= 0),
+        backup_set_id TEXT CHECK (backup_set_id IS NULL OR (${backupSetIdCheck})),
+        repository_schema TEXT CHECK (
+            repository_schema IS NULL OR repository_schema = 'courseflow-backup-repository-v1'
+        ),
+        canonical_destination_path TEXT CHECK (
+            canonical_destination_path IS NULL
+            OR (
+                length(canonical_destination_path) BETWEEN 1 AND 32767
+                AND instr(canonical_destination_path, char(0)) = 0
+            )
+        ),
+        destination_display_name TEXT CHECK (
+            destination_display_name IS NULL
+            OR (
+                length(destination_display_name) BETWEEN 1 AND 255
+                AND destination_display_name = trim(destination_display_name)
+            )
+        ),
+        originating_command_id TEXT CHECK (
+            originating_command_id IS NULL OR (${originatingCommandIdCheck})
+        ),
+        configured_revision INTEGER CHECK (configured_revision IS NULL OR configured_revision > 0),
+        CHECK (
+            (
+                backup_set_id IS NULL
+                AND repository_schema IS NULL
+                AND canonical_destination_path IS NULL
+                AND destination_display_name IS NULL
+                AND originating_command_id IS NULL
+                AND configured_revision IS NULL
+            )
+            OR (
+                configuration_version > 0
+                AND backup_set_id IS NOT NULL
+                AND repository_schema IS NOT NULL
+                AND canonical_destination_path IS NOT NULL
+                AND destination_display_name IS NOT NULL
+                AND originating_command_id IS NOT NULL
+                AND configured_revision IS NOT NULL
+            )
+        ),
+        FOREIGN KEY (singleton) REFERENCES workspace_state(singleton) ON DELETE RESTRICT,
+        FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id)
+            ON DELETE RESTRICT DEFERRABLE INITIALLY DEFERRED
+    ) STRICT;
+`;
+
+const LEVEL_12_DDL = LEVEL_11_DDL.replace(LEVEL_11_RECEIPT_DDL, LEVEL_12_RECEIPT_DDL)
+    + LEVEL_12_PROTECTION_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -1279,6 +1347,16 @@ const TABLE_COLUMNS = {
         ['schema_version', 'INTEGER', 0, 0],
         ['updated_at', 'TEXT', 0, 0],
         ['opaque_payload', 'TEXT', 0, 0],
+    ],
+    backup_configuration: [
+        ['singleton', 'INTEGER', 0, 1],
+        ['configuration_version', 'INTEGER', 1, 0],
+        ['backup_set_id', 'TEXT', 0, 0],
+        ['repository_schema', 'TEXT', 0, 0],
+        ['canonical_destination_path', 'TEXT', 0, 0],
+        ['destination_display_name', 'TEXT', 0, 0],
+        ['originating_command_id', 'TEXT', 0, 0],
+        ['configured_revision', 'INTEGER', 0, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1543,6 +1621,10 @@ const FOREIGN_KEYS = {
     workspace_state: [],
     setup_state: [['singleton', 'workspace_state', 'singleton']],
     setup_draft_checkpoint: [['singleton', 'workspace_state', 'singleton']],
+    backup_configuration: [
+        ['originating_command_id', 'command_receipts', 'command_id'],
+        ['singleton', 'workspace_state', 'singleton'],
+    ],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -1619,6 +1701,11 @@ const LEVEL_11_TABLES = [
     'setup_draft_checkpoint',
 ] as const;
 
+const LEVEL_12_TABLES = [
+    ...LEVEL_11_TABLES,
+    'backup_configuration',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1639,7 +1726,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1663,7 +1750,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 9) {
         return LEVEL_9_TABLES;
     }
-    return level === 10 ? LEVEL_10_TABLES : LEVEL_11_TABLES;
+    if (level === 10) {
+        return LEVEL_10_TABLES;
+    }
+    return level === 11 ? LEVEL_11_TABLES : LEVEL_12_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1704,7 +1794,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                         ? LEVEL_9_DDL
                                         : level === 10
                                             ? LEVEL_10_DDL
-                                            : LEVEL_11_DDL;
+                                            : level === 11
+                                                ? LEVEL_11_DDL
+                                                : LEVEL_12_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -2302,6 +2394,58 @@ function validateLevel10TaskFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Validates the configured BackupSet against its durable command receipt.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 12.
+ * @return {void}
+ */
+function validateLevel12ProtectionFacts(database: DatabaseSync): void {
+    const configurationCount = database.prepare(
+        'SELECT count(*) AS count FROM backup_configuration',
+    );
+    configurationCount.setReadBigInts(true);
+    if ((configurationCount.get() as { count: bigint }).count !== 1n) {
+        rejectSchema('database-corrupt');
+    }
+    const invalidConfiguration = database.prepare(`
+        SELECT count(*) AS count
+        FROM backup_configuration AS configuration
+        LEFT JOIN command_receipts AS receipt
+            ON receipt.command_id = configuration.originating_command_id
+        LEFT JOIN receipt_effects AS effect
+            ON effect.command_id = configuration.originating_command_id
+            AND effect.effect_order = 0
+        WHERE configuration.singleton = 1
+            AND configuration.backup_set_id IS NOT NULL
+            AND (
+                receipt.command_id IS NULL
+                OR receipt.intent_kind <> 'protect.configure-backup-destination'
+                OR receipt.intent_schema_version <> 1
+                OR receipt.result_kind <> 'committed'
+                OR receipt.committed_revision <> configuration.configured_revision
+                OR effect.effect_code <> 'protect.backup-destination-configured'
+                OR effect.entity_kind <> 'backup-configuration'
+                OR effect.entity_id <> configuration.backup_set_id
+                OR effect.entity_version <> configuration.configuration_version
+                OR (
+                    SELECT count(*)
+                    FROM receipt_effects AS command_effect
+                    WHERE command_effect.command_id = configuration.originating_command_id
+                ) <> 1
+                OR (
+                    SELECT count(*)
+                    FROM durable_followups AS follow_up
+                    WHERE follow_up.originating_command_id = configuration.originating_command_id
+                        AND follow_up.prerequisite_revision = receipt.committed_revision
+                ) <> 1
+            )
+    `);
+    invalidConfiguration.setReadBigInts(true);
+    if ((invalidConfiguration.get() as { count: bigint }).count !== 0n) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -2335,6 +2479,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 10) {
         validateLevel10TaskFacts(database);
+    }
+    if (level >= 12) {
+        validateLevel12ProtectionFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -3274,6 +3421,69 @@ export function migrateLevel10To11(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds the legal unconfigured PROTECT state and receipt vocabulary.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel11To12(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE task_state_history RENAME TO task_state_history_level_11;
+        DROP INDEX task_state_history_by_command;
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_11;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_11;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_11;
+        DROP INDEX durable_followups_by_command;
+
+        ${LEVEL_12_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state = 'pending'),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        ${LEVEL_10_TASK_STATE_HISTORY_DDL}
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_11;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_11;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_11;
+        INSERT INTO task_state_history SELECT * FROM task_state_history_level_11;
+
+        DROP TABLE task_state_history_level_11;
+        DROP TABLE receipt_effects_level_11;
+        DROP TABLE durable_followups_level_11;
+        DROP TABLE command_receipts_level_11;
+
+        ${LEVEL_12_PROTECTION_DDL}
+        INSERT INTO backup_configuration (
+            singleton,
+            configuration_version,
+            backup_set_id,
+            repository_schema,
+            canonical_destination_path,
+            destination_display_name,
+            originating_command_id,
+            configured_revision
+        ) VALUES (1, 0, NULL, NULL, NULL, NULL, NULL, NULL);
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 12;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -3347,6 +3557,15 @@ export function createSchemaLevel10(database: DatabaseSync): void {
  */
 export function createSchemaLevel11(database: DatabaseSync): void {
     database.exec(LEVEL_11_DDL);
+}
+
+/**
+ * Creates the current level 12 schema with PROTECT configuration storage.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel12(database: DatabaseSync): void {
+    database.exec(LEVEL_12_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -3426,4 +3645,13 @@ export function validateSchemaLevel10(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel11(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 11);
+}
+
+/**
+ * Validates level 12 PROTECT configuration and existing formal facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel12(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 12);
 }

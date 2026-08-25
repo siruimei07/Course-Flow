@@ -2,7 +2,7 @@
  * @file Starts the secure Electron shell and supervises its Workspace process.
  */
 
-import { app, BrowserWindow, ipcMain, Menu, utilityProcess } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, utilityProcess } from 'electron';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -13,6 +13,7 @@ import {
 } from './shared/bootstrap-contract';
 import {
   isWorkspaceSetupRequest,
+  makeSelectedBackupDestinationRequest,
   WORKSPACE_SETUP_CHANNEL,
   type WorkspaceSetupOutcome,
 } from './shared/workspace-setup-contract';
@@ -93,7 +94,9 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
           || kind === 'workspace.task-occurrence.preview'
           || kind === 'workspace.meeting-occurrence.preview'
           || kind === 'workspace.meeting-occurrence.change'
-          || kind === 'workspace.meeting-occurrence.cancel')
+          || kind === 'workspace.meeting-occurrence.cancel'
+          || kind === 'workspace.protection.query'
+          || kind === 'workspace.protection.configure')
           ? 'validation'
           : 'invalid-request',
       message: 'Workspace request is unavailable.',
@@ -267,6 +270,30 @@ async function startApplication(roots: DevelopmentRoots): Promise<void> {
     }
 
     try {
+      if (value.kind === 'workspace.protection.configure') {
+        const selection = await dialog.showOpenDialog(mainWindow!, {
+          title: '选择 CourseFlow 备份目录',
+          buttonLabel: '选择目录',
+          properties: ['openDirectory', 'createDirectory'],
+        });
+        if (selection.canceled || selection.filePaths.length !== 1) {
+          return {
+            ok: false,
+            problem: {
+              code: 'user-cancelled',
+              message: '已取消选择备份目录。',
+              requestId: value.requestId,
+              appBuildId: __COURSEFLOW_APP_BUILD_ID__,
+              workspaceEpoch: value.workspaceEpoch,
+              dataEffect: 'unchanged',
+            },
+          } satisfies WorkspaceSetupOutcome;
+        }
+        return await workspaceSupervisor!.request(makeSelectedBackupDestinationRequest(
+          value,
+          selection.filePaths[0]!,
+        ));
+      }
       return await workspaceSupervisor!.request(value);
     } catch {
       return {

@@ -20,6 +20,7 @@ import {
     type WorkspaceSetupRequest,
 } from '../src/shared/workspace-setup-contract';
 import type { CreateTermCommand } from '../src/shared/workspace-term-contract';
+import type { ConfigureBackupDestinationCommand } from '../src/shared/workspace-protection-contract';
 
 const APP_BUILD_ID = 'development:1234567890abcdef1234567890abcdef12345678';
 const WORKSPACE_EPOCH = '11111111-1111-4111-8111-111111111111';
@@ -49,10 +50,25 @@ const TERM_COMMAND = {
     },
 } as const satisfies CreateTermCommand;
 
+const PROTECTION_COMMAND = {
+    commandId: '55555555-5555-4555-8555-555555555555',
+    followUpId: '66666666-6666-4666-8666-666666666666',
+    workspaceId: WORKSPACE_ID,
+    expectedRevision: '0',
+    expectedProtectionVersion: '0',
+    intent: {
+        kind: 'protect.configure-backup-destination',
+        intentSchemaVersion: 1,
+        payload: {},
+    },
+} as const satisfies ConfigureBackupDestinationCommand;
+
 type PreloadCourseFlow = Readonly<{
     query(): Promise<BootstrapOutcome>;
     querySetup(): Promise<WorkspaceSetupOutcome>;
     createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
+    queryDataProtection(): Promise<WorkspaceSetupOutcome>;
+    configureBackupDestination(command: ConfigureBackupDestinationCommand): Promise<WorkspaceSetupOutcome>;
 }>;
 
 type PreloadWindowFrame = Readonly<{
@@ -87,7 +103,7 @@ function readyOutcome(requestId: string): BootstrapOutcome {
             workspaceData: {
                 kind: 'ready',
                 workspaceId: WORKSPACE_ID,
-                schemaLevel: 11,
+                schemaLevel: 12,
                 revision: '0',
             },
         },
@@ -251,4 +267,50 @@ test('preload exposes a separate fixed-channel window control surface', () => {
         'toggle-maximize',
         'close',
     ]);
+});
+
+test('preload sends protection queries and path-free configuration intents on the bounded channel', async () => {
+    const harness = loadPreload(async request => {
+        if (request.kind === 'workspace.protection.query') {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.data-protection-projection',
+                    protocolVersion: 2,
+                    appBuildId: APP_BUILD_ID,
+                    requestId: request.requestId,
+                    workspaceEpoch: WORKSPACE_EPOCH,
+                    dataMode: 'ready',
+                    projection: {
+                        workspaceRevision: '0',
+                        protectionEntityVersion: '0',
+                        configuration: { kind: 'unconfigured' },
+                    },
+                },
+            };
+        }
+        return {
+            ok: false,
+            problem: {
+                code: 'user-cancelled',
+                message: 'Backup directory selection was cancelled.',
+                requestId: request.requestId,
+                appBuildId: APP_BUILD_ID,
+                workspaceEpoch: WORKSPACE_EPOCH,
+                dataEffect: 'unchanged',
+            },
+        };
+    });
+    await harness.courseFlow.query();
+
+    const projection = await harness.courseFlow.queryDataProtection();
+    const cancelled = await harness.courseFlow.configureBackupDestination(PROTECTION_COMMAND);
+
+    assert.equal(projection.ok, true);
+    assert.equal(cancelled.ok, false);
+    assert.deepEqual(harness.setupRequests.map(request => request.kind), [
+        'workspace.protection.query',
+        'workspace.protection.configure',
+    ]);
+    assert.equal(JSON.stringify(harness.setupRequests).includes('selectedDirectoryPath'), false);
 });

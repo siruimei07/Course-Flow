@@ -55,6 +55,12 @@ import {
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
 import {
+    BACKUP_REPOSITORY_SCHEMA,
+    normalizeAcceptedConfigureBackupDestinationCommand,
+    type AcceptedConfigureBackupDestinationCommand,
+    type DataProtectionProjection,
+} from '../shared/workspace-protection-contract';
+import {
     normalizeCreateHolidayRangeCommand,
     normalizeDeleteHolidayRangeCommand,
     normalizeUpdateHolidayRangeCommand,
@@ -125,6 +131,7 @@ import {
     digestCancelMeetingOccurrence,
     digestChangeMeetingOccurrence,
     digestChangeTaskOccurrence,
+    digestConfigureBackupDestination,
     digestCreateCourse,
     digestCreateCourseWithMeeting,
     digestCreateMeetingSeries,
@@ -148,7 +155,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel11,
+    createSchemaLevel12,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -159,6 +166,7 @@ import {
     migrateLevel8To9,
     migrateLevel9To10,
     migrateLevel10To11,
+    migrateLevel11To12,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -171,6 +179,7 @@ import {
     validateSchemaLevel9,
     validateSchemaLevel10,
     validateSchemaLevel11,
+    validateSchemaLevel12,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -220,7 +229,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 11 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 12 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -253,13 +262,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 11;
+        schemaLevel: 12;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 11;
+        schemaLevel: 12;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -293,6 +302,8 @@ export type CommitFailpoint =
 export type CommitOptions = Readonly<{
     failpoint?: (point: CommitFailpoint) => void;
 }>;
+
+export type StoredBackupDestination = AcceptedConfigureBackupDestinationCommand['destination'];
 
 export class CommittedCommandOutcomeUnknownError extends Error {
     public constructor(public readonly commandId: string) {
@@ -330,7 +341,8 @@ type ReceiptEffect = Readonly<{
         | 'plan.task-progress-set'
         | 'plan.task-occurrence-changed'
         | 'plan.task-occurrence-deleted'
-        | 'plan.task-occurrence-state-undone';
+        | 'plan.task-occurrence-state-undone'
+        | 'protect.backup-destination-configured';
     entity: Readonly<{
         kind:
             | 'workspace-setup'
@@ -338,7 +350,8 @@ type ReceiptEffect = Readonly<{
             | 'course'
             | 'meeting-series'
             | 'holiday-range'
-            | 'task-series';
+            | 'task-series'
+            | 'backup-configuration';
         id: string;
         version: string;
     }>;
@@ -378,7 +391,8 @@ type ConflictProblem = Readonly<{
                 | 'plan-state'
                 | 'meeting-series'
                 | 'holiday-range'
-                | 'task-series';
+                | 'task-series'
+                | 'backup-configuration';
             id: string;
             version: string;
         }>];
@@ -508,12 +522,14 @@ type WorkspaceDataCommand =
     | MeetingOccurrenceMutationCommand
     | HolidayRangeCommand
     | TaskCommand
-    | TermMutationCommand;
+    | TermMutationCommand
+    | AcceptedConfigureBackupDestinationCommand;
 
 type CurrentVersions = Readonly<{
     revision: bigint;
     setupVersion: bigint;
     planVersion: bigint;
+    protectionVersion: bigint;
 }>;
 
 const COMMIT_QUEUE_CAPACITY = 64;
@@ -1683,6 +1699,12 @@ function isTaskOccurrenceRuleMutationCommand(
         || command.intent.kind === 'plan.delete-task-occurrence-or-series';
 }
 
+function isConfigureBackupDestinationCommand(
+    command: WorkspaceDataCommand,
+): command is AcceptedConfigureBackupDestinationCommand {
+    return command.intent.kind === 'protect.configure-backup-destination';
+}
+
 function freezeTuple<T>(value: [T]): readonly [T] {
     return Object.freeze(value);
 }
@@ -1781,6 +1803,31 @@ function planConflictResult(reason: ConflictReason, versions: CurrentVersions): 
         affectedCapabilities: freezeTuple(['workspace.write' as const]),
         allowedActions: freezeTuple(['requery' as const]),
         context,
+        details: Object.freeze({ reason }),
+    });
+    return Object.freeze({ ok: false as const, problem });
+}
+
+function protectionConflictResult(
+    reason: ConflictReason,
+    workspaceId: string,
+    versions: CurrentVersions,
+): DataCommitResult {
+    const entityVersion = Object.freeze({
+        kind: 'backup-configuration' as const,
+        id: workspaceId,
+        version: versions.protectionVersion.toString(),
+    });
+    const problem = Object.freeze({
+        code: 'conflict' as const,
+        scope: 'operation' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezeTuple(['workspace.write' as const]),
+        allowedActions: freezeTuple(['requery' as const]),
+        context: Object.freeze({
+            revision: versions.revision.toString(),
+            entityVersions: freezeTuple([entityVersion]),
+        }),
         details: Object.freeze({ reason }),
     });
     return Object.freeze({ ok: false as const, problem });
@@ -3858,6 +3905,9 @@ class SqliteDataStoreImplementation {
         }
         let command: WorkspaceDataCommand;
         switch (candidate.intent.kind) {
+            case 'protect.configure-backup-destination':
+                command = normalizeAcceptedConfigureBackupDestinationCommand(candidate);
+                break;
             case 'plan.create-term':
                 command = normalizeCreateTermCommand(candidate);
                 break;
@@ -4077,6 +4127,81 @@ class SqliteDataStoreImplementation {
         return row.backup_needed_through.toString();
     }
 
+    /**
+     * Reads the path-free PROTECT projection from one authoritative row.
+     * @return {DataProtectionProjection} Legal unconfigured or configured state.
+     */
+    public readDataProtectionProjection(): DataProtectionProjection {
+        this.requireOpen();
+        const statement = this.database.prepare(`
+            SELECT
+                workspace_state.revision,
+                backup_configuration.configuration_version,
+                backup_configuration.backup_set_id,
+                backup_configuration.repository_schema,
+                backup_configuration.destination_display_name
+            FROM workspace_state
+            JOIN backup_configuration
+                ON backup_configuration.singleton = workspace_state.singleton
+            WHERE workspace_state.singleton = 1
+        `);
+        statement.setReadBigInts(true);
+        const row = statement.get() as {
+            revision: bigint;
+            configuration_version: bigint;
+            backup_set_id: string | null;
+            repository_schema: typeof BACKUP_REPOSITORY_SCHEMA | null;
+            destination_display_name: string | null;
+        };
+        const configuration: DataProtectionProjection['configuration'] = row.backup_set_id === null
+            ? Object.freeze({ kind: 'unconfigured' as const })
+            : Object.freeze({
+                kind: 'configured' as const,
+                backupSetId: row.backup_set_id,
+                repositorySchema: row.repository_schema!,
+                destinationDisplayName: row.destination_display_name!,
+            });
+        return Object.freeze({
+            workspaceRevision: row.revision.toString(),
+            protectionEntityVersion: row.configuration_version.toString(),
+            configuration,
+        });
+    }
+
+    /**
+     * Recovers accepted destination facts for exact CommandId replay inside Workspace.
+     * @param {string} commandId - Durable command identity.
+     * @return {StoredBackupDestination | null} Stored internal destination facts.
+     */
+    public readBackupConfigurationForCommand(commandId: string): StoredBackupDestination | null {
+        this.requireOpen();
+        if (!isCanonicalUuid(commandId)) {
+            throw new TypeError('CommandId must be a canonical UUID');
+        }
+        const row = this.database.prepare(`
+            SELECT
+                backup_set_id,
+                canonical_destination_path,
+                destination_display_name,
+                repository_schema
+            FROM backup_configuration
+            WHERE singleton = 1 AND originating_command_id = ?
+        `).get(commandId) as {
+            backup_set_id: string;
+            canonical_destination_path: string;
+            destination_display_name: string;
+            repository_schema: typeof BACKUP_REPOSITORY_SCHEMA;
+        } | undefined;
+        return row
+            ? Object.freeze({
+                backupSetId: row.backup_set_id,
+                canonicalPath: row.canonical_destination_path,
+                displayName: row.destination_display_name,
+                repositorySchema: row.repository_schema,
+            })
+            : null;
+    }
+
     public close(): Promise<void> {
         if (this.terminalError) {
             return Promise.resolve();
@@ -4116,10 +4241,12 @@ class SqliteDataStoreImplementation {
             SELECT
                 workspace_state.revision,
                 setup_state.setup_decision_version,
-                plan_state.plan_entity_version
+                plan_state.plan_entity_version,
+                backup_configuration.configuration_version
             FROM workspace_state
             JOIN setup_state ON setup_state.singleton = workspace_state.singleton
             JOIN plan_state ON plan_state.singleton = workspace_state.singleton
+            JOIN backup_configuration ON backup_configuration.singleton = workspace_state.singleton
             WHERE workspace_state.singleton = 1
         `);
         statement.setReadBigInts(true);
@@ -4127,11 +4254,13 @@ class SqliteDataStoreImplementation {
             revision: bigint;
             setup_decision_version: bigint;
             plan_entity_version: bigint;
+            configuration_version: bigint;
         };
         return {
             revision: row.revision,
             setupVersion: row.setup_decision_version,
             planVersion: row.plan_entity_version,
+            protectionVersion: row.configuration_version,
         };
     }
 
@@ -4264,6 +4393,9 @@ class SqliteDataStoreImplementation {
         command: WorkspaceDataCommand,
         options: CommitOptions,
     ): DataCommitResult {
+        if (isConfigureBackupDestinationCommand(command)) {
+            return this.commitBackupConfigurationSynchronously(command, options);
+        }
         if (!('expectedPlanVersion' in command)) {
             return this.commitSetupSynchronously(command, options);
         }
@@ -4379,6 +4511,178 @@ class SqliteDataStoreImplementation {
                 return setupDraftPermissionResult(this.revision);
             }
             throw new Error('Workspace setup draft write failed');
+        }
+    }
+
+    private commitBackupConfigurationSynchronously(
+        command: AcceptedConfigureBackupDestinationCommand,
+        options: CommitOptions,
+    ): DataCommitResult {
+        const digest = digestConfigureBackupDestination(command);
+        let commitAttempted = false;
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            fireCommitFailpoint(options, 'commit.after-begin');
+
+            const receipt = this.database.prepare(`
+                SELECT payload_digest
+                FROM command_receipts
+                WHERE command_id = ?
+            `).get(command.commandId) as { payload_digest: Uint8Array } | undefined;
+            fireCommitFailpoint(options, 'commit.after-receipt-read');
+            if (receipt) {
+                const versions = this.currentVersions();
+                if (!timingSafeEqual(receipt.payload_digest, digest)) {
+                    this.rollbackOrRequireReopen();
+                    return protectionConflictResult('command-id-reused', this.workspaceId, versions);
+                }
+                const outcome = this.readReceiptOutcome(command.commandId);
+                this.rollbackOrRequireReopen();
+                if (!outcome) {
+                    throw new Error('Stored backup configuration receipt is incomplete');
+                }
+                return successfulCommit(outcome);
+            }
+
+            const versions = this.currentVersions();
+            if (command.workspaceId !== this.workspaceId
+                || versions.protectionVersion !== BigInt(command.expectedProtectionVersion)) {
+                this.rollbackOrRequireReopen();
+                return protectionConflictResult('expected-entity-version', this.workspaceId, versions);
+            }
+            if (versions.revision !== BigInt(command.expectedRevision)) {
+                this.rollbackOrRequireReopen();
+                return protectionConflictResult('expected-revision', this.workspaceId, versions);
+            }
+            const current = this.database.prepare(`
+                SELECT backup_set_id
+                FROM backup_configuration
+                WHERE singleton = 1
+            `).get() as { backup_set_id: string | null };
+            if (current.backup_set_id !== null) {
+                this.rollbackOrRequireReopen();
+                return protectionConflictResult('expected-entity-version', this.workspaceId, versions);
+            }
+            fireCommitFailpoint(options, 'commit.after-expected-versions');
+
+            if (versions.revision === SQLITE_INTEGER_MAX
+                || versions.protectionVersion === SQLITE_INTEGER_MAX) {
+                this.rollbackOrRequireReopen();
+                throw this.enterTerminalState();
+            }
+            const newRevision = versions.revision + 1n;
+            const newProtectionVersion = versions.protectionVersion + 1n;
+            this.database.prepare(`
+                UPDATE backup_configuration
+                SET
+                    configuration_version = ?,
+                    backup_set_id = ?,
+                    repository_schema = ?,
+                    canonical_destination_path = ?,
+                    destination_display_name = ?,
+                    originating_command_id = ?,
+                    configured_revision = ?
+                WHERE singleton = 1
+            `).run(
+                newProtectionVersion,
+                command.destination.backupSetId,
+                command.destination.repositorySchema,
+                command.destination.canonicalPath,
+                command.destination.displayName,
+                command.commandId,
+                newRevision,
+            );
+            fireCommitFailpoint(options, 'commit.after-facts');
+
+            this.database.prepare(
+                'UPDATE workspace_state SET revision = ? WHERE singleton = 1',
+            ).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-revision');
+
+            this.database.prepare(`
+                INSERT INTO command_receipts (
+                    command_id,
+                    intent_kind,
+                    intent_schema_version,
+                    canonical_encoding,
+                    digest_algorithm,
+                    payload_digest,
+                    committed_revision,
+                    result_kind
+                ) VALUES (
+                    ?, 'protect.configure-backup-destination', 1,
+                    'courseflow-canonical-json-v1', 'sha256', ?, ?, 'committed'
+                )
+            `).run(command.commandId, digest, newRevision);
+            fireCommitFailpoint(options, 'commit.after-receipt');
+
+            this.database.prepare(`
+                INSERT INTO receipt_effects (
+                    command_id,
+                    effect_order,
+                    effect_code,
+                    entity_kind,
+                    entity_id,
+                    entity_version
+                ) VALUES (
+                    ?, 0, 'protect.backup-destination-configured',
+                    'backup-configuration', ?, ?
+                )
+            `).run(command.commandId, command.destination.backupSetId, newProtectionVersion);
+            this.database.prepare(`
+                INSERT INTO durable_followups (
+                    follow_up_id,
+                    originating_command_id,
+                    owner,
+                    kind,
+                    prerequisite_revision,
+                    state,
+                    follow_up_version
+                ) VALUES (?, ?, 'protect', 'backup-needed-through', ?, 'pending', 0)
+            `).run(command.followUpId, command.commandId, newRevision);
+            fireCommitFailpoint(options, 'commit.after-followup');
+
+            this.database.prepare(`
+                UPDATE protection_watermarks
+                SET backup_needed_through = ?
+                WHERE singleton = 1
+            `).run(newRevision);
+            fireCommitFailpoint(options, 'commit.after-watermark');
+            fireCommitFailpoint(options, 'commit.before-sqlite-commit');
+
+            commitAttempted = true;
+            this.database.exec('COMMIT');
+            this.revision = newRevision;
+            fireCommitFailpoint(options, 'commit.after-sqlite-commit');
+            const outcome = this.readReceiptOutcome(command.commandId);
+            if (!outcome) {
+                throw new Error('Committed backup configuration receipt is missing');
+            }
+            return successfulCommit(outcome);
+        }
+        catch (error) {
+            if (this.terminalError) {
+                throw this.terminalError;
+            }
+            if (commitAttempted) {
+                throw this.enterTerminalState(new CommittedCommandOutcomeUnknownError(command.commandId));
+            }
+            this.rollbackOrRequireReopen();
+            const disposition = classifySqliteFailure(error, 'pre-commit');
+            if (disposition.kind === 'retryable-unchanged') {
+                return writerBusyResult(this.revision);
+            }
+            if (disposition.kind === 'read-only') {
+                this.readOnly = true;
+                return permissionCommitResult(this.revision);
+            }
+            if (disposition.kind === 'failed-unchanged') {
+                const message = disposition.reason === 'storage-full'
+                    ? 'Workspace data write failed: storage full'
+                    : 'Workspace data recovery is required';
+                throw new Error(message);
+            }
+            throw new Error('Workspace backup configuration commit failed');
         }
     }
 
@@ -8267,7 +8571,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel11(stagingDatabase);
+        createSchemaLevel12(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -8296,6 +8600,16 @@ export function initializeWorkspaceData(
                 current_term_id,
                 plan_entity_version
             ) VALUES (1, NULL, 0);
+            INSERT INTO backup_configuration (
+                singleton,
+                configuration_version,
+                backup_set_id,
+                repository_schema,
+                canonical_destination_path,
+                destination_display_name,
+                originating_command_id,
+                configured_revision
+            ) VALUES (1, 0, NULL, NULL, NULL, NULL, NULL, NULL);
         `);
         throwFailpoint(options.failpoint, 'initialize.after-bootstrap');
         stagingDatabase.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_LEVEL}`);
@@ -8306,7 +8620,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel11(validationDatabase);
+            validateSchemaLevel12(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -8315,7 +8629,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel11(activeDatabase);
+        const facts = validateSchemaLevel12(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -8388,7 +8702,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel11(validationDatabase);
+        const facts = validateSchemaLevel12(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -8438,7 +8752,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel11(activeDatabase);
+        const facts = validateSchemaLevel12(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -8483,7 +8797,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 7
                 && identity.schemaLevel !== 8
                 && identity.schemaLevel !== 9
-                && identity.schemaLevel !== 10)) {
+                && identity.schemaLevel !== 10
+                && identity.schemaLevel !== 11)) {
             closeBestEffort(source);
             return opened;
         }
@@ -8514,8 +8829,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 9) {
             validateSchemaLevel9(source);
         }
-        else {
+        else if (identity.schemaLevel === 10) {
             validateSchemaLevel10(source);
+        }
+        else {
+            validateSchemaLevel11(source);
         }
         if (options.readOnly) {
             closeBestEffort(source);
@@ -8557,8 +8875,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 9) {
                 validateSchemaLevel9(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 10) {
                 validateSchemaLevel10(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel11(safetyDatabase);
             }
         }
         finally {
@@ -8625,10 +8946,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel9To10(maintenance);
                         validateSchemaLevel10(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 10) {
                         validateSchemaLevel10(maintenance);
                         migrateLevel10To11(maintenance);
                         validateSchemaLevel11(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel11(maintenance);
+                        migrateLevel11To12(maintenance);
+                        validateSchemaLevel12(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -8652,7 +8978,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel11(maintenance);
+            validateSchemaLevel12(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

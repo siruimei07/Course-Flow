@@ -22,6 +22,10 @@ import {
     type RecordSetupDecisionCommand,
 } from '../shared/workspace-data-contract';
 import {
+    configureBackupDestinationDigestProjection,
+    type AcceptedConfigureBackupDestinationCommand,
+} from '../shared/workspace-protection-contract';
+import {
     createHolidayRangeDigestProjection,
     deleteHolidayRangeDigestProjection,
     updateHolidayRangeDigestProjection,
@@ -62,6 +66,18 @@ import {
 
 export function digestRecordSetupDecision(command: RecordSetupDecisionCommand): Uint8Array {
     const canonicalText = canonicalJson(recordSetupDecisionDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical accepted backup configuration facts required by ADR-04.
+ * @param {AcceptedConfigureBackupDestinationCommand} command - Accepted PROTECT command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestConfigureBackupDestination(
+    command: AcceptedConfigureBackupDestinationCommand,
+): Uint8Array {
+    const canonicalText = canonicalJson(configureBackupDestinationDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }
 

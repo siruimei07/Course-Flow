@@ -638,6 +638,8 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
       'query',
       'initialize',
       'querySetup',
+      'queryDataProtection',
+      'configureBackupDestination',
       'saveSetupDraftCheckpoint',
       'discardSetupDraftCheckpoint',
       'queryPlan',
@@ -668,7 +670,7 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
     ],
   );
   const expectedParameterCounts = [
-    0, 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
   ];
   exposedObject.properties.forEach((property, index) => {
@@ -818,7 +820,7 @@ test('production has no diagnostics, telemetry, remote client, maker, or publish
   const state = await compilerState();
   const sourceViolations: string[] = [];
   const allowedElectronImports = new Map([
-    [mainPath, ['app', 'BrowserWindow', 'ipcMain', 'Menu', 'utilityProcess'].sort()],
+    [mainPath, ['app', 'BrowserWindow', 'dialog', 'ipcMain', 'Menu', 'utilityProcess'].sort()],
     [preloadPath, ['contextBridge', 'ipcRenderer'].sort()],
   ]);
 
@@ -960,4 +962,23 @@ test('package and runtime directories remain development-only', () => {
 
 test('packaged smoke runner source exists', () => {
   assert.equal(existsSync(packagedSmokePath), true, 'scripts/run-packaged-smoke.mjs must exist');
+});
+
+test('PROTECT owns backup repository policy while PLATFORM stays a generic filesystem adapter', () => {
+  const platform = readFileSync(
+    path.join(repositoryRoot, 'src/platform/backup-destination.ts'),
+    'utf8',
+  );
+  const protect = readFileSync(
+    path.join(repositoryRoot, 'src/protect/backup-repository.ts'),
+    'utf8',
+  );
+
+  assert.doesNotMatch(
+    platform,
+    /BACKUP_REPOSITORY_SCHEMA|CourseFlow|repository-v1|workspaceId|backupSetId|isCanonicalUuid/,
+  );
+  assert.match(protect, /BACKUP_REPOSITORY_SCHEMA/);
+  assert.match(protect, /workspaceId/);
+  assert.match(protect, /backupSetId/);
 });

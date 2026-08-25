@@ -25,7 +25,7 @@ import {
     type WorkspaceProbeRequest,
 } from './shared/bootstrap-contract';
 import {
-    isWorkspaceSetupRequest,
+    isWorkspaceProcessRequest,
     type CancelMeetingOccurrenceRequest,
     type ChangeMeetingOccurrenceRequest,
     type ChangeTaskOccurrenceRequest,
@@ -43,6 +43,7 @@ import {
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type PlanQueryRequest,
+    type SelectedBackupDestinationRequest,
     type SaveSetupDraftCheckpointRequest,
     type SetTaskOccurrenceStatusRequest,
     type SetTaskProgressRequest,
@@ -57,8 +58,13 @@ import {
     type WorkspaceSetupOutcome,
     type WorkspaceSetupProblem,
     type WorkspaceSetupProblemCode,
-    type WorkspaceSetupRequest,
+    type WorkspaceProcessRequest,
 } from './shared/workspace-setup-contract';
+import {
+    configureBackupDestination,
+    readDataProtectionProjection,
+} from './protect/backup-configuration';
+import { BackupDestinationPreparationError } from './protect/backup-repository';
 import {
     buildPlanProjection,
     createPlanEvaluationContext,
@@ -84,6 +90,7 @@ const SYSTEM_CLOCK: ClockPort = {
 export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     commitOptions?: CommitOptions;
     clock?: ClockPort;
+    libraryRootPath?: string | null;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
 
@@ -147,14 +154,14 @@ export class WorkspaceApplication {
     }
 
     public handle(request: WorkspaceProbeRequest): Promise<BootstrapOutcome>;
-    public handle(request: WorkspaceSetupRequest): Promise<WorkspaceSetupOutcome>;
+    public handle(request: WorkspaceProcessRequest): Promise<WorkspaceSetupOutcome>;
     public handle(request: unknown): Promise<BootstrapOutcome | WorkspaceSetupOutcome>;
     public async handle(request: unknown): Promise<BootstrapOutcome | WorkspaceSetupOutcome> {
         if (isWorkspaceProbeRequest(request, this.appBuildId)) {
             return this.bootstrap(request);
         }
 
-        if (!isWorkspaceSetupRequest(request, this.appBuildId, this.workspaceEpoch)) {
+        if (!isWorkspaceProcessRequest(request, this.appBuildId, this.workspaceEpoch)) {
             const value = request as { appBuildId?: unknown; workspaceEpoch?: unknown } | null;
             const requestKind = requestKindFrom(request);
             const code = value?.appBuildId !== undefined && value.appBuildId !== this.appBuildId
@@ -177,6 +184,9 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.task.delete-occurrence-or-series'
                         || requestKind === 'workspace.task.undo-occurrence-state'
                         || requestKind === 'workspace.plan.query'
+                        || requestKind === 'workspace.protection.query'
+                        || requestKind === 'workspace.protection.configure'
+                        || requestKind === 'workspace.protection.configure-selected'
                         || requestKind === 'workspace.setup-draft.save'
                         || requestKind === 'workspace.setup-draft.discard'
                         || requestKind === 'workspace.task-series.query'
@@ -204,6 +214,14 @@ export class WorkspaceApplication {
                 return this.discardSetupDraftCheckpoint(request.requestId, request.expectedVersion);
             case 'workspace.plan.query':
                 return this.queryPlan(request.requestId);
+            case 'workspace.protection.query':
+                return this.queryDataProtection(request.requestId);
+            case 'workspace.protection.configure-selected':
+                return this.configureBackupDestination(
+                    request.requestId,
+                    request.command,
+                    request.selectedDirectoryPath,
+                );
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
             case 'workspace.term.update-end-date':
@@ -489,6 +507,125 @@ export class WorkspaceApplication {
         catch (error) {
             const code = error instanceof TypeError ? 'workspace-unavailable' : 'recovery-required';
             return this.problem(code, '无法读取一致的统一计划数据。', requestId);
+        }
+    }
+
+    /**
+     * Returns legal configured or unconfigured PROTECT state without filesystem paths.
+     * @param {string} requestId - Request correlation identity.
+     * @return {WorkspaceSetupOutcome} Current data-protection projection.
+     */
+    private queryDataProtection(requestId: string): WorkspaceSetupOutcome {
+        if (!this.dataState.store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可读取的数据保护配置。', requestId);
+        }
+        try {
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.data-protection-projection',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: this.appBuildId,
+                    requestId,
+                    workspaceEpoch: this.workspaceEpoch,
+                    dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
+                    projection: readDataProtectionProjection({
+                        readProtection: () => this.dataState.store!.readDataProtectionProjection(),
+                    }),
+                },
+            };
+        }
+        catch {
+            return this.problem('recovery-required', '无法读取一致的数据保护配置。', requestId);
+        }
+    }
+
+    /**
+     * Coordinates one selected directory through PROTECT, PLATFORM, and DATA.
+     * @param {string} requestId - Request correlation identity.
+     * @param {SelectedBackupDestinationRequest['command']} command - Path-free PROTECT command.
+     * @param {string} selectedDirectoryPath - Main-selected directory path.
+     * @return {Promise<WorkspaceSetupOutcome>} Durable receipt or structured unchanged problem.
+     */
+    private async configureBackupDestination(
+        requestId: string,
+        command: SelectedBackupDestinationRequest['command'],
+        selectedDirectoryPath: string,
+    ): Promise<WorkspaceSetupOutcome> {
+        const store = this.dataState.store;
+        if (!store) {
+            const code = this.dataState.status.kind === 'recovery'
+                ? 'recovery-required'
+                : 'workspace-unavailable';
+            return this.problem(code, '当前没有可写入的本地工作区。', requestId);
+        }
+        if (this.dataState.status.kind === 'read-only') {
+            return this.problem('permission', '本地数据为只读，备份目的地未配置。', requestId);
+        }
+        try {
+            const committed = await configureBackupDestination({
+                readProtection: () => store.readDataProtectionProjection(),
+                readDestinationForCommand: commandId => (
+                    store.readBackupConfigurationForCommand(commandId)
+                ),
+                commit: accepted => store.commit(accepted, this.options.commitOptions),
+            }, {
+                command,
+                selectedDirectoryPath,
+                activeDataDirectoryPath: this.dataSlotsRoot,
+                libraryRootPath: this.options.libraryRootPath ?? null,
+            });
+            this.dataState = { ...this.dataState, status: store.status() };
+            if (!committed.ok) {
+                return this.commitProblem(
+                    committed.problem,
+                    requestId,
+                    '备份目的地未配置，正式数据没有改变。',
+                );
+            }
+            return this.backupConfigurationCommandOutcome(requestId, committed.value);
+        }
+        catch (error) {
+            if (error instanceof CommittedCommandOutcomeUnknownError
+                && error.commandId === command.commandId) {
+                const receipt = await this.recoverCommittedReceipt(command.commandId);
+                if (receipt) {
+                    return this.backupConfigurationCommandOutcome(requestId, receipt);
+                }
+                return this.problem(
+                    'recovery-required',
+                    '无法确认备份目的地提交结果；请重新打开工作区后查询。',
+                    requestId,
+                    'unknown',
+                );
+            }
+            if (error instanceof BackupDestinationPreparationError) {
+                if (error.reason === 'location-overlap' && error.location !== null) {
+                    return this.problem(
+                        'validation',
+                        '备份目录必须与活动数据和资料库根隔离。',
+                        requestId,
+                        'unchanged',
+                        { reason: 'backup-location-overlap', location: error.location },
+                    );
+                }
+                if (error.reason === 'identity-conflict') {
+                    return this.problem(
+                        'identity-conflict',
+                        '所选目录中的 CourseFlow 仓库身份无效，未进行配置。',
+                        requestId,
+                    );
+                }
+                if (error.reason === 'permission') {
+                    return this.problem('permission', '所选备份目录不可写，未进行配置。', requestId);
+                }
+                return this.problem('validation', '所选备份目录无效，未进行配置。', requestId);
+            }
+            const code = error instanceof TypeError ? 'validation' : 'recovery-required';
+            return this.problem(code, '备份目的地未配置，正式数据没有改变。', requestId);
         }
     }
 
@@ -1163,6 +1300,47 @@ export class WorkspaceApplication {
         catch {
             return null;
         }
+    }
+
+    private backupConfigurationCommandOutcome(
+        requestId: string,
+        committed: CommandReceiptOutcome,
+    ): WorkspaceSetupOutcome {
+        const effect = committed.effects[0];
+        if (committed.effects.length !== 1
+            || effect.code !== 'protect.backup-destination-configured'
+            || effect.entity.kind !== 'backup-configuration') {
+            return this.problem(
+                'recovery-required',
+                '命令回执与备份配置事实不一致。',
+                requestId,
+                'unknown',
+            );
+        }
+        const outcome: WorkspaceCommandResult = {
+            kind: 'committed',
+            revision: committed.revision,
+            effects: [{
+                code: 'protect.backup-destination-configured',
+                entity: {
+                    kind: 'backup-configuration',
+                    id: effect.entity.id,
+                    version: effect.entity.version,
+                },
+            }],
+            pendingFollowUps: [committed.pendingFollowUps[0]],
+        };
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.command-outcome',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                outcome,
+            },
+        };
     }
 
     private termCommandOutcome(

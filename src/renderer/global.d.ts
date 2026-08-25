@@ -40,6 +40,7 @@ import type {
   MeetingOccurrenceWindow,
 } from '../shared/workspace-course-contract';
 import type { WindowControlAction } from '../shared/window-control-contract';
+import type { ConfigureBackupDestinationCommand } from '../shared/workspace-protection-contract';
 
 declare global {
   interface Window {
@@ -47,6 +48,8 @@ declare global {
       query(): Promise<BootstrapOutcome>;
       initialize(): Promise<WorkspaceSetupOutcome>;
       querySetup(): Promise<WorkspaceSetupOutcome>;
+      queryDataProtection(): Promise<WorkspaceSetupOutcome>;
+      configureBackupDestination(command: ConfigureBackupDestinationCommand): Promise<WorkspaceSetupOutcome>;
       saveSetupDraftCheckpoint(input: SaveSetupDraftCheckpointInput): Promise<WorkspaceSetupOutcome>;
       discardSetupDraftCheckpoint(expectedVersion: string): Promise<WorkspaceSetupOutcome>;
       queryPlan(): Promise<WorkspaceSetupOutcome>;

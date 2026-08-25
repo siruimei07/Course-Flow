@@ -31,6 +31,8 @@ import {
   makeMeetingOccurrenceImpactRequest,
   makeMeetingSeriesQueryRequest,
   makePlanQueryRequest,
+  makeConfigureBackupDestinationRequest,
+  makeDataProtectionQueryRequest,
   makeTaskSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
   makeDeleteHolidayRangeRequest,
@@ -78,6 +80,7 @@ import type {
   MeetingOccurrenceImpactDraft,
   MeetingOccurrenceWindow,
 } from './shared/workspace-course-contract';
+import type { ConfigureBackupDestinationCommand } from './shared/workspace-protection-contract';
 import {
   WINDOW_CONTROL_CHANNEL,
   type WindowControlAction,
@@ -130,6 +133,7 @@ async function invokeSetup(
 
   const failureDataEffect = request.kind === 'workspace.setup.query'
     || request.kind === 'workspace.plan.query'
+    || request.kind === 'workspace.protection.query'
     || request.kind === 'workspace.task-series.query'
     || request.kind === 'workspace.task-occurrence.preview'
     || request.kind === 'workspace.meeting-series.query'
@@ -175,6 +179,34 @@ function initializeWorkspace(): Promise<WorkspaceSetupOutcome> {
 function querySetup(): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeSetupQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Reads legal configured or unconfigured data-protection state.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated path-free projection.
+ */
+function queryDataProtection(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeDataProtectionQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Requests Main's native directory picker without accepting a Renderer path.
+ * @param {ConfigureBackupDestinationCommand} command Versioned PROTECT command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated configuration outcome.
+ */
+function configureBackupDestination(
+  command: ConfigureBackupDestinationCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeConfigureBackupDestinationRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
   ));
 }
 
@@ -523,6 +555,8 @@ contextBridge.exposeInMainWorld(
     query: queryWorkspaceStatus,
     initialize: initializeWorkspace,
     querySetup,
+    queryDataProtection,
+    configureBackupDestination,
     saveSetupDraftCheckpoint,
     discardSetupDraftCheckpoint,
     queryPlan,
