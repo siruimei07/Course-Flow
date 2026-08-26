@@ -43,6 +43,7 @@ import {
 } from './snapshot-manifest';
 
 export {RestoreCoordinator} from './restore-session';
+export {inspectRestoreBeforeWorkspaceOpen} from './restore-activation';
 
 const REPOSITORY_DIRECTORY_NAME = 'CourseFlow';
 const REPOSITORY_MARKER_NAME = 'repository-v1.json';

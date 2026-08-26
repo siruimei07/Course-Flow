@@ -7,6 +7,7 @@ import {createHash} from 'node:crypto';
 import {
     appendFileSync,
     copyFileSync,
+    existsSync,
     mkdirSync,
     mkdtempSync,
     readFileSync,
@@ -20,6 +21,7 @@ import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 
 import {CURRENT_SCHEMA_LEVEL} from '../../src/data/schema';
+import {canonicalJson} from '../../src/shared/canonical-json';
 import {
     initializeWorkspaceData,
     openWorkspaceData,
@@ -39,6 +41,7 @@ import {
     type RestoreImpactSummary,
     type RestoreLibraryRootBinding,
     type RestoreSessionView,
+    type RestoreSessionActionCommand,
     type StartRestoreSessionCommand,
 } from '../../src/shared/workspace-protection-contract';
 import {normalizeRecordSetupDecisionCommand} from '../../src/shared/workspace-data-contract';
@@ -63,22 +66,62 @@ const SYNC_OPERATION_ID = '14141414-1414-4414-8414-141414141414';
 const SYNC_SNAPSHOT_ID = '15151515-1515-4515-8515-151515151515';
 const SYNC_COMMAND_ID = '16161616-1616-4616-8616-161616161616';
 const SYNC_FOLLOW_UP_ID = '17171717-1717-4717-8717-171717171717';
+const RESUME_COMMAND_ID = '18181818-1818-4818-8818-181818181818';
+const RETRY_COMMAND_ID = '19191919-1919-4919-8919-191919191919';
+const ROLLBACK_COMMAND_ID = '20202020-2020-4020-8020-202020202020';
+const CANCEL_COMMAND_ID = '21212121-2121-4121-8121-212121212121';
+const SECOND_START_COMMAND_ID = '23232323-2323-4323-8323-232323232323';
+const SECOND_CONFIRM_COMMAND_ID = '24242424-2424-4424-8424-242424242424';
+const SECOND_RESUME_COMMAND_ID = '25252525-2525-4525-8525-252525252525';
+const POST_RESTORE_COMMAND_ID = '26262626-2626-4626-8626-262626262626';
+const POST_RESTORE_FOLLOW_UP_ID = '27272727-2727-4727-8727-272727272727';
 
 type RestoreCoordinatorOptions = Readonly<{
+    dataSlotsRoot?: string;
     currentLibraryBinding?: () => RestoreLibraryRootBinding;
     targetBindingVersion?: () => string;
     impactSummary?: (
         candidateRevision: string,
         currentRevision: string,
     ) => RestoreImpactSummary;
+    failpoint?: (point: string) => void;
 }>;
 
 type RestoreCoordinator = Readonly<{
     listCandidates(): readonly RestoreCandidateProjection[];
     start(command: StartRestoreSessionCommand): Promise<RestoreSessionView>;
     confirm(command: ConfirmRestoreSessionCommand): Promise<RestoreSessionView>;
+    cancelBeforeCheckpoint(command: RestoreSessionActionCommand): Promise<RestoreSessionView>;
+    resume(command: RestoreSessionActionCommand): Promise<RestoreSessionView>;
+    rollback(command: RestoreSessionActionCommand): Promise<RestoreSessionView>;
     query(restoreSessionId: string): RestoreSessionView;
+    activeStore(): SqliteDataStore | null;
 }>;
+
+type RestoreBootState = Readonly<{
+    kind: 'clear' | 'pre-checkpoint-session' | 'recovery-required' | 'committed';
+    session: RestoreSessionView | null;
+    terminal?: Readonly<{
+        operationId: string;
+        outcome: 'succeeded' | 'rolled-back';
+        terminalRecordDigest: string;
+        receiptDigest: string;
+    }> | null;
+}>;
+
+type RestoreCoordinatorConstructor = {
+    new (
+        store: SqliteDataStore,
+        activityControlRoot: string,
+        options?: RestoreCoordinatorOptions,
+        bootState?: RestoreBootState,
+    ): RestoreCoordinator;
+    recover(
+        activityControlRoot: string,
+        dataSlotsRoot: string,
+        options?: RestoreCoordinatorOptions,
+    ): RestoreCoordinator;
+};
 
 type RestoreAwareDurableBackup = Readonly<{
     runDurableBackupPass(
@@ -93,11 +136,11 @@ type RestoreAwareDurableBackup = Readonly<{
             failpoint?: (point: string) => void;
         }>,
     ): Promise<void>;
-    RestoreCoordinator: new (
-        store: SqliteDataStore,
+    RestoreCoordinator: RestoreCoordinatorConstructor;
+    inspectRestoreBeforeWorkspaceOpen(
         activityControlRoot: string,
-        options?: RestoreCoordinatorOptions,
-    ) => RestoreCoordinator;
+        dataSlotsRoot: string,
+    ): RestoreBootState;
 }>;
 
 type RestoreFixture = Readonly<{
@@ -232,6 +275,7 @@ function createCandidateVariants(fixture: RestoreFixture): void {
     );
     const oldDatabase = new DatabaseSync(path.join(oldDirectory, 'workspace.sqlite'));
     oldDatabase.exec(`
+        DROP TABLE IF EXISTS restore_completion_receipts;
         DROP TABLE IF EXISTS restore_command_receipts;
         DROP TABLE IF EXISTS restore_sessions;
         DROP TABLE IF EXISTS backup_cleanup_operations;
@@ -351,7 +395,11 @@ test('TEST-PROTECT-004: five states are distinct and old DATA migrates only in a
         'restore',
         view.operationId,
     );
-    assert.deepEqual(readdirSync(operationDirectory), ['candidate-validation']);
+    assert.deepEqual(readdirSync(operationDirectory), [
+        'candidate-validation',
+        'journal',
+        'session',
+    ]);
     assert.deepEqual(readdirSync(path.join(operationDirectory, 'candidate-validation')), [
         'workspace.sqlite',
     ]);
@@ -441,7 +489,9 @@ test('A-DATA-005: healthy confirmation creates a distinct verified RestoreSafety
     );
     assert.deepEqual(readdirSync(operationDirectory).sort(), [
         'candidate-validation',
+        'journal',
         'safety',
+        'session',
     ].sort());
     const safetyDirectory = path.join(
         operationDirectory,
@@ -517,6 +567,24 @@ test('TEST-WORKSPACE-002: command replay is stable and changed candidate reuse c
     const different = coordinator.listCandidates().find(item => item.snapshotId === OLD_SNAPSHOT_ID)!;
     await assert.rejects(
         coordinator.start({commandId: START_COMMAND_ID, candidateRef: different.candidateRef}),
+        error => (error as {code?: string}).code === 'conflict',
+    );
+});
+
+test('ADR-08: a second nonterminal RestoreSession is rejected at its DATA owner', async t => {
+    const fixture = await createFixture(t);
+    const coordinator = new (restoreModule().RestoreCoordinator)(
+        fixture.store,
+        fixture.activityControlRoot,
+    );
+    const candidate = coordinator.listCandidates().find(item => item.status === 'verified')!;
+    await coordinator.start({commandId: START_COMMAND_ID, candidateRef: candidate.candidateRef});
+
+    await assert.rejects(
+        coordinator.start({
+            commandId: SECOND_START_COMMAND_ID,
+            candidateRef: candidate.candidateRef,
+        }),
         error => (error as {code?: string}).code === 'conflict',
     );
 });
@@ -737,7 +805,1142 @@ test('TEST-PROTECT-004: every bound preview fact invalidates confirmation when c
                 fixture.activityControlRoot,
                 'restore',
                 preview.operationId,
-            )), ['candidate-validation']);
+            )), ['candidate-validation', 'journal', 'session']);
+        });
+    }
+});
+
+async function createProtectedActivation(
+    fixture: RestoreFixture,
+    options: RestoreCoordinatorOptions = {},
+): Promise<Readonly<{
+    coordinator: RestoreCoordinator;
+    protectedSession: RestoreSessionView;
+    currentRevision: string;
+    candidateRevision: string;
+}>> {
+    const committed = await fixture.store.commit(normalizeRecordSetupDecisionCommand({
+        commandId: DECISION_COMMAND_ID,
+        followUpId: DECISION_FOLLOW_UP_ID,
+        workspaceId: WORKSPACE_ID,
+        expectedRevision: fixture.store.status().revision,
+        expectedSetupVersion: '0',
+        intent: {
+            kind: 'workspace.record-setup-decision',
+            intentSchemaVersion: 1,
+            payload: {decision: 'later'},
+        },
+    }));
+    assert.equal(committed.ok, true);
+    const coordinator = new (restoreModule().RestoreCoordinator)(
+        fixture.store,
+        fixture.activityControlRoot,
+        {dataSlotsRoot: fixture.dataSlotsRoot, ...options},
+    );
+    const candidate = coordinator.listCandidates().find(item => item.status === 'verified')!;
+    const preview = await coordinator.start({
+        commandId: START_COMMAND_ID,
+        candidateRef: candidate.candidateRef,
+    });
+    const protectedSession = await coordinator.confirm({
+        commandId: CONFIRM_COMMAND_ID,
+        restoreSessionId: preview.restoreSessionId,
+        expectedSessionVersion: preview.sessionVersion,
+        previewToken: preview.previewToken!,
+    });
+    return {
+        coordinator,
+        protectedSession,
+        currentRevision: protectedSession.current.revision,
+        candidateRevision: protectedSession.candidate.actualRevision,
+    };
+}
+
+function journalKinds(fixture: RestoreFixture, operationId: string): readonly string[] {
+    const journalDirectory = path.join(
+        fixture.activityControlRoot,
+        'restore',
+        operationId,
+        'journal',
+    );
+    return readdirSync(journalDirectory).sort().map(name => (
+        (JSON.parse(readFileSync(path.join(journalDirectory, name), 'utf8')) as {kind: string}).kind
+    ));
+}
+
+test('TEST-DATA-006: cancellation before armed checkpoint keeps active DATA current', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture);
+
+    const cancelled = await activation.coordinator.cancelBeforeCheckpoint({
+        commandId: CANCEL_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    });
+
+    assert.equal(cancelled.phase, 'cancelled');
+    assert.equal(cancelled.sessionVersion, '2');
+    assert.deepEqual(cancelled.allowedActions, []);
+    assert.equal(fixture.store.status().revision, activation.currentRevision);
+    assert.equal(existsSync(path.join(fixture.dataSlotsRoot, 'active')), true);
+    assert.equal(existsSync(path.join(
+        fixture.activityControlRoot,
+        'restore',
+        cancelled.operationId,
+        'activation-plan-v1',
+    )), false);
+    assert.deepEqual(journalKinds(fixture, cancelled.operationId), []);
+    assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    ).kind, 'clear');
+
+    const reopened = openWorkspaceData(fixture.dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind !== 'ready') {
+        throw new Error('Expected unchanged active DATA to reopen');
+    }
+    fixture.trackStore(reopened.store);
+    const recovered = new (restoreModule().RestoreCoordinator)(
+        reopened.store,
+        fixture.activityControlRoot,
+        {dataSlotsRoot: fixture.dataSlotsRoot},
+    );
+    assert.equal(recovered.query(cancelled.restoreSessionId).phase, 'cancelled');
+});
+
+test('TEST-DATA-006: cancelled DATA truth survives lost external mirror publication', async t => {
+    const fixture = await createFixture(t);
+    let interruptCancellation = false;
+    let interrupted = false;
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (interruptCancellation
+                && !interrupted
+                && point === 'session-record.after-temp-write') {
+                interrupted = true;
+                throw new Error(point);
+            }
+        },
+    });
+    interruptCancellation = true;
+    const command = {
+        commandId: CANCEL_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    } as const;
+
+    await assert.rejects(
+        activation.coordinator.cancelBeforeCheckpoint(command),
+        /session-record\.after-temp-write/,
+    );
+    assert.equal(
+        activation.coordinator.query(command.restoreSessionId).phase,
+        'cancelled',
+    );
+    assert.equal((await activation.coordinator.cancelBeforeCheckpoint(command)).phase, 'cancelled');
+    assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    ).kind, 'clear');
+    assert.equal(fixture.store.status().revision, activation.currentRevision);
+});
+
+test('TEST-DATA-006: pre-checkpoint phase failpoints keep old DATA openable', async t => {
+    for (const point of [
+        'activation.after-candidate-stage',
+        'activation.after-candidate-stage-validation',
+        'activation-close.before-wal-checkpoint',
+        'activation-close.after-wal-checkpoint',
+        'activation.before-data-close',
+        'activation.after-data-close',
+        'activation-plan.after-temp-write',
+        'activation-plan.after-temp-sync',
+        'activation-plan.after-temp-close',
+        'activation-plan.after-publish',
+        'activation-plan.after-reopen',
+        'journal.armed.before-temp-write',
+        'journal.armed.after-temp-write',
+        'journal.armed.after-temp-sync',
+        'journal.armed.after-temp-close',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === point) {
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            await assert.rejects(activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            }), /staging-failed/);
+            const activeStore = activation.coordinator.activeStore();
+            if (activeStore && activeStore !== fixture.store) {
+                fixture.trackStore(activeStore);
+            }
+            assert.equal(
+                activeStore?.status().revision,
+                activation.currentRevision,
+            );
+            assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            ).kind, 'pre-checkpoint-session');
+        });
+    }
+});
+
+test('TEST-DATA-006: cancellation after an unpublished armed record clears the boot gate', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'journal.armed.after-temp-sync') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /staging-failed/);
+
+    const cancelled = await activation.coordinator.cancelBeforeCheckpoint({
+        commandId: CANCEL_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    });
+    const activeStore = activation.coordinator.activeStore();
+    if (activeStore && activeStore !== fixture.store) {
+        fixture.trackStore(activeStore);
+    }
+    assert.equal(cancelled.phase, 'cancelled');
+    assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    ).kind, 'clear');
+});
+
+test('TEST-DATA-006: changed target staging or safety evidence stops before armed', async t => {
+    for (const changed of ['candidate-validation', 'safety-set'] as const) {
+        await t.test(changed, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture);
+            const safety = activation.protectedSession.recoverability.safetySet;
+            assert.equal(safety.state, 'verified');
+            if (safety.state !== 'verified') {
+                throw new Error('Expected verified RestoreSafetySet');
+            }
+            const changedPath = changed === 'candidate-validation'
+                ? path.join(
+                    fixture.activityControlRoot,
+                    'restore',
+                    activation.protectedSession.operationId,
+                    'candidate-validation',
+                    'workspace.sqlite',
+                )
+                : path.join(
+                    fixture.activityControlRoot,
+                    'restore',
+                    activation.protectedSession.operationId,
+                    'safety',
+                    safety.safetySetId,
+                    'workspace.sqlite',
+                );
+            appendFileSync(changedPath, Buffer.from([0]));
+
+            try {
+                await assert.rejects(activation.coordinator.resume({
+                    commandId: RESUME_COMMAND_ID,
+                    restoreSessionId: activation.protectedSession.restoreSessionId,
+                    expectedSessionVersion: activation.protectedSession.sessionVersion,
+                }), /staging-failed/);
+            }
+            finally {
+                const activeStore = activation.coordinator.activeStore();
+                if (activeStore && activeStore !== fixture.store) {
+                    fixture.trackStore(activeStore);
+                }
+            }
+            assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            ).kind, 'pre-checkpoint-session');
+        });
+    }
+});
+
+test('TEST-DATA-006: a published armed record is the exact ordinary-open checkpoint', async t => {
+    for (const point of [
+        'journal.armed.after-publish',
+        'journal.armed.after-reopen',
+        'activation.after-armed',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === point) {
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            await assert.rejects(activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            }), /activation-pending/);
+            assert.equal(activation.coordinator.activeStore(), null);
+            assert.equal(restoreModule().inspectRestoreBeforeWorkspaceOpen(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            ).kind, 'recovery-required');
+        });
+    }
+});
+
+test('TEST-DATA-006: a known journal kind out of state is conflicting evidence', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-armed') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const operationDirectory = path.join(
+        fixture.activityControlRoot,
+        'restore',
+        activation.protectedSession.operationId,
+    );
+    const journalDirectory = path.join(operationDirectory, 'journal');
+    const armed = JSON.parse(readFileSync(path.join(
+        journalDirectory,
+        readdirSync(journalDirectory)[0]!,
+    ), 'utf8')) as {recordDigest: string; planDigest: string};
+    const undigested = {
+        schema: 'courseflow-activation-journal-record-v1',
+        operationId: activation.protectedSession.operationId,
+        sequence: '2',
+        kind: 'observed-retire-old-data',
+        previousRecordDigest: armed.recordDigest,
+        planDigest: armed.planDigest,
+        expectedFingerprints: {},
+        observedFingerprints: {},
+        createdAt: '2026-08-26T12:00:00.000Z',
+    };
+    const record = {
+        ...undigested,
+        recordDigest: createHash('sha256')
+            .update(canonicalJson(undigested), 'utf8')
+            .digest('hex'),
+    };
+    writeFileSync(
+        path.join(
+            journalDirectory,
+            `000002-observed-retire-old-data-${record.recordDigest}`,
+        ),
+        canonicalJson(record),
+    );
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session, null);
+});
+
+test('TEST-DATA-006: a legal journal kind with impossible nested evidence is rejected', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-armed') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const journalDirectory = path.join(
+        fixture.activityControlRoot,
+        'restore',
+        activation.protectedSession.operationId,
+        'journal',
+    );
+    const armed = JSON.parse(readFileSync(path.join(
+        journalDirectory,
+        readdirSync(journalDirectory)[0]!,
+    ), 'utf8')) as {recordDigest: string; planDigest: string};
+    const undigested = {
+        schema: 'courseflow-activation-journal-record-v1',
+        operationId: activation.protectedSession.operationId,
+        sequence: '2',
+        kind: 'intent-retire-old-data',
+        previousRecordDigest: armed.recordDigest,
+        planDigest: armed.planDigest,
+        expectedFingerprints: {before: {}, after: {}},
+        observedFingerprints: null,
+        createdAt: '2026-08-26T12:00:00.000Z',
+    };
+    const record = {
+        ...undigested,
+        recordDigest: createHash('sha256')
+            .update(canonicalJson(undigested), 'utf8')
+            .digest('hex'),
+    };
+    writeFileSync(
+        path.join(journalDirectory, `000002-intent-retire-old-data-${record.recordDigest}`),
+        canonicalJson(record),
+    );
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session, null);
+});
+
+test('TEST-DATA-006: an unknown operation control artifact blocks evidence-based actions', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-armed') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    writeFileSync(path.join(
+        fixture.activityControlRoot,
+        'restore',
+        activation.protectedSession.operationId,
+        'unknown-control',
+    ), 'unknown');
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session, null);
+});
+
+test('TEST-DATA-006: duplicate slot evidence exposes no physical recovery action', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-armed') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const candidateName = `.restore-candidate-${activation.protectedSession.operationId}`;
+    const quarantineName = `.restore-quarantine-${activation.protectedSession.operationId}`;
+    mkdirSync(path.join(fixture.dataSlotsRoot, quarantineName));
+    copyFileSync(
+        path.join(fixture.dataSlotsRoot, candidateName, 'workspace.sqlite'),
+        path.join(fixture.dataSlotsRoot, quarantineName, 'workspace.sqlite'),
+    );
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.deepEqual(boot.session?.allowedActions, []);
+});
+
+test('TEST-DATA-006: A-only activation stages beside DATA and commits DATA last', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture);
+
+    const succeeded = await activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    });
+
+    assert.equal(succeeded.phase, 'succeeded');
+    assert.equal(succeeded.sessionVersion, '3');
+    assert.deepEqual(succeeded.allowedActions, []);
+    assert.equal(succeeded.candidate.actualRevision, activation.candidateRevision);
+    assert.notEqual(activation.currentRevision, activation.candidateRevision);
+    assert.doesNotMatch(JSON.stringify(succeeded), /workspace\.sqlite|[A-Za-z]:[\\/]|\/Users\//);
+
+    const activeStore = activation.coordinator.activeStore();
+    assert.ok(activeStore);
+    fixture.trackStore(activeStore);
+    assert.equal(activeStore.status().revision, activation.candidateRevision);
+    const receipt = activeStore.readRestoreCompletionReceipt(succeeded.operationId);
+    assert.equal(receipt?.outcome, 'succeeded');
+    assert.equal(receipt?.sessionVersion, '3');
+    const rollbackSibling = path.join(
+        fixture.dataSlotsRoot,
+        `.restore-rollback-${succeeded.operationId}`,
+    );
+    assert.equal(existsSync(rollbackSibling), true);
+    const rollbackDatabase = new DatabaseSync(path.join(rollbackSibling, 'workspace.sqlite'), {
+        readOnly: true,
+        readBigInts: true,
+    });
+    try {
+        assert.equal(
+            (rollbackDatabase.prepare(
+                'SELECT revision FROM workspace_state WHERE singleton = 1',
+            ).get() as {revision: bigint}).revision.toString(),
+            activation.currentRevision,
+        );
+    }
+    finally {
+        rollbackDatabase.close();
+    }
+
+    const kinds = journalKinds(fixture, succeeded.operationId);
+    assert.deepEqual(kinds.filter(kind => kind !== 'command-resume'), [
+        'armed',
+        'intent-retire-old-data',
+        'observed-retire-old-data',
+        'intent-install-candidate-data',
+        'observed-install-candidate-data',
+        'candidate-installed',
+        'reopened',
+        'success-receipt',
+        'committed',
+    ]);
+});
+
+test('TEST-DATA-006: a later successful replacement chains prior terminal evidence', async t => {
+    const fixture = await createFixture(t);
+    const firstActivation = await createProtectedActivation(fixture);
+    const first = await firstActivation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: firstActivation.protectedSession.restoreSessionId,
+        expectedSessionVersion: firstActivation.protectedSession.sessionVersion,
+    });
+    const firstStore = firstActivation.coordinator.activeStore();
+    assert.ok(firstStore);
+    fixture.trackStore(firstStore);
+    const postRestore = await firstStore.commit(normalizeRecordSetupDecisionCommand({
+        commandId: POST_RESTORE_COMMAND_ID,
+        followUpId: POST_RESTORE_FOLLOW_UP_ID,
+        workspaceId: WORKSPACE_ID,
+        expectedRevision: firstStore.status().revision,
+        expectedSetupVersion: '0',
+        intent: {
+            kind: 'workspace.record-setup-decision',
+            intentSchemaVersion: 1,
+            payload: {decision: 'later'},
+        },
+    }));
+    assert.equal(postRestore.ok, true);
+
+    const advancedBoot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(advancedBoot.kind, 'committed');
+
+    const candidate = firstActivation.coordinator.listCandidates()
+        .find(item => item.status === 'verified');
+    assert.ok(candidate);
+    const preview = await firstActivation.coordinator.start({
+        commandId: SECOND_START_COMMAND_ID,
+        candidateRef: candidate.candidateRef,
+    });
+    const protectedSession = await firstActivation.coordinator.confirm({
+        commandId: SECOND_CONFIRM_COMMAND_ID,
+        restoreSessionId: preview.restoreSessionId,
+        expectedSessionVersion: preview.sessionVersion,
+        previewToken: preview.previewToken!,
+    });
+    await firstStore.close();
+    const preCheckpointBoot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(preCheckpointBoot.kind, 'pre-checkpoint-session');
+    assert.equal(preCheckpointBoot.terminal?.operationId, first.operationId);
+    const reopened = openWorkspaceData(fixture.dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind !== 'ready') {
+        throw new Error('Expected pre-checkpoint DATA to reopen');
+    }
+    fixture.trackStore(reopened.store);
+    const restarted = new (restoreModule().RestoreCoordinator)(
+        reopened.store,
+        fixture.activityControlRoot,
+        {dataSlotsRoot: fixture.dataSlotsRoot},
+        preCheckpointBoot,
+    );
+    const second = await restarted.resume({
+        commandId: SECOND_RESUME_COMMAND_ID,
+        restoreSessionId: protectedSession.restoreSessionId,
+        expectedSessionVersion: protectedSession.sessionVersion,
+    });
+    const secondStore = restarted.activeStore();
+    assert.ok(secondStore);
+    assert.notEqual(secondStore, firstStore);
+    fixture.trackStore(secondStore);
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'committed');
+    assert.equal(boot.session?.operationId, second.operationId);
+    const secondPlan = JSON.parse(readFileSync(path.join(
+        fixture.activityControlRoot,
+        'restore',
+        second.operationId,
+        'activation-plan-v1',
+    ), 'utf8')) as {previousTerminal: {operationId: string}};
+    assert.equal(secondPlan.previousTerminal.operationId, first.operationId);
+});
+
+test('TEST-DATA-006: terminal success revalidates every slot after DATA reopen', async t => {
+    const fixture = await createFixture(t);
+    let operationId = '';
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'journal.reopened.after-reopen') {
+                appendFileSync(path.join(
+                    fixture.dataSlotsRoot,
+                    `.restore-rollback-${operationId}`,
+                    'workspace.sqlite',
+                ), Buffer.from([0]));
+            }
+        },
+    });
+    operationId = activation.protectedSession.operationId;
+
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session, null);
+});
+
+test('TEST-DATA-006: restart observes a lost retire response before explicit resume', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-retire-action') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    assert.equal(existsSync(path.join(fixture.dataSlotsRoot, 'active')), false);
+    assert.equal(existsSync(path.join(
+        fixture.dataSlotsRoot,
+        `.restore-rollback-${activation.protectedSession.operationId}`,
+    )), true);
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session?.phase, 'recovery-required');
+    assert.deepEqual(boot.session?.allowedActions, ['resume', 'rollback']);
+    assert.equal(existsSync(path.join(fixture.dataSlotsRoot, 'active')), false);
+    assert.equal(
+        journalKinds(fixture, activation.protectedSession.operationId)
+            .includes('observed-retire-old-data'),
+        true,
+    );
+
+    const recovered = restoreModule().RestoreCoordinator.recover(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    const succeeded = await recovered.resume({
+        commandId: RETRY_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: '2',
+    });
+    assert.equal(succeeded.phase, 'succeeded');
+    const activeStore = recovered.activeStore();
+    assert.ok(activeStore);
+    fixture.trackStore(activeStore);
+    assert.equal(activeStore.status().revision, activation.candidateRevision);
+});
+
+test('TEST-DATA-006: concurrent recovery choices commit only the first explicit action', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-armed') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const recovered = restoreModule().RestoreCoordinator.recover(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+
+    const [resume, rollback] = await Promise.allSettled([
+        recovered.resume({
+            commandId: RETRY_COMMAND_ID,
+            restoreSessionId: activation.protectedSession.restoreSessionId,
+            expectedSessionVersion: '2',
+        }),
+        recovered.rollback({
+            commandId: ROLLBACK_COMMAND_ID,
+            restoreSessionId: activation.protectedSession.restoreSessionId,
+            expectedSessionVersion: '2',
+        }),
+    ]);
+
+    assert.equal(resume.status, 'fulfilled');
+    assert.equal(resume.status === 'fulfilled' ? resume.value.phase : null, 'succeeded');
+    assert.equal(rollback.status, 'rejected');
+    assert.match(
+        rollback.status === 'rejected' ? String(rollback.reason) : '',
+        /conflict/,
+    );
+    const activeStore = recovered.activeStore();
+    assert.ok(activeStore);
+    fixture.trackStore(activeStore);
+});
+
+test('TEST-DATA-006: every forward physical phase resumes from fresh evidence', async t => {
+    for (const point of [
+        'activation.before-retire-intent',
+        'activation.after-retire-intent',
+        'activation.after-retire-action',
+        'activation.after-retire-observation',
+        'activation.after-retire-observed',
+        'activation.before-install-intent',
+        'activation.after-install-intent',
+        'activation.after-install-action',
+        'activation.after-install-observation',
+        'activation.after-install-observed',
+        'activation.after-candidate-installed',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            let failpointReached = false;
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === point) {
+                        failpointReached = true;
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            await assert.rejects(activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            }), /activation-pending/);
+            assert.equal(failpointReached, true);
+
+            const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            );
+            assert.equal(boot.kind, 'recovery-required');
+            assert.deepEqual(boot.session?.allowedActions, ['resume', 'rollback']);
+
+            const recovered = restoreModule().RestoreCoordinator.recover(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            );
+            const succeeded = await recovered.resume({
+                commandId: RETRY_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: '2',
+            });
+            assert.equal(succeeded.phase, 'succeeded');
+            const activeStore = recovered.activeStore();
+            assert.ok(activeStore);
+            fixture.trackStore(activeStore);
+            assert.equal(activeStore.status().revision, activation.candidateRevision);
+        });
+    }
+});
+
+test('TEST-DATA-006: checkpoint recovery can quarantine candidate and reopen old DATA', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-install-action') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+
+    const recovered = restoreModule().RestoreCoordinator.recover(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    const rolledBack = await recovered.rollback({
+        commandId: ROLLBACK_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: '2',
+    });
+
+    assert.equal(rolledBack.phase, 'rolled-back');
+    assert.equal(rolledBack.sessionVersion, '3');
+    const activeStore = recovered.activeStore();
+    assert.ok(activeStore);
+    fixture.trackStore(activeStore);
+    assert.equal(activeStore.status().revision, activation.currentRevision);
+    assert.equal(
+        activeStore.readRestoreCompletionReceipt(rolledBack.operationId)?.outcome,
+        'rolled-back',
+    );
+    assert.equal(existsSync(path.join(
+        fixture.dataSlotsRoot,
+        `.restore-quarantine-${rolledBack.operationId}`,
+    )), true);
+    assert.equal(journalKinds(fixture, rolledBack.operationId).at(-1), 'rolled-back');
+});
+
+test('TEST-DATA-006: every rollback physical phase resumes from fresh evidence', async t => {
+    for (const point of [
+        'activation.before-quarantine-intent',
+        'activation.after-quarantine-intent',
+        'activation.after-quarantine-action',
+        'activation.after-quarantine-observation',
+        'activation.after-quarantine-observed',
+        'activation.before-restore-old-intent',
+        'activation.after-restore-old-intent',
+        'activation.after-restore-old-action',
+        'activation.after-restore-old-observation',
+        'activation.after-restore-old-observed',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === 'activation.after-install-action') {
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            await assert.rejects(activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            }), /activation-pending/);
+            let failpointReached = false;
+            const interrupted = restoreModule().RestoreCoordinator.recover(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+                {
+                    failpoint(candidate) {
+                        if (candidate === point) {
+                            failpointReached = true;
+                            throw new Error(candidate);
+                        }
+                    },
+                },
+            );
+            await assert.rejects(interrupted.rollback({
+                commandId: ROLLBACK_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: '2',
+            }), /rollback-required/);
+            assert.equal(failpointReached, true);
+
+            const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            );
+            assert.equal(boot.kind, 'recovery-required');
+            assert.deepEqual(
+                boot.session?.allowedActions,
+                point === 'activation.before-quarantine-intent'
+                    ? ['resume', 'rollback']
+                    : ['rollback'],
+            );
+
+            const recovered = restoreModule().RestoreCoordinator.recover(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+            );
+            const rolledBack = await recovered.rollback({
+                commandId: ROLLBACK_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: '2',
+            });
+            assert.equal(rolledBack.phase, 'rolled-back');
+            const activeStore = recovered.activeStore();
+            assert.ok(activeStore);
+            fixture.trackStore(activeStore);
+            assert.equal(activeStore.status().revision, activation.currentRevision);
+        });
+    }
+});
+
+test('TEST-DATA-006: rollback receipt binds the last observed physical state', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture, {
+        failpoint(point) {
+            if (point === 'activation.after-install-action') {
+                throw new Error(point);
+            }
+        },
+    });
+    await assert.rejects(activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    }), /activation-pending/);
+    const interrupted = restoreModule().RestoreCoordinator.recover(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+        {
+            failpoint(point) {
+                if (point === 'activation.after-restore-old-observed') {
+                    throw new Error(point);
+                }
+            },
+        },
+    );
+    await assert.rejects(interrupted.rollback({
+        commandId: ROLLBACK_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: '2',
+    }), /rollback-required/);
+
+    const recovered = restoreModule().RestoreCoordinator.recover(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    const rolledBack = await recovered.rollback({
+        commandId: RETRY_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: '2',
+    });
+    const activeStore = recovered.activeStore();
+    assert.ok(activeStore);
+    fixture.trackStore(activeStore);
+    const receipt = activeStore.readRestoreCompletionReceipt(rolledBack.operationId);
+    assert.ok(receipt);
+    const journalDirectory = path.join(
+        fixture.activityControlRoot,
+        'restore',
+        rolledBack.operationId,
+        'journal',
+    );
+    const precommit = readdirSync(journalDirectory)
+        .map(name => JSON.parse(readFileSync(path.join(journalDirectory, name), 'utf8')) as {
+            kind: string;
+            recordDigest: string;
+        })
+        .find(record => record.recordDigest === receipt.precommit.recordDigest);
+    assert.equal(precommit?.kind, 'observed-restore-old-data');
+});
+
+test('TEST-DATA-006: reboot completes external commit only from the typed DATA receipt', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture);
+    const succeeded = await activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    });
+    await activation.coordinator.activeStore()?.close();
+    const journalDirectory = path.join(
+        fixture.activityControlRoot,
+        'restore',
+        succeeded.operationId,
+        'journal',
+    );
+    for (const name of readdirSync(journalDirectory)) {
+        if (name.includes('-success-receipt-') || name.includes('-committed-')) {
+            rmSync(path.join(journalDirectory, name));
+        }
+    }
+    assert.equal(
+        journalKinds(fixture, succeeded.operationId).includes('committed'),
+        false,
+    );
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+
+    assert.equal(boot.kind, 'committed');
+    assert.equal(boot.session?.phase, 'succeeded');
+    assert.equal(journalKinds(fixture, activation.protectedSession.operationId).at(-1), 'committed');
+    const reopened = openWorkspaceData(fixture.dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind === 'ready') {
+        fixture.trackStore(reopened.store);
+        assert.equal(
+            reopened.store.readRestoreCompletionReceipt(
+                activation.protectedSession.operationId,
+            )?.outcome,
+            'succeeded',
+        );
+    }
+});
+
+test('TEST-DATA-006: external terminal without its DATA receipt remains blocked', async t => {
+    const fixture = await createFixture(t);
+    const activation = await createProtectedActivation(fixture);
+    const succeeded = await activation.coordinator.resume({
+        commandId: RESUME_COMMAND_ID,
+        restoreSessionId: activation.protectedSession.restoreSessionId,
+        expectedSessionVersion: activation.protectedSession.sessionVersion,
+    });
+    await activation.coordinator.activeStore()?.close();
+    const database = new DatabaseSync(path.join(
+        fixture.dataSlotsRoot,
+        'active',
+        'workspace.sqlite',
+    ));
+    try {
+        database.prepare(
+            'DELETE FROM restore_completion_receipts WHERE operation_id = ?',
+        ).run(succeeded.operationId);
+    }
+    finally {
+        database.close();
+    }
+
+    const boot = restoreModule().inspectRestoreBeforeWorkspaceOpen(
+        fixture.activityControlRoot,
+        fixture.dataSlotsRoot,
+    );
+    assert.equal(boot.kind, 'recovery-required');
+    assert.equal(boot.session, null);
+});
+
+test('TEST-DATA-006: receipt and terminal failpoints reconcile to reopened success', async t => {
+    for (const point of [
+        'activation.after-success-receipt',
+        'journal.success-receipt.after-publish',
+        'journal.committed.after-publish',
+        'activation.after-committed',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === point) {
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            const succeeded = await activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            });
+            assert.equal(succeeded.phase, 'succeeded');
+            const activeStore = activation.coordinator.activeStore();
+            assert.ok(activeStore);
+            fixture.trackStore(activeStore);
+            assert.equal(activeStore.status().revision, activation.candidateRevision);
+            assert.equal(
+                activeStore.readRestoreCompletionReceipt(succeeded.operationId)?.outcome,
+                'succeeded',
+            );
+        });
+    }
+});
+
+test('TEST-DATA-006: rollback receipt and terminal failpoints reconcile to reopened old DATA', async t => {
+    for (const point of [
+        'activation.after-rollback-receipt',
+        'journal.rollback-receipt.after-publish',
+        'journal.rolled-back.after-publish',
+        'activation.after-rolled-back',
+    ]) {
+        await t.test(point, async child => {
+            const fixture = await createFixture(child);
+            const activation = await createProtectedActivation(fixture, {
+                failpoint(candidate) {
+                    if (candidate === 'activation.after-install-action') {
+                        throw new Error(candidate);
+                    }
+                },
+            });
+            await assert.rejects(activation.coordinator.resume({
+                commandId: RESUME_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: activation.protectedSession.sessionVersion,
+            }), /activation-pending/);
+            let failpointReached = false;
+            const recovered = restoreModule().RestoreCoordinator.recover(
+                fixture.activityControlRoot,
+                fixture.dataSlotsRoot,
+                {
+                    failpoint(candidate) {
+                        if (candidate === point) {
+                            failpointReached = true;
+                            throw new Error(candidate);
+                        }
+                    },
+                },
+            );
+            const rolledBack = await recovered.rollback({
+                commandId: ROLLBACK_COMMAND_ID,
+                restoreSessionId: activation.protectedSession.restoreSessionId,
+                expectedSessionVersion: '2',
+            });
+            assert.equal(failpointReached, true);
+            assert.equal(rolledBack.phase, 'rolled-back');
+            const activeStore = recovered.activeStore();
+            assert.ok(activeStore);
+            fixture.trackStore(activeStore);
+            assert.equal(activeStore.status().revision, activation.currentRevision);
+            assert.equal(
+                activeStore.readRestoreCompletionReceipt(rolledBack.operationId)?.outcome,
+                'rolled-back',
+            );
         });
     }
 });

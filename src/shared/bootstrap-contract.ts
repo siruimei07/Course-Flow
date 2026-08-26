@@ -37,7 +37,7 @@ export type DataOpenProblem =
       affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
       allowedActions: readonly [];
       context: Readonly<Record<never, never>>;
-      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 15 }>;
+      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 16 }>;
     }>
   | Readonly<{
       code: 'integrity';
@@ -58,6 +58,18 @@ export type DataOpenProblem =
       allowedActions: readonly [];
       context: Readonly<Record<never, never>>;
       details: Readonly<{ reason: 'database-unreadable' }>;
+    }>
+  | Readonly<{
+      code: 'recovery-required';
+      scope: 'workspace';
+      dataEffect: 'unchanged';
+      affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+      allowedActions: readonly ('resume' | 'rollback')[];
+      context: Readonly<{
+        restoreSessionId: string;
+        operationId: string;
+      }>;
+      details: Readonly<{ reason: 'restore-activation-pending' }>;
     }>;
 
 export type WorkspaceDataStatus =
@@ -65,13 +77,13 @@ export type WorkspaceDataStatus =
   | Readonly<{
       kind: 'ready';
       workspaceId: string;
-      schemaLevel: 15;
+      schemaLevel: 16;
       revision: string;
     }>
   | Readonly<{
       kind: 'read-only';
       workspaceId: string;
-      schemaLevel: 15;
+      schemaLevel: 16;
       revision: string;
       problem: DataOpenProblem;
     }>
@@ -177,11 +189,27 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
     ]) ||
     value.scope !== 'workspace' ||
     value.dataEffect !== 'unchanged' ||
-    !isExactStringList(value.allowedActions, []) ||
     !isPlainObject(value.context) ||
-    !hasOnlyKeys(value.context, []) ||
     !isPlainObject(value.details)
   ) {
+    return false;
+  }
+
+  if (value.code === 'recovery-required'
+    && hasOnlyKeys(value.details, ['reason'])
+    && value.details.reason === 'restore-activation-pending') {
+    const actions = JSON.stringify(value.allowedActions);
+    return isExactStringList(value.affectedCapabilities, ['workspace.read', 'workspace.write'])
+      && (actions === JSON.stringify(['resume', 'rollback'])
+        || actions === JSON.stringify(['resume'])
+        || actions === JSON.stringify(['rollback'])
+        || actions === JSON.stringify([]))
+      && hasOnlyKeys(value.context, ['restoreSessionId', 'operationId'])
+      && isCanonicalUuid(value.context.restoreSessionId)
+      && isCanonicalUuid(value.context.operationId);
+  }
+
+  if (!isExactStringList(value.allowedActions, []) || !hasOnlyKeys(value.context, [])) {
     return false;
   }
 
@@ -199,9 +227,9 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
       hasOnlyKeys(value.details, ['actualSchemaLevel', 'requiredSchemaLevel']) &&
       typeof value.details.actualSchemaLevel === 'number' &&
       Number.isSafeInteger(value.details.actualSchemaLevel) &&
-      value.details.actualSchemaLevel !== 15 &&
+      value.details.actualSchemaLevel !== 16 &&
       value.details.actualSchemaLevel >= 1 &&
-      value.details.requiredSchemaLevel === 15
+      value.details.requiredSchemaLevel === 16
     );
   }
 
@@ -244,7 +272,7 @@ function isWorkspaceDataStatus(value: unknown): value is WorkspaceDataStatus {
     (value.kind === 'ready' || value.kind === 'read-only') &&
     hasOnlyKeys(value, statusKeys) &&
     isCanonicalUuid(value.workspaceId) &&
-    value.schemaLevel === 15 &&
+    value.schemaLevel === 16 &&
     isCanonicalUnsignedSqliteInteger(value.revision) &&
     (value.kind === 'ready' || isDataOpenProblem(value.problem))
   );

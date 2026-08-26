@@ -38,13 +38,19 @@ import {
 import {
     isDataProtectionProjection,
     isRestoreSessionView,
+    normalizeCancelRestoreSessionCommand,
     normalizeConfirmRestoreSessionCommand,
     normalizeConfigureBackupDestinationCommand,
+    normalizeResumeRestoreSessionCommand,
+    normalizeRollbackRestoreSessionCommand,
     normalizeStartRestoreSessionCommand,
+    type CancelRestoreSessionCommand,
     type ConfirmRestoreSessionCommand,
     type ConfigureBackupDestinationCommand,
     type DataProtectionProjection,
     type RestoreSessionView,
+    type ResumeRestoreSessionCommand,
+    type RollbackRestoreSessionCommand,
     type StartRestoreSessionCommand,
 } from './workspace-protection-contract';
 import {
@@ -165,6 +171,21 @@ export type RestoreSessionQueryRequest = WorkspaceRequestBase & Readonly<{
 export type ConfirmRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.restore.confirm';
     command: ConfirmRestoreSessionCommand;
+}>;
+
+export type CancelRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.cancel';
+    command: CancelRestoreSessionCommand;
+}>;
+
+export type ResumeRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.resume';
+    command: ResumeRestoreSessionCommand;
+}>;
+
+export type RollbackRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.rollback';
+    command: RollbackRestoreSessionCommand;
 }>;
 
 export type SelectedBackupDestinationRequest = WorkspaceRequestBase & Readonly<{
@@ -319,6 +340,9 @@ export type WorkspaceSetupRequest =
     | StartRestoreSessionRequest
     | RestoreSessionQueryRequest
     | ConfirmRestoreSessionRequest
+    | CancelRestoreSessionRequest
+    | ResumeRestoreSessionRequest
+    | RollbackRestoreSessionRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
     | CreateHolidayRangeRequest
@@ -857,6 +881,57 @@ export function makeConfirmRestoreSessionRequest(
         requestId,
         workspaceEpoch,
         command: normalizeConfirmRestoreSessionCommand(command),
+    };
+}
+
+/** Builds the exact pre-checkpoint Restore cancellation request. */
+export function makeCancelRestoreSessionRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: CancelRestoreSessionCommand,
+): CancelRestoreSessionRequest {
+    return {
+        kind: 'workspace.restore.cancel',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeCancelRestoreSessionCommand(command),
+    };
+}
+
+/** Builds the exact evidence-bound Restore continuation request. */
+export function makeResumeRestoreSessionRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ResumeRestoreSessionCommand,
+): ResumeRestoreSessionRequest {
+    return {
+        kind: 'workspace.restore.resume',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeResumeRestoreSessionCommand(command),
+    };
+}
+
+/** Builds the exact evidence-bound Restore rollback request. */
+export function makeRollbackRestoreSessionRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: RollbackRestoreSessionCommand,
+): RollbackRestoreSessionRequest {
+    return {
+        kind: 'workspace.restore.rollback',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeRollbackRestoreSessionCommand(command),
     };
 }
 
@@ -1563,6 +1638,9 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.meeting-occurrence.cancel'
             && value.kind !== 'workspace.restore.start'
             && value.kind !== 'workspace.restore.confirm'
+            && value.kind !== 'workspace.restore.cancel'
+            && value.kind !== 'workspace.restore.resume'
+            && value.kind !== 'workspace.restore.rollback'
             && value.kind !== 'workspace.protection.configure')
         || !hasExactDataKeys(value, [
             'kind',
@@ -1584,6 +1662,15 @@ export function isWorkspaceSetupRequest(
         }
         else if (value.kind === 'workspace.restore.confirm') {
             normalizeConfirmRestoreSessionCommand(value.command);
+        }
+        else if (value.kind === 'workspace.restore.cancel') {
+            normalizeCancelRestoreSessionCommand(value.command);
+        }
+        else if (value.kind === 'workspace.restore.resume') {
+            normalizeResumeRestoreSessionCommand(value.command);
+        }
+        else if (value.kind === 'workspace.restore.rollback') {
+            normalizeRollbackRestoreSessionCommand(value.command);
         }
         else if (value.kind === 'workspace.term.create') {
             normalizeCreateTermCommand(value.command);

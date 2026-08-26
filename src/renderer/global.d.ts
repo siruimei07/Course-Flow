@@ -43,6 +43,7 @@ import type { WindowControlAction } from '../shared/window-control-contract';
 import type {
   ConfigureBackupDestinationCommand,
   ConfirmRestoreSessionCommand,
+  RestoreSessionActionCommand,
   StartRestoreSessionCommand,
 } from '../shared/workspace-protection-contract';
 
@@ -57,6 +58,9 @@ declare global {
       startRestoreSession(command: StartRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
       queryRestoreSession(restoreSessionId: string): Promise<WorkspaceSetupOutcome>;
       confirmRestoreSession(command: ConfirmRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
+      cancelRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
+      resumeRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
+      rollbackRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
       saveSetupDraftCheckpoint(input: SaveSetupDraftCheckpointInput): Promise<WorkspaceSetupOutcome>;
       discardSetupDraftCheckpoint(expectedVersion: string): Promise<WorkspaceSetupOutcome>;
       queryPlan(): Promise<WorkspaceSetupOutcome>;

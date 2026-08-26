@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 15;
+export const CURRENT_SCHEMA_LEVEL = 16;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -46,6 +46,7 @@ const candidateRefCheck = UUID_CHECK.replaceAll('%COLUMN%', 'candidate_ref');
 const safetySetIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'safety_set_id');
 const libraryRootIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_library_root_id');
 const rootGenerationCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_root_generation');
+const activeWorkspaceIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'active_workspace_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -1546,6 +1547,89 @@ const LEVEL_15_RESTORE_DDL = `
 
 const LEVEL_15_DDL = LEVEL_14_DDL + LEVEL_15_RESTORE_DDL;
 
+const LEVEL_16_RESTORE_SESSION_DDL = LEVEL_15_RESTORE_DDL
+    .replace('source_schema_level BETWEEN 13 AND 15', 'source_schema_level BETWEEN 13 AND 16')
+    .replace(
+        'prepared_schema_level = 15',
+        'prepared_schema_level BETWEEN 15 AND 16',
+    )
+    .replace(
+        "phase IN ('previewed', 'waiting-decision', 'protection-established')",
+        "phase IN ('previewed', 'waiting-decision', 'protection-established', 'cancelled')",
+    )
+    .replace(
+        "command_kind IN ('start', 'confirm')",
+        "command_kind IN ('start', 'confirm', 'cancel')",
+    )
+    .replace('result_session_version IN (0, 1)', 'result_session_version BETWEEN 0 AND 2')
+    .replace(
+        `AND safety_root_digest IS NOT NULL)
+        )
+    ) STRICT;`,
+        `AND safety_root_digest IS NOT NULL)
+            OR (phase = 'cancelled'
+                AND session_version IN (1, 2)
+                AND preview_token IS NULL
+                AND problem_code IS NULL
+                AND (
+                    (safety_set_id IS NULL
+                        AND safety_protected_revision IS NULL
+                        AND safety_root_digest IS NULL)
+                    OR (safety_set_id IS NOT NULL
+                        AND safety_protected_revision = current_revision
+                        AND safety_root_digest IS NOT NULL)
+                ))
+        )
+    ) STRICT;`,
+    );
+
+const LEVEL_16_RESTORE_COMPLETION_DDL = `
+    CREATE TABLE restore_completion_receipts (
+        operation_id TEXT PRIMARY KEY CHECK (${operationIdCheck}),
+        restore_session_id TEXT NOT NULL UNIQUE CHECK (${restoreSessionIdCheck}),
+        outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'rolled-back')),
+        session_version INTEGER NOT NULL CHECK (session_version = 3),
+        source_snapshot_id TEXT NOT NULL CHECK (${snapshotIdCheck.replaceAll(
+            'snapshot_id',
+            'source_snapshot_id',
+        )}),
+        source_root_digest TEXT NOT NULL CHECK (
+            length(source_root_digest) = 64
+            AND source_root_digest = lower(source_root_digest)
+            AND source_root_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_schema_level INTEGER NOT NULL CHECK (source_schema_level BETWEEN 13 AND 16),
+        post_migration_schema_level INTEGER NOT NULL CHECK (post_migration_schema_level = 16),
+        active_workspace_id TEXT NOT NULL CHECK (${activeWorkspaceIdCheck}),
+        active_revision INTEGER NOT NULL CHECK (active_revision >= 0),
+        library_state TEXT NOT NULL CHECK (library_state = 'absent'),
+        protection_mode TEXT NOT NULL CHECK (protection_mode = 'required'),
+        safety_set_id TEXT NOT NULL CHECK (${safetySetIdCheck}),
+        plan_digest TEXT NOT NULL CHECK (
+            length(plan_digest) = 64
+            AND plan_digest = lower(plan_digest)
+            AND plan_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        precommit_sequence INTEGER NOT NULL CHECK (precommit_sequence > 0),
+        precommit_record_digest TEXT NOT NULL CHECK (
+            length(precommit_record_digest) = 64
+            AND precommit_record_digest = lower(precommit_record_digest)
+            AND precommit_record_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        route TEXT NOT NULL CHECK (route IN ('setup', 'today')),
+        receipt_format_version TEXT NOT NULL CHECK (receipt_format_version = '1'),
+        receipt_digest TEXT NOT NULL CHECK (
+            length(receipt_digest) = 64
+            AND receipt_digest = lower(receipt_digest)
+            AND receipt_digest NOT GLOB '*[^0-9a-f]*'
+        )
+    ) STRICT;
+`;
+
+const LEVEL_16_DDL = LEVEL_14_DDL
+    + LEVEL_16_RESTORE_SESSION_DDL
+    + LEVEL_16_RESTORE_COMPLETION_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -1644,6 +1728,27 @@ const TABLE_COLUMNS = {
         ['payload_digest', 'BLOB', 1, 0],
         ['restore_session_id', 'TEXT', 1, 0],
         ['result_session_version', 'INTEGER', 1, 0],
+    ],
+    restore_completion_receipts: [
+        ['operation_id', 'TEXT', 1, 1],
+        ['restore_session_id', 'TEXT', 1, 0],
+        ['outcome', 'TEXT', 1, 0],
+        ['session_version', 'INTEGER', 1, 0],
+        ['source_snapshot_id', 'TEXT', 1, 0],
+        ['source_root_digest', 'TEXT', 1, 0],
+        ['source_schema_level', 'INTEGER', 1, 0],
+        ['post_migration_schema_level', 'INTEGER', 1, 0],
+        ['active_workspace_id', 'TEXT', 1, 0],
+        ['active_revision', 'INTEGER', 1, 0],
+        ['library_state', 'TEXT', 1, 0],
+        ['protection_mode', 'TEXT', 1, 0],
+        ['safety_set_id', 'TEXT', 1, 0],
+        ['plan_digest', 'TEXT', 1, 0],
+        ['precommit_sequence', 'INTEGER', 1, 0],
+        ['precommit_record_digest', 'TEXT', 1, 0],
+        ['route', 'TEXT', 1, 0],
+        ['receipt_format_version', 'TEXT', 1, 0],
+        ['receipt_digest', 'TEXT', 1, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1917,6 +2022,7 @@ const FOREIGN_KEYS = {
     backup_cleanup_operations: [],
     restore_sessions: [],
     restore_command_receipts: [['restore_session_id', 'restore_sessions', 'restore_session_id']],
+    restore_completion_receipts: [],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -2015,6 +2121,11 @@ const LEVEL_15_TABLES = [
     'restore_command_receipts',
 ] as const;
 
+const LEVEL_16_TABLES = [
+    ...LEVEL_15_TABLES,
+    'restore_completion_receipts',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -2035,7 +2146,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -2071,7 +2182,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 13) {
         return LEVEL_13_TABLES;
     }
-    return level === 14 ? LEVEL_14_TABLES : LEVEL_15_TABLES;
+    if (level === 14) {
+        return LEVEL_14_TABLES;
+    }
+    return level === 15 ? LEVEL_15_TABLES : LEVEL_16_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -2120,7 +2234,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                                         ? LEVEL_13_DDL
                                                         : level === 14
                                                             ? LEVEL_14_DDL
-                                                            : LEVEL_15_DDL;
+                                                            : level === 15
+                                                                ? LEVEL_15_DDL
+                                                                : LEVEL_16_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -2962,7 +3078,7 @@ function validateLevel14ProtectionFacts(database: DatabaseSync): void {
  * @param {DatabaseSync} database - Open CourseFlow database at schema level 15.
  * @return {void}
  */
-function validateLevel15RestoreFacts(database: DatabaseSync): void {
+function validateLevel15RestoreFacts(database: DatabaseSync, allowCancelled: boolean): void {
     const sessions = database.prepare(`
         SELECT
             session.restore_session_id,
@@ -2991,6 +3107,13 @@ function validateLevel15RestoreFacts(database: DatabaseSync): void {
                 SELECT count(*)
                 FROM restore_command_receipts AS receipt
                 WHERE receipt.restore_session_id = session.restore_session_id
+                    AND receipt.command_kind = 'cancel'
+                    AND receipt.result_session_version = session.session_version
+            ) AS cancel_receipt_count,
+            (
+                SELECT count(*)
+                FROM restore_command_receipts AS receipt
+                WHERE receipt.restore_session_id = session.restore_session_id
             ) AS receipt_count
         FROM restore_sessions AS session
         JOIN workspace_state AS workspace ON workspace.singleton = 1
@@ -3000,26 +3123,37 @@ function validateLevel15RestoreFacts(database: DatabaseSync): void {
         restore_session_id: string;
         current_workspace_id: string;
         current_revision: bigint;
-        phase: 'previewed' | 'waiting-decision' | 'protection-established';
+        phase: 'previewed' | 'waiting-decision' | 'protection-established' | 'cancelled';
         session_version: bigint;
         safety_protected_revision: bigint | null;
         workspace_id: string;
         revision: bigint;
         start_receipt_count: bigint;
         confirm_receipt_count: bigint;
+        cancel_receipt_count: bigint;
         receipt_count: bigint;
     }>;
     if (rows.some(row => row.current_workspace_id !== row.workspace_id
         || row.current_revision > row.revision
         || row.start_receipt_count !== 1n
+        || (!allowCancelled && row.phase === 'cancelled')
         || (row.phase === 'previewed'
             && (row.session_version !== 0n
                 || row.confirm_receipt_count !== 0n
+                || row.cancel_receipt_count !== 0n
                 || row.receipt_count !== 1n))
-        || (row.phase !== 'previewed'
+        || ((row.phase === 'waiting-decision' || row.phase === 'protection-established')
             && (row.session_version !== 1n
                 || row.confirm_receipt_count !== 1n
+                || row.cancel_receipt_count !== 0n
                 || row.receipt_count !== 2n))
+        || (row.phase === 'cancelled'
+            && (row.cancel_receipt_count !== 1n
+                || (row.session_version === 1n
+                    ? row.confirm_receipt_count !== 0n || row.receipt_count !== 2n
+                    : row.session_version !== 2n
+                        || row.confirm_receipt_count !== 1n
+                        || row.receipt_count !== 3n)))
         || (row.phase === 'protection-established'
             && row.safety_protected_revision !== row.current_revision))) {
         rejectSchema('database-corrupt');
@@ -3070,7 +3204,7 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
         validateLevel14ProtectionFacts(database);
     }
     if (level >= 15) {
-        validateLevel15RestoreFacts(database);
+        validateLevel15RestoreFacts(database, level >= 16);
     }
 
     return validateBootstrapFacts(database, level);
@@ -4156,6 +4290,37 @@ export function migrateLevel14To15(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds typed Restore completion receipts and marks the migration revision pending.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel15To16(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE restore_command_receipts RENAME TO restore_command_receipts_level_15;
+        ALTER TABLE restore_sessions RENAME TO restore_sessions_level_15;
+        DROP INDEX restore_command_receipts_by_session;
+
+        ${LEVEL_16_RESTORE_SESSION_DDL}
+
+        INSERT INTO restore_sessions SELECT * FROM restore_sessions_level_15;
+        INSERT INTO restore_command_receipts SELECT * FROM restore_command_receipts_level_15;
+
+        DROP TABLE restore_command_receipts_level_15;
+        DROP TABLE restore_sessions_level_15;
+
+        ${LEVEL_16_RESTORE_COMPLETION_DDL}
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 16;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -4265,6 +4430,15 @@ export function createSchemaLevel14(database: DatabaseSync): void {
  */
 export function createSchemaLevel15(database: DatabaseSync): void {
     database.exec(LEVEL_15_DDL);
+}
+
+/**
+ * Creates the current level 16 schema with typed Restore completion receipts.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel16(database: DatabaseSync): void {
+    database.exec(LEVEL_16_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -4380,4 +4554,13 @@ export function validateSchemaLevel14(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel15(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 15);
+}
+
+/**
+ * Validates the current level 16 schema and Restore completion receipt storage.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel16(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 16);
 }

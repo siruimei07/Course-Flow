@@ -7,6 +7,7 @@ import path from 'node:path';
 
 import {CURRENT_SCHEMA_LEVEL} from '../data/schema';
 import {
+    openWorkspaceData,
     type PreparedRestoreDatabaseFacts,
     type RestoreDatabaseFacts,
     type SqliteDataStore,
@@ -29,6 +30,9 @@ import {
     BACKUP_REPOSITORY_SCHEMA,
     isRestoreCandidateProjection,
     isRestoreSessionView,
+    normalizeCancelRestoreSessionCommand,
+    normalizeResumeRestoreSessionCommand,
+    normalizeRollbackRestoreSessionCommand,
     normalizeConfirmRestoreSessionCommand,
     normalizeStartRestoreSessionCommand,
     type ConfirmRestoreSessionCommand,
@@ -36,6 +40,7 @@ import {
     type RestoreImpactSummary,
     type RestoreLibraryRootBinding,
     type RestoreSessionView,
+    type RestoreSessionActionCommand,
     type StartRestoreSessionCommand,
 } from '../shared/workspace-protection-contract';
 import {
@@ -51,6 +56,16 @@ import {
     createRestoreSafetyManifestV1,
     validateRestoreSafetyManifestV1,
 } from './restore-safety-manifest';
+import {
+    beginRestoreActivation,
+    continueRestoreActivation,
+    inspectRestoreBeforeWorkspaceOpen,
+    recordRestoreSessionControl,
+    rollbackRestoreActivation,
+    RestoreActivationError,
+    type RestoreBootState,
+    type RestoreTerminalEvidence,
+} from './restore-activation';
 
 const REPOSITORY_DIRECTORY_NAME = 'CourseFlow';
 const REPOSITORY_MARKER_NAME = 'repository-v1.json';
@@ -70,6 +85,7 @@ const MODULES = Object.freeze([
 ]);
 
 export type RestoreCoordinatorOptions = Readonly<{
+    dataSlotsRoot?: string;
     currentLibraryBinding?: () => RestoreLibraryRootBinding;
     targetBindingVersion?: () => string;
     impactSummary?: (
@@ -78,6 +94,7 @@ export type RestoreCoordinatorOptions = Readonly<{
     ) => RestoreImpactSummary;
     identityFactory?: () => string;
     clock?: Readonly<{now(): string}>;
+    failpoint?: (point: string) => void;
 }>;
 
 type ObservedCandidate = Readonly<{
@@ -105,6 +122,7 @@ type InternalRestoreSession = {
     candidateDatabasePath: string;
     preparedDatabasePath: string;
     binding: PreviewBinding;
+    safetyRootDigest: string | null;
 };
 
 type CommandReceipt = Readonly<{
@@ -113,8 +131,8 @@ type CommandReceipt = Readonly<{
 }>;
 
 export class RestoreSessionError extends Error {
-    public constructor(public readonly code: string) {
-        super(code);
+    public constructor(public readonly code: string, cause?: unknown) {
+        super(code, {cause});
         this.name = 'RestoreSessionError';
     }
 }
@@ -259,15 +277,103 @@ export class RestoreCoordinator {
     private readonly candidateRefs = new Map<string, string>();
     private readonly sessions = new Map<string, InternalRestoreSession>();
     private readonly receipts = new Map<string, CommandReceipt>();
-    private confirmationTail: Promise<void> = Promise.resolve();
+    private mutationTail: Promise<void> = Promise.resolve();
+    private store: SqliteDataStore | null;
+    private terminal: RestoreTerminalEvidence | null;
 
     public constructor(
-        private readonly store: SqliteDataStore,
+        store: SqliteDataStore | null,
         private readonly activityControlRoot: string,
         private readonly options: RestoreCoordinatorOptions = {},
+        bootState?: RestoreBootState,
     ) {
+        this.store = store;
+        this.terminal = bootState?.terminal ?? null;
         listPlainDirectory(activityControlRoot);
-        this.loadPersistedSessions();
+        if ((bootState?.kind === 'committed' || bootState?.kind === 'recovery-required')
+            && bootState.session) {
+            this.sessions.set(bootState.session.restoreSessionId, {
+                view: bootState.session,
+                candidateEntryName: '',
+                candidateDatabasePath: '',
+                preparedDatabasePath: '',
+                binding: {
+                    candidateRootDigest: '',
+                    candidateDatabaseDigest: '',
+                    currentRevision: bootState.session.current.revision,
+                    currentLibrary: bootState.session.current.libraryRoot,
+                    targetBindingVersion: '0',
+                    impact: bootState.session.impact,
+                },
+                safetyRootDigest: null,
+            });
+        }
+        else if (store) {
+            this.loadPersistedSessions();
+        }
+    }
+
+    /**
+     * Reconstructs a checkpointed coordinator without opening ordinary DATA.
+     * @param {string} activityControlRoot - Stable external control root.
+     * @param {string} dataSlotsRoot - Stable DataSlots parent.
+     * @param {RestoreCoordinatorOptions} options - Recovery failpoints and clock.
+     * @return {RestoreCoordinator} Recovery-only coordinator.
+     */
+    public static recover(
+        activityControlRoot: string,
+        dataSlotsRoot: string,
+        options: RestoreCoordinatorOptions = {},
+    ): RestoreCoordinator {
+        const bootState = inspectRestoreBeforeWorkspaceOpen(activityControlRoot, dataSlotsRoot);
+        if (bootState.kind !== 'recovery-required') {
+            throw new RestoreSessionError('not-found');
+        }
+        return new RestoreCoordinator(
+            null,
+            activityControlRoot,
+            {...options, dataSlotsRoot},
+            bootState,
+        );
+    }
+
+    /**
+     * Returns the currently reopened DATA owner after success or rollback.
+     * @return {SqliteDataStore | null} Active store, or null while recovery blocks ordinary open.
+     */
+    public activeStore(): SqliteDataStore | null {
+        return this.store;
+    }
+
+    /**
+     * Reports whether a confirmed or checkpointed session must block ordinary Workspace work.
+     * @return {boolean} True while Restore maintenance is required.
+     */
+    public requiresMaintenance(): boolean {
+        return Array.from(this.sessions.values()).some(session => (
+            session.view.phase === 'protection-established'
+            || session.view.phase === 'recovery-required'
+        ));
+    }
+
+    /**
+     * Requires the current pre-checkpoint or reopened DATA owner.
+     * @return {SqliteDataStore} Live DATA store.
+     */
+    private requireStore(): SqliteDataStore {
+        if (!this.store) {
+            throw new RestoreSessionError('activation-pending');
+        }
+        return this.store;
+    }
+
+    private replayDurableSession(restoreSessionId: string): RestoreSessionView {
+        const view = this.query(restoreSessionId);
+        recordRestoreSessionControl(this.activityControlRoot, view, {
+            clock: this.options.clock,
+            failpoint: this.options.failpoint,
+        });
+        return view;
     }
 
     /**
@@ -275,7 +381,8 @@ export class RestoreCoordinator {
      * @return {readonly RestoreCandidateProjection[]} Exact path-free candidates.
      */
     public listCandidates(): readonly RestoreCandidateProjection[] {
-        const configuration = this.store.readBackupConfigurationForProtection();
+        const store = this.requireStore();
+        const configuration = store.readBackupConfigurationForProtection();
         if (!configuration) {
             return Object.freeze([]);
         }
@@ -288,11 +395,11 @@ export class RestoreCoordinator {
             backupSetDirectoryName: configuration.backupSetId,
         });
         const excludedOperationEntries = new Set<string>();
-        const backupOperation = this.store.readBackupOperation();
+        const backupOperation = store.readBackupOperation();
         if (backupOperation) {
             excludedOperationEntries.add(backupOperation.stagingDirectoryName);
         }
-        const cleanupOperation = this.store.readBackupCleanupOperation();
+        const cleanupOperation = store.readBackupCleanupOperation();
         if (cleanupOperation) {
             excludedOperationEntries.add(cleanupOperation.quarantineDirectoryName);
         }
@@ -319,12 +426,20 @@ export class RestoreCoordinator {
             }
             return Promise.resolve(prior.view);
         }
-        const durablePrior = this.store.readRestoreCommandReceipt(command.commandId);
+        const store = this.requireStore();
+        const durablePrior = store.readRestoreCommandReceipt(command.commandId);
         if (durablePrior) {
             if (durablePrior.payloadDigest !== commandDigest) {
                 return Promise.reject(new RestoreSessionError('conflict'));
             }
-            return Promise.resolve(this.query(durablePrior.restoreSessionId));
+            return Promise.resolve(this.replayDurableSession(durablePrior.restoreSessionId));
+        }
+        if (Array.from(this.sessions.values()).some(session => (
+            session.view.phase !== 'cancelled'
+            && session.view.phase !== 'succeeded'
+            && session.view.phase !== 'rolled-back'
+        ))) {
+            return Promise.reject(new RestoreSessionError('conflict'));
         }
         try {
             const observed = this.findCandidate(command.candidateRef);
@@ -342,6 +457,8 @@ export class RestoreCoordinator {
                 ensureSnapshotStagingDirectory(this.activityControlRoot, 'restore'),
                 operationId,
             );
+            ensureSnapshotStagingDirectory(operationDirectory, 'session');
+            ensureSnapshotStagingDirectory(operationDirectory, 'journal');
             const validationDirectory = ensureSnapshotStagingDirectory(
                 operationDirectory,
                 'candidate-validation',
@@ -350,7 +467,7 @@ export class RestoreCoordinator {
                 validationDirectory,
                 DATABASE_MEMBER_NAME,
             );
-            const prepared = this.store.prepareRestoreCandidateDatabaseCopy(
+            const prepared = store.prepareRestoreCandidateDatabaseCopy(
                 observed.databasePath,
                 preparedDatabasePath,
             );
@@ -358,7 +475,7 @@ export class RestoreCoordinator {
                 preparedDatabasePath,
                 SNAPSHOT_MAXIMUM_RAW_BYTES,
             );
-            const status = this.store.status();
+            const status = store.status();
             if (status.kind !== 'ready') {
                 throw new RestoreSessionError('current-data-unavailable');
             }
@@ -423,8 +540,9 @@ export class RestoreCoordinator {
                 candidateDatabasePath: observed.databasePath,
                 preparedDatabasePath,
                 binding,
+                safetyRootDigest: null,
             };
-            this.store.createRestoreSession(
+            store.createRestoreSession(
                 this.storedSession(session, null),
                 this.restoreReceipt(
                     command.commandId,
@@ -435,6 +553,10 @@ export class RestoreCoordinator {
                 ),
             );
             this.sessions.set(restoreSessionId, session);
+            recordRestoreSessionControl(this.activityControlRoot, view, {
+                clock: this.options.clock,
+                failpoint: this.options.failpoint,
+            });
             this.receipts.set(command.commandId, Object.freeze({digest: commandDigest, view}));
             return Promise.resolve(view);
         }
@@ -449,8 +571,12 @@ export class RestoreCoordinator {
      * @return {Promise<RestoreSessionView>} Waiting-decision or protection-established view.
      */
     public confirm(candidate: ConfirmRestoreSessionCommand): Promise<RestoreSessionView> {
-        const result = this.confirmationTail.then(() => this.confirmOnce(candidate));
-        this.confirmationTail = result.then(
+        return this.sequenceMutation(() => this.confirmOnce(candidate));
+    }
+
+    private sequenceMutation<T>(mutation: () => Promise<T>): Promise<T> {
+        const result = this.mutationTail.then(mutation);
+        this.mutationTail = result.then(
             () => undefined,
             () => undefined,
         );
@@ -469,12 +595,13 @@ export class RestoreCoordinator {
             }
             return prior.view;
         }
-        const durablePrior = this.store.readRestoreCommandReceipt(command.commandId);
+        const store = this.requireStore();
+        const durablePrior = store.readRestoreCommandReceipt(command.commandId);
         if (durablePrior) {
             if (durablePrior.payloadDigest !== commandDigest) {
                 throw new RestoreSessionError('conflict');
             }
-            return this.query(durablePrior.restoreSessionId);
+            return this.replayDurableSession(durablePrior.restoreSessionId);
         }
         const session = this.sessions.get(command.restoreSessionId);
         if (!session
@@ -486,7 +613,7 @@ export class RestoreCoordinator {
             || command.previewToken !== session.view.previewToken;
         if (changed) {
             const waiting = this.waitingDecision(session);
-            this.store.advanceRestoreSession(
+            store.advanceRestoreSession(
                 this.storedSession({...session, view: waiting}, null),
                 command.expectedSessionVersion,
                 this.restoreReceipt(
@@ -498,6 +625,10 @@ export class RestoreCoordinator {
                 ),
             );
             session.view = waiting;
+            recordRestoreSessionControl(this.activityControlRoot, waiting, {
+                clock: this.options.clock,
+                failpoint: this.options.failpoint,
+            });
             this.receipts.set(command.commandId, Object.freeze({
                 digest: commandDigest,
                 view: waiting,
@@ -524,13 +655,13 @@ export class RestoreCoordinator {
         );
         const finalDirectory = path.join(safetyDirectory, safetySetId);
         const safetyDatabasePath = path.join(stagingDirectory, DATABASE_MEMBER_NAME);
-        const safetyFacts = await this.store.writeRestoreSafetyDatabaseCopy(
+        const safetyFacts = await store.writeRestoreSafetyDatabaseCopy(
             safetyDatabasePath,
             session.binding.currentRevision,
         );
         if (this.previewChanged(session)) {
             const waiting = this.waitingDecision(session);
-            this.store.advanceRestoreSession(
+            store.advanceRestoreSession(
                 this.storedSession({...session, view: waiting}, null),
                 command.expectedSessionVersion,
                 this.restoreReceipt(
@@ -542,6 +673,10 @@ export class RestoreCoordinator {
                 ),
             );
             session.view = waiting;
+            recordRestoreSessionControl(this.activityControlRoot, waiting, {
+                clock: this.options.clock,
+                failpoint: this.options.failpoint,
+            });
             this.receipts.set(command.commandId, Object.freeze({
                 digest: commandDigest,
                 view: waiting,
@@ -593,13 +728,16 @@ export class RestoreCoordinator {
                 }),
             }),
             previewToken: null,
-            allowedActions: Object.freeze(['cancel-before-checkpoint'] as const),
+            allowedActions: Object.freeze([
+                'resume',
+                'cancel-before-checkpoint',
+            ] as const),
             problem: null,
         });
         if (!isRestoreSessionView(protectedView)) {
             throw new Error('Restore protection view construction failed');
         }
-        this.store.advanceRestoreSession(
+        store.advanceRestoreSession(
             this.storedSession({...session, view: protectedView}, safetyRootDigest),
             command.expectedSessionVersion,
             this.restoreReceipt(
@@ -611,6 +749,11 @@ export class RestoreCoordinator {
             ),
         );
         session.view = protectedView;
+        session.safetyRootDigest = safetyRootDigest;
+        recordRestoreSessionControl(this.activityControlRoot, protectedView, {
+            clock: this.options.clock,
+            failpoint: this.options.failpoint,
+        });
         this.receipts.set(command.commandId, Object.freeze({
             digest: commandDigest,
             view: protectedView,
@@ -634,9 +777,292 @@ export class RestoreCoordinator {
         return session.view;
     }
 
+    /**
+     * Cancels a session before its armed checkpoint without replacing active DATA.
+     * @param {RestoreSessionActionCommand} candidate - Version-bound path-free cancellation.
+     * @return {Promise<RestoreSessionView>} Durable terminal cancellation view.
+     */
+    public cancelBeforeCheckpoint(
+        candidate: RestoreSessionActionCommand,
+    ): Promise<RestoreSessionView> {
+        return this.sequenceMutation(() => this.cancelBeforeCheckpointOnce(candidate));
+    }
+
+    private async cancelBeforeCheckpointOnce(
+        candidate: RestoreSessionActionCommand,
+    ): Promise<RestoreSessionView> {
+        const command = normalizeCancelRestoreSessionCommand(candidate);
+        const commandDigest = digestValue(command);
+        const prior = this.receipts.get(command.commandId);
+        if (prior) {
+            if (prior.digest !== commandDigest) {
+                throw new RestoreSessionError('conflict');
+            }
+            return prior.view;
+        }
+        const store = this.requireStore();
+        const durablePrior = store.readRestoreCommandReceipt(command.commandId);
+        if (durablePrior) {
+            if (durablePrior.payloadDigest !== commandDigest) {
+                throw new RestoreSessionError('conflict');
+            }
+            return this.replayDurableSession(durablePrior.restoreSessionId);
+        }
+        const session = this.sessions.get(command.restoreSessionId);
+        if (!session
+            || (session.view.phase !== 'previewed'
+                && session.view.phase !== 'waiting-decision'
+                && session.view.phase !== 'protection-established')
+            || session.view.sessionVersion !== command.expectedSessionVersion) {
+            throw new RestoreSessionError('conflict');
+        }
+        const cancelled: RestoreSessionView = Object.freeze({
+            ...session.view,
+            sessionVersion: (BigInt(session.view.sessionVersion) + 1n).toString(),
+            phase: 'cancelled',
+            previewToken: null,
+            allowedActions: Object.freeze([]),
+            problem: null,
+        });
+        if (!isRestoreSessionView(cancelled)) {
+            throw new Error('Restore cancellation view construction failed');
+        }
+        store.cancelRestoreSession(
+            this.storedSession({...session, view: cancelled}, session.safetyRootDigest),
+            command.expectedSessionVersion,
+            this.restoreReceipt(
+                command.commandId,
+                'cancel',
+                commandDigest,
+                command.restoreSessionId,
+                cancelled.sessionVersion,
+            ),
+        );
+        session.view = cancelled;
+        recordRestoreSessionControl(this.activityControlRoot, cancelled, {
+            clock: this.options.clock,
+            failpoint: this.options.failpoint,
+        });
+        this.receipts.set(command.commandId, Object.freeze({
+            digest: commandDigest,
+            view: cancelled,
+        }));
+        return cancelled;
+    }
+
+    /**
+     * Arms a protected A-only session or explicitly continues its evidence-bound recovery.
+     * @param {RestoreSessionActionCommand} candidate - Version-bound path-free resume command.
+     * @return {Promise<RestoreSessionView>} Terminal success or a rejected recovery boundary.
+     */
+    public resume(candidate: RestoreSessionActionCommand): Promise<RestoreSessionView> {
+        return this.sequenceMutation(() => this.resumeOnce(candidate));
+    }
+
+    private async resumeOnce(candidate: RestoreSessionActionCommand): Promise<RestoreSessionView> {
+        const command = normalizeResumeRestoreSessionCommand(candidate);
+        const commandDigest = digestValue(command);
+        const prior = this.receipts.get(command.commandId);
+        if (prior) {
+            if (prior.digest !== commandDigest) {
+                throw new RestoreSessionError('conflict');
+            }
+            return prior.view;
+        }
+        const session = this.sessions.get(command.restoreSessionId);
+        const dataSlotsRoot = this.options.dataSlotsRoot;
+        if (!session || !dataSlotsRoot) {
+            throw new RestoreSessionError('not-found');
+        }
+        if (session.view.phase === 'succeeded') {
+            throw new RestoreSessionError('conflict');
+        }
+        try {
+            if (session.view.phase === 'protection-established') {
+                this.requireActivationPreconditions(session);
+            }
+            const result = session.view.phase === 'protection-established'
+                ? await beginRestoreActivation({
+                    store: this.requireStore(),
+                    activityControlRoot: this.activityControlRoot,
+                    dataSlotsRoot,
+                    preparedDatabasePath: session.preparedDatabasePath,
+                    session: session.view,
+                    candidateRootDigest: session.binding.candidateRootDigest,
+                    candidateDatabaseDigest: session.binding.candidateDatabaseDigest,
+                    safetyRootDigest: session.safetyRootDigest ?? '',
+                    previousTerminal: this.terminal,
+                    command,
+                }, {
+                    clock: this.options.clock,
+                    failpoint: this.options.failpoint,
+                })
+                : session.view.phase === 'recovery-required'
+                    ? await continueRestoreActivation(
+                        this.activityControlRoot,
+                        dataSlotsRoot,
+                        command,
+                        {
+                            clock: this.options.clock,
+                            failpoint: this.options.failpoint,
+                        },
+                    )
+                    : null;
+            if (!result) {
+                throw new RestoreSessionError('conflict');
+            }
+            this.store = result.store;
+            this.terminal = result.terminal;
+            session.view = result.session;
+            this.receipts.set(command.commandId, Object.freeze({
+                digest: commandDigest,
+                view: result.session,
+            }));
+            return result.session;
+        }
+        catch (error) {
+            if (!(error instanceof RestoreActivationError)) {
+                throw error;
+            }
+            if (error.checkpointReached) {
+                this.store = null;
+                const boot = inspectRestoreBeforeWorkspaceOpen(
+                    this.activityControlRoot,
+                    dataSlotsRoot,
+                );
+                if (boot.session) {
+                    session.view = boot.session;
+                }
+                if (boot.kind === 'committed' && boot.session) {
+                    this.store = this.reopenTerminalData(dataSlotsRoot, boot.session);
+                    this.terminal = boot.terminal;
+                    this.receipts.set(command.commandId, Object.freeze({
+                        digest: commandDigest,
+                        view: boot.session,
+                    }));
+                    return boot.session;
+                }
+            }
+            else {
+                this.reopenPreCheckpointData(dataSlotsRoot);
+            }
+            throw new RestoreSessionError(error.code, error);
+        }
+    }
+
+    /**
+     * Explicitly rolls a checkpointed A-only activation back to its old DATA sibling.
+     * @param {RestoreSessionActionCommand} candidate - Version-bound path-free rollback command.
+     * @return {Promise<RestoreSessionView>} Reopened rollback terminal view.
+     */
+    public rollback(candidate: RestoreSessionActionCommand): Promise<RestoreSessionView> {
+        return this.sequenceMutation(() => this.rollbackOnce(candidate));
+    }
+
+    private async rollbackOnce(candidate: RestoreSessionActionCommand): Promise<RestoreSessionView> {
+        const command = normalizeRollbackRestoreSessionCommand(candidate);
+        const commandDigest = digestValue(command);
+        const prior = this.receipts.get(command.commandId);
+        if (prior) {
+            if (prior.digest !== commandDigest) {
+                throw new RestoreSessionError('conflict');
+            }
+            return prior.view;
+        }
+        const session = this.sessions.get(command.restoreSessionId);
+        const dataSlotsRoot = this.options.dataSlotsRoot;
+        if (!session || !dataSlotsRoot || session.view.phase !== 'recovery-required') {
+            throw new RestoreSessionError('conflict');
+        }
+        try {
+            const result = await rollbackRestoreActivation(
+                this.activityControlRoot,
+                dataSlotsRoot,
+                command,
+                {
+                    clock: this.options.clock,
+                    failpoint: this.options.failpoint,
+                },
+            );
+            this.store = result.store;
+            this.terminal = result.terminal;
+            session.view = result.session;
+            this.receipts.set(command.commandId, Object.freeze({
+                digest: commandDigest,
+                view: result.session,
+            }));
+            return result.session;
+        }
+        catch (error) {
+            if (error instanceof RestoreActivationError) {
+                this.store = null;
+                const boot = inspectRestoreBeforeWorkspaceOpen(
+                    this.activityControlRoot,
+                    dataSlotsRoot,
+                );
+                if (boot.session) {
+                    session.view = boot.session;
+                }
+                if (boot.kind === 'committed' && boot.session) {
+                    this.store = this.reopenTerminalData(dataSlotsRoot, boot.session);
+                    this.terminal = boot.terminal;
+                    this.receipts.set(command.commandId, Object.freeze({
+                        digest: commandDigest,
+                        view: boot.session,
+                    }));
+                    return boot.session;
+                }
+                throw new RestoreSessionError(error.code, error);
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Reuses a still-open old store or fully reopens it after a pre-checkpoint close failure.
+     * @param {string} dataSlotsRoot - Stable DataSlots parent.
+     * @return {void}
+     */
+    private reopenPreCheckpointData(dataSlotsRoot: string): void {
+        try {
+            if (this.store) {
+                this.store.status();
+                return;
+            }
+        }
+        catch {
+            this.store = null;
+        }
+        const opened = openWorkspaceData(dataSlotsRoot);
+        if (opened.kind !== 'ready') {
+            throw new RestoreSessionError('recovery-required');
+        }
+        this.store = opened.store;
+    }
+
+    private reopenTerminalData(
+        dataSlotsRoot: string,
+        session: RestoreSessionView,
+    ): SqliteDataStore {
+        const opened = openWorkspaceData(dataSlotsRoot);
+        const expectedRevision = session.phase === 'succeeded'
+            ? session.candidate.actualRevision
+            : session.current.revision;
+        if (opened.kind !== 'ready'
+            || opened.store.status().workspaceId !== session.current.workspaceId
+            || opened.store.status().revision !== expectedRevision) {
+            if (opened.kind === 'ready' || opened.kind === 'read-only') {
+                void opened.store.close();
+            }
+            throw new RestoreSessionError('recovery-required');
+        }
+        return opened.store;
+    }
+
     private loadPersistedSessions(): void {
-        const configuration = this.store.readBackupConfigurationForProtection();
-        for (const stored of this.store.readRestoreSessions()) {
+        const store = this.requireStore();
+        const configuration = store.readBackupConfigurationForProtection();
+        for (const stored of store.readRestoreSessions()) {
             if (!configuration) {
                 throw new Error('Persisted RestoreSession has no configured BackupSet');
             }
@@ -668,6 +1094,8 @@ export class RestoreCoordinator {
                 'restore',
                 stored.operationId,
             );
+            ensureSnapshotStagingDirectory(operationDirectory, 'session');
+            ensureSnapshotStagingDirectory(operationDirectory, 'journal');
             const candidateDatabasePath = path.join(
                 configuration.canonicalPath,
                 REPOSITORY_DIRECTORY_NAME,
@@ -687,6 +1115,7 @@ export class RestoreCoordinator {
                     DATABASE_MEMBER_NAME,
                 ),
                 binding,
+                safetyRootDigest: stored.safetyRootDigest,
             };
             if (view.phase === 'protection-established') {
                 const safetySet = view.recoverability.safetySet;
@@ -703,6 +1132,10 @@ export class RestoreCoordinator {
                     throw new Error('Persisted RestoreSafetySet is invalid');
                 }
             }
+            recordRestoreSessionControl(this.activityControlRoot, view, {
+                clock: this.options.clock,
+                failpoint: this.options.failpoint,
+            });
             this.sessions.set(stored.restoreSessionId, session);
         }
     }
@@ -711,7 +1144,7 @@ export class RestoreCoordinator {
         stored: StoredRestoreSession,
         impact: RestoreImpactSummary,
     ): RestoreSessionView {
-        const safetySet = stored.phase === 'protection-established'
+        const safetySet = stored.safetySetId !== null
             ? Object.freeze({
                 state: 'verified' as const,
                 safetySetId: stored.safetySetId!,
@@ -722,7 +1155,9 @@ export class RestoreCoordinator {
             ? Object.freeze(['confirm', 'cancel-before-checkpoint'] as const)
             : stored.phase === 'waiting-decision'
                 ? Object.freeze(['repreview', 'cancel-before-checkpoint'] as const)
-                : Object.freeze(['cancel-before-checkpoint'] as const);
+                : stored.phase === 'protection-established'
+                    ? Object.freeze(['resume', 'cancel-before-checkpoint'] as const)
+                    : Object.freeze([]);
         const view: RestoreSessionView = Object.freeze({
             restoreSessionId: stored.restoreSessionId,
             operationId: stored.operationId,
@@ -760,6 +1195,17 @@ export class RestoreCoordinator {
         session: InternalRestoreSession,
         safetyRootDigest: string | null,
     ): StoredRestoreSession {
+        const phase = session.view.phase;
+        if (phase !== 'previewed'
+            && phase !== 'waiting-decision'
+            && phase !== 'protection-established'
+            && phase !== 'cancelled') {
+            throw new Error('Terminal RestoreSession is not stored in the pre-checkpoint table');
+        }
+        const problemCode = session.view.problem?.code ?? null;
+        if (problemCode !== null && problemCode !== 'impact-changed') {
+            throw new Error('Pre-checkpoint RestoreSession problem is invalid');
+        }
         const safetySet = session.view.recoverability.safetySet;
         return Object.freeze({
             restoreSessionId: session.view.restoreSessionId,
@@ -782,9 +1228,9 @@ export class RestoreCoordinator {
             impactDigest: digestValue(session.view.impact),
             bindingDigest: digestValue(session.binding),
             previewToken: session.view.previewToken,
-            phase: session.view.phase,
+            phase,
             sessionVersion: session.view.sessionVersion,
-            problemCode: session.view.problem?.code ?? null,
+            problemCode,
             safetySetId: safetySet.state === 'verified' ? safetySet.safetySetId : null,
             safetyProtectedRevision: safetySet.state === 'verified'
                 ? safetySet.protectedRevision
@@ -795,7 +1241,7 @@ export class RestoreCoordinator {
 
     private restoreReceipt(
         commandId: string,
-        commandKind: 'start' | 'confirm',
+        commandKind: 'start' | 'confirm' | 'cancel',
         payloadDigest: string,
         restoreSessionId: string,
         resultSessionVersion: string,
@@ -828,7 +1274,7 @@ export class RestoreCoordinator {
     }
 
     private findCandidate(candidateRef: string): ObservedCandidate {
-        const configuration = this.store.readBackupConfigurationForProtection();
+        const configuration = this.requireStore().readBackupConfigurationForProtection();
         if (!configuration) {
             throw new RestoreSessionError('destination-unset');
         }
@@ -914,7 +1360,7 @@ export class RestoreCoordinator {
                 });
             }
             const manifest = validateSnapshotManifestV1(manifestBytes);
-            const configuration = this.store.readBackupConfigurationForProtection();
+            const configuration = this.requireStore().readBackupConfigurationForProtection();
             if (!configuration
                 || manifest.input.snapshotId !== snapshotId
                 || manifest.input.backupSetId !== configuration.backupSetId
@@ -934,7 +1380,7 @@ export class RestoreCoordinator {
                 databasePath,
                 SNAPSHOT_MAXIMUM_RAW_BYTES,
             );
-            const databaseFacts = this.store.inspectRestoreCandidateDatabase(databasePath);
+            const databaseFacts = this.requireStore().inspectRestoreCandidateDatabase(databasePath);
             const member = manifest.input.members[0];
             if (!sameModules(manifest.input.modules)
                 || manifest.input.backupSetId !== databaseFacts.sourceBackup.backupSetId
@@ -1020,7 +1466,7 @@ export class RestoreCoordinator {
     }
 
     private previewChanged(session: InternalRestoreSession): boolean {
-        const current = this.store.status();
+        const current = this.requireStore().status();
         const impact = current.kind === 'ready' && this.options.impactSummary
             ? this.readImpact(session.view.candidate.actualRevision, current.revision)
             : session.binding.impact;
@@ -1049,6 +1495,35 @@ export class RestoreCoordinator {
             || observed.databasePath !== session.candidateDatabasePath
             || observed.manifest?.rootDigest !== session.binding.candidateRootDigest
             || preparedDatabaseDigest.sha256 !== session.binding.candidateDatabaseDigest;
+    }
+
+    /**
+     * Revalidates every confirm-bound DATA artifact immediately before the armed checkpoint.
+     * @param {InternalRestoreSession} session - Protected pre-checkpoint session.
+     * @return {void}
+     */
+    private requireActivationPreconditions(session: InternalRestoreSession): void {
+        try {
+            const safety = session.view.recoverability.safetySet;
+            if (this.previewChanged(session)
+                || safety.state !== 'verified'
+                || this.validateSafetySet(
+                    path.join(
+                        this.activityControlRoot,
+                        'restore',
+                        session.view.operationId,
+                        'safety',
+                        safety.safetySetId,
+                    ),
+                    session.view,
+                    safety.safetySetId,
+                ) !== session.safetyRootDigest) {
+                throw new Error('Restore activation evidence changed before checkpoint');
+            }
+        }
+        catch (error) {
+            throw new RestoreSessionError('staging-failed', error);
+        }
     }
 
     private waitingDecision(session: InternalRestoreSession): RestoreSessionView {
@@ -1091,7 +1566,7 @@ export class RestoreCoordinator {
             databasePath,
             SNAPSHOT_MAXIMUM_RAW_BYTES,
         );
-        const databaseFacts = this.store.validateRestoreSafetyDatabaseCopy(
+        const databaseFacts = this.requireStore().validateRestoreSafetyDatabaseCopy(
             databasePath,
             session.current.revision,
         );

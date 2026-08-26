@@ -67,7 +67,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
       workspaceData: {
         kind: 'ready',
         workspaceId,
-        schemaLevel: 15,
+        schemaLevel: 16,
         revision: '42',
       },
     },
@@ -82,7 +82,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     {
       kind: 'read-only',
       workspaceId,
-      schemaLevel: 15,
+      schemaLevel: 16,
       revision: '42',
       problem: {
         code: 'permission',
@@ -103,7 +103,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
         affectedCapabilities: ['workspace.read', 'workspace.write'],
         allowedActions: [],
         context: {},
-        details: { actualSchemaLevel: 2, requiredSchemaLevel: 15 },
+        details: { actualSchemaLevel: 2, requiredSchemaLevel: 16 },
       },
     },
     {
@@ -116,6 +116,21 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
         allowedActions: [],
         context: {},
         details: { reason: 'database-corrupt' },
+      },
+    },
+    {
+      kind: 'recovery',
+      problem: {
+        code: 'recovery-required',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.read', 'workspace.write'],
+        allowedActions: ['resume', 'rollback'],
+        context: {
+          restoreSessionId: '44444444-4444-4444-8444-444444444444',
+          operationId: '55555555-5555-4555-8555-555555555555',
+        },
+        details: { reason: 'restore-activation-pending' },
       },
     },
   ]) {
@@ -139,7 +154,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: Buffer.from('workspace-epoch') } },
     {
       ...validOutcome,
-      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 15, revision: '01' } },
+      value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 16, revision: '01' } },
     },
     {
       ...validOutcome,
@@ -163,7 +178,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
             affectedCapabilities: ['workspace.read', 'workspace.write'],
             allowedActions: [],
             context: {},
-            details: { actualSchemaLevel: 15, requiredSchemaLevel: 15 },
+            details: { actualSchemaLevel: 16, requiredSchemaLevel: 16 },
           },
         },
       },
@@ -172,7 +187,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
       ...validOutcome,
       value: {
         ...validOutcome.value,
-        workspaceData: { kind: 'read-only', workspaceId, schemaLevel: 15, revision: 42n, problem: {} },
+        workspaceData: { kind: 'read-only', workspaceId, schemaLevel: 16, revision: 42n, problem: {} },
       },
     },
     { ...validOutcome, value: { ...validOutcome.value, extra: true } },

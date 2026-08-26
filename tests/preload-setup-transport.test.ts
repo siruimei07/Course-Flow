@@ -23,6 +23,7 @@ import type { CreateTermCommand } from '../src/shared/workspace-term-contract';
 import type {
     ConfigureBackupDestinationCommand,
     ConfirmRestoreSessionCommand,
+    RestoreSessionActionCommand,
     StartRestoreSessionCommand,
 } from '../src/shared/workspace-protection-contract';
 
@@ -81,6 +82,12 @@ const CONFIRM_RESTORE_COMMAND = {
     previewToken: 'b'.repeat(64),
 } as const satisfies ConfirmRestoreSessionCommand;
 
+const RESTORE_ACTION_COMMAND = {
+    commandId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    restoreSessionId: RESTORE_SESSION_ID,
+    expectedSessionVersion: '2',
+} as const satisfies RestoreSessionActionCommand;
+
 type PreloadCourseFlow = Readonly<{
     query(): Promise<BootstrapOutcome>;
     querySetup(): Promise<WorkspaceSetupOutcome>;
@@ -90,6 +97,9 @@ type PreloadCourseFlow = Readonly<{
     startRestoreSession(command: StartRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
     queryRestoreSession(restoreSessionId: string): Promise<WorkspaceSetupOutcome>;
     confirmRestoreSession(command: ConfirmRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
+    cancelRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
+    resumeRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
+    rollbackRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
 }>;
 
 type PreloadWindowFrame = Readonly<{
@@ -124,7 +134,7 @@ function readyOutcome(requestId: string): BootstrapOutcome {
             workspaceData: {
                 kind: 'ready',
                 workspaceId: WORKSPACE_ID,
-                schemaLevel: 15,
+                schemaLevel: 16,
                 revision: '0',
             },
         },
@@ -329,6 +339,9 @@ test('preload sends path-free protection and restore requests on the bounded cha
     await harness.courseFlow.startRestoreSession(START_RESTORE_COMMAND);
     await harness.courseFlow.queryRestoreSession(RESTORE_SESSION_ID);
     await harness.courseFlow.confirmRestoreSession(CONFIRM_RESTORE_COMMAND);
+    await harness.courseFlow.cancelRestoreSession(RESTORE_ACTION_COMMAND);
+    await harness.courseFlow.resumeRestoreSession(RESTORE_ACTION_COMMAND);
+    await harness.courseFlow.rollbackRestoreSession(RESTORE_ACTION_COMMAND);
 
     assert.equal(projection.ok, true);
     assert.equal(cancelled.ok, false);
@@ -338,6 +351,9 @@ test('preload sends path-free protection and restore requests on the bounded cha
         'workspace.restore.start',
         'workspace.restore.query',
         'workspace.restore.confirm',
+        'workspace.restore.cancel',
+        'workspace.restore.resume',
+        'workspace.restore.rollback',
     ]);
     const requestsJson = JSON.stringify(harness.setupRequests);
     assert.equal(requestsJson.includes('selectedDirectoryPath'), false);

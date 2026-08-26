@@ -32,9 +32,12 @@ import {
   makeMeetingSeriesQueryRequest,
   makePlanQueryRequest,
   makeConfigureBackupDestinationRequest,
+  makeCancelRestoreSessionRequest,
   makeConfirmRestoreSessionRequest,
   makeDataProtectionQueryRequest,
   makeRestoreSessionQueryRequest,
+  makeResumeRestoreSessionRequest,
+  makeRollbackRestoreSessionRequest,
   makeStartRestoreSessionRequest,
   makeTaskSeriesQueryRequest,
   makeRestoreTermAsCurrentRequest,
@@ -86,6 +89,7 @@ import type {
 import type {
   ConfigureBackupDestinationCommand,
   ConfirmRestoreSessionCommand,
+  RestoreSessionActionCommand,
   StartRestoreSessionCommand,
 } from './shared/workspace-protection-contract';
 import {
@@ -267,6 +271,45 @@ function confirmRestoreSession(
       epoch,
       command,
     )
+  ));
+}
+
+/**
+ * Cancels one RestoreSession before its armed activation checkpoint.
+ * @param {RestoreSessionActionCommand} command Version-bound cancellation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated path-free RestoreSession outcome.
+ */
+function cancelRestoreSession(
+  command: RestoreSessionActionCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCancelRestoreSessionRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Explicitly continues one evidence-supported Restore activation.
+ * @param {RestoreSessionActionCommand} command Version-bound continuation command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated path-free RestoreSession outcome.
+ */
+function resumeRestoreSession(
+  command: RestoreSessionActionCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeResumeRestoreSessionRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
+/**
+ * Explicitly rolls one checkpointed Restore activation back.
+ * @param {RestoreSessionActionCommand} command Version-bound rollback command.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated path-free RestoreSession outcome.
+ */
+function rollbackRestoreSession(
+  command: RestoreSessionActionCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeRollbackRestoreSessionRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
   ));
 }
 
@@ -620,6 +663,9 @@ contextBridge.exposeInMainWorld(
     startRestoreSession,
     queryRestoreSession,
     confirmRestoreSession,
+    cancelRestoreSession,
+    resumeRestoreSession,
+    rollbackRestoreSession,
     saveSetupDraftCheckpoint,
     discardSetupDraftCheckpoint,
     queryPlan,

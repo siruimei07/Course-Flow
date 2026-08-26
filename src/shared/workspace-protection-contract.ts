@@ -70,6 +70,16 @@ export type ConfirmRestoreSessionCommand = Readonly<{
     previewToken: string;
 }>;
 
+export type RestoreSessionActionCommand = Readonly<{
+    commandId: string;
+    restoreSessionId: string;
+    expectedSessionVersion: string;
+}>;
+
+export type CancelRestoreSessionCommand = RestoreSessionActionCommand;
+export type ResumeRestoreSessionCommand = RestoreSessionActionCommand;
+export type RollbackRestoreSessionCommand = RestoreSessionActionCommand;
+
 export type RestoreLibraryRootBinding =
     | Readonly<{kind: 'absent'}>
     | Readonly<{
@@ -92,7 +102,14 @@ export type RestoreSessionView = Readonly<{
     restoreSessionId: string;
     operationId: string;
     sessionVersion: string;
-    phase: 'previewed' | 'waiting-decision' | 'protection-established';
+    phase:
+        | 'previewed'
+        | 'waiting-decision'
+        | 'protection-established'
+        | 'recovery-required'
+        | 'cancelled'
+        | 'succeeded'
+        | 'rolled-back';
     candidate: Readonly<{
         candidateRef: string;
         snapshotId: string;
@@ -123,8 +140,16 @@ export type RestoreSessionView = Readonly<{
         | 'confirm'
         | 'repreview'
         | 'cancel-before-checkpoint'
+        | 'resume'
+        | 'rollback'
     )[];
-    problem: Readonly<{code: 'impact-changed'}> | null;
+    problem: Readonly<{
+        code:
+            | 'impact-changed'
+            | 'activation-pending'
+            | 'rollback-required'
+            | 'recovery-required';
+    }> | null;
 }>;
 
 export type ConfiguredBackupProjection = Readonly<{
@@ -375,11 +400,14 @@ export function isRestoreSessionView(value: unknown): value is RestoreSessionVie
         || !Array.isArray(value.allowedActions)
         || !value.allowedActions.every(action => action === 'confirm'
             || action === 'repreview'
-            || action === 'cancel-before-checkpoint')) {
+            || action === 'cancel-before-checkpoint'
+            || action === 'resume'
+            || action === 'rollback')) {
         return false;
     }
     if (value.phase === 'previewed') {
-        return typeof value.previewToken === 'string'
+        return value.sessionVersion === '0'
+            && typeof value.previewToken === 'string'
             && /^[0-9a-f]{64}$/.test(value.previewToken)
             && value.recoverability.safetySet.state === 'pending'
             && JSON.stringify(value.allowedActions)
@@ -387,18 +415,48 @@ export function isRestoreSessionView(value: unknown): value is RestoreSessionVie
             && value.problem === null;
     }
     if (value.phase === 'waiting-decision') {
-        return value.previewToken === null
+        return value.sessionVersion === '1'
+            && value.previewToken === null
             && value.recoverability.safetySet.state === 'pending'
             && JSON.stringify(value.allowedActions)
                 === JSON.stringify(['repreview', 'cancel-before-checkpoint'])
             && hasExactDataKeys(value.problem, ['code'])
             && value.problem.code === 'impact-changed';
     }
-    return value.phase === 'protection-established'
-        && value.previewToken === null
-        && value.recoverability.safetySet.state === 'verified'
-        && value.recoverability.safetySet.protectedRevision === value.current.revision
-        && JSON.stringify(value.allowedActions) === JSON.stringify(['cancel-before-checkpoint'])
+    if (value.phase === 'cancelled') {
+        return value.previewToken === null
+            && (value.sessionVersion === '1' || value.sessionVersion === '2')
+            && JSON.stringify(value.allowedActions) === JSON.stringify([])
+            && value.problem === null
+            && (value.recoverability.safetySet.state === 'pending'
+                || value.recoverability.safetySet.protectedRevision === value.current.revision);
+    }
+    if (value.previewToken !== null
+        || value.recoverability.safetySet.state !== 'verified'
+        || value.recoverability.safetySet.protectedRevision !== value.current.revision) {
+        return false;
+    }
+    if (value.phase === 'protection-established') {
+        return value.sessionVersion === '1'
+            && JSON.stringify(value.allowedActions)
+            === JSON.stringify(['resume', 'cancel-before-checkpoint'])
+            && value.problem === null;
+    }
+    if (value.phase === 'recovery-required') {
+        const actions = JSON.stringify(value.allowedActions);
+        return value.sessionVersion === '2'
+            && (actions === JSON.stringify(['resume', 'rollback'])
+                || actions === JSON.stringify(['resume'])
+                || actions === JSON.stringify(['rollback'])
+                || actions === JSON.stringify([]))
+            && hasExactDataKeys(value.problem, ['code'])
+            && (value.problem.code === 'activation-pending'
+                || value.problem.code === 'rollback-required'
+                || value.problem.code === 'recovery-required');
+    }
+    return (value.phase === 'succeeded' || value.phase === 'rolled-back')
+        && value.sessionVersion === '3'
+        && JSON.stringify(value.allowedActions) === JSON.stringify([])
         && value.problem === null;
 }
 
@@ -536,6 +594,57 @@ export function normalizeConfirmRestoreSessionCommand(
         expectedSessionVersion: value.expectedSessionVersion,
         previewToken: value.previewToken,
     });
+}
+
+function normalizeRestoreSessionActionCommand(value: unknown): RestoreSessionActionCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'restoreSessionId',
+        'expectedSessionVersion',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.restoreSessionId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedSessionVersion)) {
+        throw new TypeError('Restore session action command is invalid');
+    }
+    return Object.freeze({
+        commandId: value.commandId,
+        restoreSessionId: value.restoreSessionId,
+        expectedSessionVersion: value.expectedSessionVersion,
+    });
+}
+
+/**
+ * Normalizes a checkpoint-preceding Restore cancellation command.
+ * @param {unknown} value - Candidate cancellation command.
+ * @return {CancelRestoreSessionCommand} Exact path-free command.
+ */
+export function normalizeCancelRestoreSessionCommand(
+    value: unknown,
+): CancelRestoreSessionCommand {
+    return normalizeRestoreSessionActionCommand(value);
+}
+
+/**
+ * Normalizes an evidence-bound Restore continuation command.
+ * @param {unknown} value - Candidate continuation command.
+ * @return {ResumeRestoreSessionCommand} Exact path-free command.
+ */
+export function normalizeResumeRestoreSessionCommand(
+    value: unknown,
+): ResumeRestoreSessionCommand {
+    return normalizeRestoreSessionActionCommand(value);
+}
+
+/**
+ * Normalizes an evidence-bound Restore rollback command.
+ * @param {unknown} value - Candidate rollback command.
+ * @return {RollbackRestoreSessionCommand} Exact path-free command.
+ */
+export function normalizeRollbackRestoreSessionCommand(
+    value: unknown,
+): RollbackRestoreSessionCommand {
+    return normalizeRestoreSessionActionCommand(value);
 }
 
 /**

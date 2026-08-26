@@ -655,6 +655,9 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
       'startRestoreSession',
       'queryRestoreSession',
       'confirmRestoreSession',
+      'cancelRestoreSession',
+      'resumeRestoreSession',
+      'rollbackRestoreSession',
       'saveSetupDraftCheckpoint',
       'discardSetupDraftCheckpoint',
       'queryPlan',
@@ -685,7 +688,8 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
     ],
   );
   const expectedParameterCounts = [
-    0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
+    1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
   ];
   exposedObject.properties.forEach((property, index) => {

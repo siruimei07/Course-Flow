@@ -131,19 +131,19 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
 test('TEST-DATA-001/005: current schema initializes Meeting, HolidayRange, Task, and setup draft facts', async t => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 15);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 16);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
+        schemaLevel: 16,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 15,
+        userVersion: 16,
         tables: [
             'backup_cleanup_operations',
             'backup_configuration',
@@ -160,6 +160,7 @@ test('TEST-DATA-001/005: current schema initializes Meeting, HolidayRange, Task,
             'protection_watermarks',
             'receipt_effects',
             'restore_command_receipts',
+            'restore_completion_receipts',
             'restore_sessions',
             'setup_draft_checkpoint',
             'setup_state',
@@ -268,11 +269,141 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 15,
+            schemaLevel: 16,
             revision: '0',
         });
         await store.close();
     }
+});
+
+test('TEST-DATA-006: level 15 sessions survive typed Restore receipt migration', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const initialized = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
+    await initialized.close();
+
+    const activeDatabasePath = join(dataSlotsRoot, 'active', 'workspace.sqlite');
+    const level14Database = new DatabaseSync(activeDatabasePath);
+    try {
+        level14Database.exec(`
+            BEGIN IMMEDIATE;
+            DROP TABLE restore_completion_receipts;
+            DROP TABLE restore_command_receipts;
+            DROP TABLE restore_sessions;
+            PRAGMA user_version = 14;
+            COMMIT;
+        `);
+    }
+    finally {
+        level14Database.close();
+    }
+
+    let levelCommitCount = 0;
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.before-level-commit') {
+                levelCommitCount += 1;
+            }
+            if (point === 'migration.before-level-commit' && levelCommitCount === 2) {
+                throw new Error('stop-at-level-15');
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+    const level15Database = new DatabaseSync(activeDatabasePath);
+    try {
+        assert.equal(
+            (level15Database.prepare('PRAGMA user_version').get() as {user_version: number}).user_version,
+            15,
+        );
+        level15Database.exec(`
+            PRAGMA foreign_keys = ON;
+            INSERT INTO restore_sessions (
+                restore_session_id,
+                operation_id,
+                candidate_ref,
+                snapshot_id,
+                candidate_root_digest,
+                candidate_database_digest,
+                source_schema_level,
+                prepared_schema_level,
+                candidate_revision,
+                validation_copy,
+                current_workspace_id,
+                current_revision,
+                current_library_kind,
+                current_library_root_id,
+                current_root_generation,
+                target_binding_version,
+                term_count,
+                course_count,
+                task_series_count,
+                impact_digest,
+                binding_digest,
+                preview_token,
+                phase,
+                session_version,
+                problem_code,
+                safety_set_id,
+                safety_protected_revision,
+                safety_root_digest
+            ) VALUES (
+                '22222222-2222-4222-8222-222222222222',
+                '33333333-3333-4333-8333-333333333333',
+                '44444444-4444-4444-8444-444444444444',
+                '55555555-5555-4555-8555-555555555555',
+                '${'a'.repeat(64)}',
+                '${'b'.repeat(64)}',
+                15,
+                15,
+                1,
+                'copied',
+                '${WORKSPACE_ID}',
+                (SELECT revision FROM workspace_state WHERE singleton = 1),
+                'absent',
+                NULL,
+                NULL,
+                0,
+                0,
+                0,
+                0,
+                '${'c'.repeat(64)}',
+                '${'d'.repeat(64)}',
+                '${'e'.repeat(64)}',
+                'previewed',
+                0,
+                NULL,
+                NULL,
+                NULL,
+                NULL
+            );
+            INSERT INTO restore_command_receipts VALUES (
+                '66666666-6666-4666-8666-666666666666',
+                'start',
+                zeroblob(32),
+                '22222222-2222-4222-8222-222222222222',
+                0
+            );
+        `);
+    }
+    finally {
+        level15Database.close();
+    }
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected level 15 migration to open ready');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 16,
+        revision: '2',
+    });
+    assert.equal(opened.store.readRestoreSessions()[0]?.preparedSchemaLevel, '15');
+    await opened.store.close();
+    assert.equal(readSchemaFacts(dataSlotsRoot).tables.includes('restore_completion_receipts'), true);
 });
 
 test('ADR-04/WP-R5-03: level 13 migrates to the resumable cleanup journal', async t => {
@@ -430,10 +561,10 @@ test('ADR-04/WP-R5-03: level 13 migrates to the resumable cleanup journal', asyn
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
-        revision: '5',
+        schemaLevel: 16,
+        revision: '6',
     });
-    assert.equal(opened.store.readProtectionWatermark(), '5');
+    assert.equal(opened.store.readProtectionWatermark(), '6');
     assert.equal(opened.store.readBackupCleanupOperation(), null);
     assert.deepEqual(opened.store.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId), [
         '66666666-6666-4666-8666-666666666666',
@@ -569,8 +700,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
-        revision: '14',
+        schemaLevel: 16,
+        revision: '15',
     });
     await opened.store.close();
 
@@ -608,6 +739,7 @@ test('TEST-DATA-005/006: level 14 migrates through its retained verified safety 
     try {
         level14Database.exec(`
             BEGIN IMMEDIATE;
+            DROP TABLE restore_completion_receipts;
             DROP TABLE restore_command_receipts;
             DROP TABLE restore_sessions;
             PRAGMA user_version = 14;
@@ -627,8 +759,8 @@ test('TEST-DATA-005/006: level 14 migrates through its retained verified safety 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
-        revision: '1',
+        schemaLevel: 16,
+        revision: '2',
     });
     await opened.store.close();
 
@@ -667,7 +799,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '15');
+    assert.equal(opened.store.status().revision, '16');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -734,7 +866,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 15,
+        requiredSchemaLevel: 16,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -1129,7 +1261,7 @@ test('Q-TIME-01/TEST-DATA-006: level 5 offsets migrate atomically and restart at
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 5 offset migration to continue');
     }
-    assert.equal(continued.store.status().revision, '15');
+    assert.equal(continued.store.status().revision, '16');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-09-30' },
@@ -1194,7 +1326,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 4 migration to continue');
     }
-    assert.equal(continued.store.status().revision, '15');
+    assert.equal(continued.store.status().revision, '16');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-12-31' },
@@ -1214,7 +1346,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
         'plan.course-created',
         'plan.meeting-series-created',
     ]);
-    assert.equal(continued.store.readProtectionWatermark(), '15');
+    assert.equal(continued.store.readProtectionWatermark(), '16');
     await continued.store.close();
 });
 
@@ -1449,8 +1581,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
-        revision: '14',
+        schemaLevel: 16,
+        revision: '15',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -1476,7 +1608,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '14');
+    assert.equal(opened.store.readProtectionWatermark(), '15');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -1513,8 +1645,8 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 15,
-        revision: '15',
+        schemaLevel: 16,
+        revision: '16',
     });
     const projection = opened.store.readSetupProjection();
     assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
@@ -1598,7 +1730,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
         commandId: '88888888-8888-4888-8888-888888888888',
         followUpId: '99999999-9999-4999-8999-999999999999',
     }), TypeError);
-    assert.equal(opened.store.status().revision, '15');
+    assert.equal(opened.store.status().revision, '16');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)

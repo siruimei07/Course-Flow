@@ -280,8 +280,8 @@ test('schema level 11 migrates to a legal unconfigured protection state', async 
     if (opened.kind !== 'ready') {
         throw new Error('Expected current migrated DATA');
     }
-    assert.equal(opened.store.status().schemaLevel, 15);
-    assert.equal(opened.store.status().revision, '8');
+    assert.equal(opened.store.status().schemaLevel, 16);
+    assert.equal(opened.store.status().revision, '9');
     assert.deepEqual(opened.store.readDataProtectionProjection().configuration, { kind: 'unconfigured' });
     await opened.store.close();
 });

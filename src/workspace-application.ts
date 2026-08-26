@@ -9,6 +9,7 @@ import {
     SetupDraftCheckpointOutcomeUnknownError,
     initializeWorkspaceData,
     openWorkspaceDataWithMigrations,
+    workspaceDataRuntimeVersion,
     type CommandReceiptOutcome,
     type CommitOptions,
     type DataCommitResult,
@@ -22,6 +23,7 @@ import {
     isWorkspaceProbeRequest,
     type BootstrapOutcome,
     type WorkspaceDataStatus,
+    type DataOpenProblem,
     type WorkspaceProbeRequest,
 } from './shared/bootstrap-contract';
 import {
@@ -43,7 +45,10 @@ import {
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type PlanQueryRequest,
+    type CancelRestoreSessionRequest,
     type ConfirmRestoreSessionRequest,
+    type ResumeRestoreSessionRequest,
+    type RollbackRestoreSessionRequest,
     type RestoreSessionQueryRequest,
     type StartRestoreSessionRequest,
     type SelectedBackupDestinationRequest,
@@ -69,6 +74,7 @@ import {
 import { BackupDestinationPreparationError } from './protect/backup-repository';
 import {
     DurableBackupCoordinator,
+    inspectRestoreBeforeWorkspaceOpen,
     readVerifiedDataProtectionProjection,
     type DurableBackupPassOptions,
 } from './protect/durable-backup';
@@ -103,6 +109,7 @@ export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     clock?: ClockPort;
     durableBackupOptions?: DurableBackupPassOptions;
     activityControlRoot?: string;
+    restoreFailpoint?: (point: string) => void;
     libraryRootPath?: string | null;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
@@ -147,10 +154,42 @@ function dataStateFrom(opened: DataOpenResult): WorkspaceDataState {
     };
 }
 
+function restoreActivationProblem(
+    session: ReturnType<RestoreCoordinator['query']> | null,
+): DataOpenProblem {
+    if (!session) {
+        return Object.freeze({
+            code: 'recovery-required' as const,
+            scope: 'workspace' as const,
+            dataEffect: 'unchanged' as const,
+            affectedCapabilities: Object.freeze(['workspace.read', 'workspace.write'] as const),
+            allowedActions: Object.freeze([] as const),
+            context: Object.freeze({}),
+            details: Object.freeze({reason: 'database-unreadable' as const}),
+        });
+    }
+    const allowedActions = Object.freeze(session.allowedActions.filter(
+        (action): action is 'resume' | 'rollback' => action === 'resume' || action === 'rollback',
+    ));
+    return Object.freeze({
+        code: 'recovery-required' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: Object.freeze(['workspace.read', 'workspace.write'] as const),
+        allowedActions,
+        context: Object.freeze({
+            restoreSessionId: session.restoreSessionId,
+            operationId: session.operationId,
+        }),
+        details: Object.freeze({reason: 'restore-activation-pending' as const}),
+    });
+}
+
 export class WorkspaceApplication {
     private backupCoordinator: DurableBackupCoordinator | undefined;
     private restoreCoordinator: RestoreCoordinator | undefined;
-    private readonly workspaceEpoch = randomUUID();
+    private restoreMaintenance = false;
+    private workspaceEpoch = randomUUID();
 
     private constructor(
         private readonly dataSlotsRoot: string,
@@ -164,6 +203,39 @@ export class WorkspaceApplication {
         appBuildId: string,
         options: WorkspaceApplicationOptions = {},
     ): Promise<WorkspaceApplication> {
+        let restoreBoot: ReturnType<typeof inspectRestoreBeforeWorkspaceOpen> | null = null;
+        if (options.activityControlRoot) {
+            restoreBoot = inspectRestoreBeforeWorkspaceOpen(
+                options.activityControlRoot,
+                dataSlotsRoot,
+            );
+            if (restoreBoot.kind === 'recovery-required') {
+                const application = new WorkspaceApplication(
+                    dataSlotsRoot,
+                    appBuildId,
+                    {
+                        sqliteVersion: workspaceDataRuntimeVersion(),
+                        status: {
+                            kind: 'recovery',
+                            problem: restoreActivationProblem(restoreBoot.session),
+                        },
+                    },
+                    options,
+                );
+                application.restoreMaintenance = true;
+                if (restoreBoot.session) {
+                    application.restoreCoordinator = RestoreCoordinator.recover(
+                        options.activityControlRoot,
+                        dataSlotsRoot,
+                        {
+                            clock: options.clock,
+                            failpoint: options.restoreFailpoint,
+                        },
+                    );
+                }
+                return application;
+            }
+        }
         const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, options);
         const application = new WorkspaceApplication(
             dataSlotsRoot,
@@ -171,6 +243,21 @@ export class WorkspaceApplication {
             dataStateFrom(opened),
             options,
         );
+        if ((restoreBoot?.kind === 'committed' || restoreBoot?.kind === 'pre-checkpoint-session')
+            && restoreBoot.session
+            && application.dataState.store
+            && options.activityControlRoot) {
+            application.restoreCoordinator = new RestoreCoordinator(
+                application.dataState.store,
+                options.activityControlRoot,
+                {
+                    dataSlotsRoot,
+                    clock: options.clock,
+                    failpoint: options.restoreFailpoint,
+                },
+                restoreBoot,
+            );
+        }
         application.startDurableBackup();
         return application;
     }
@@ -212,6 +299,9 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.restore.start'
                         || requestKind === 'workspace.restore.query'
                         || requestKind === 'workspace.restore.confirm'
+                        || requestKind === 'workspace.restore.cancel'
+                        || requestKind === 'workspace.restore.resume'
+                        || requestKind === 'workspace.restore.rollback'
                         || requestKind === 'workspace.setup-draft.save'
                         || requestKind === 'workspace.setup-draft.discard'
                         || requestKind === 'workspace.task-series.query'
@@ -226,6 +316,18 @@ export class WorkspaceApplication {
                         ? 'validation'
                         : 'invalid-request';
             return this.problem(code, 'Workspace 请求无效。', requestIdFrom(request));
+        }
+
+        if (this.restoreMaintenance
+            && request.kind !== 'workspace.restore.query'
+            && request.kind !== 'workspace.restore.cancel'
+            && request.kind !== 'workspace.restore.resume'
+            && request.kind !== 'workspace.restore.rollback') {
+            return this.problem(
+                'operation-in-progress',
+                '恢复维护期间不能执行普通工作区请求。',
+                request.requestId,
+            );
         }
 
         switch (request.kind) {
@@ -253,6 +355,12 @@ export class WorkspaceApplication {
                 return this.queryRestoreSession(request.requestId, request.restoreSessionId);
             case 'workspace.restore.confirm':
                 return this.confirmRestoreSession(request.requestId, request.command);
+            case 'workspace.restore.cancel':
+                return this.cancelRestoreSession(request.requestId, request.command);
+            case 'workspace.restore.resume':
+                return this.resumeRestoreSession(request.requestId, request.command);
+            case 'workspace.restore.rollback':
+                return this.rollbackRestoreSession(request.requestId, request.command);
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
             case 'workspace.term.update-end-date':
@@ -344,7 +452,16 @@ export class WorkspaceApplication {
             this.restoreCoordinator = new RestoreCoordinator(
                 store,
                 this.options.activityControlRoot,
+                {
+                    dataSlotsRoot: this.dataSlotsRoot,
+                    clock: this.options.clock,
+                    failpoint: this.options.restoreFailpoint,
+                },
             );
+        }
+        if (this.restoreCoordinator?.requiresMaintenance()) {
+            this.restoreMaintenance = true;
+            return;
         }
         if (!this.backupCoordinator) {
             const coordinator = new DurableBackupCoordinator(store, {
@@ -675,14 +792,154 @@ export class WorkspaceApplication {
         }
         try {
             await this.backupCoordinator?.waitForIdle();
-            return this.restoreSessionOutcome(
-                requestId,
-                await this.restoreCoordinator.confirm(command),
-            );
+            const session = await this.restoreCoordinator.confirm(command);
+            if (session.phase === 'protection-established') {
+                await this.stopDurableBackupForRestore();
+                this.restoreMaintenance = true;
+            }
+            return this.restoreSessionOutcome(requestId, session);
         }
         catch (error) {
             return this.restoreProblem(error, requestId, '无法确认恢复预览。');
         }
+    }
+
+    private async cancelRestoreSession(
+        requestId: string,
+        command: CancelRestoreSessionRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.restoreCoordinator || this.dataState.status.kind !== 'ready') {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区不能取消恢复会话。',
+                requestId,
+            );
+        }
+        try {
+            await this.backupCoordinator?.waitForIdle();
+            const session = await this.restoreCoordinator.cancelBeforeCheckpoint(command);
+            this.restoreMaintenance = false;
+            this.startDurableBackup();
+            return this.restoreSessionOutcome(requestId, session);
+        }
+        catch (error) {
+            return this.restoreProblem(error, requestId, '无法取消恢复会话。');
+        }
+    }
+
+    private async resumeRestoreSession(
+        requestId: string,
+        command: ResumeRestoreSessionRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.restoreCoordinator) {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区没有可继续的恢复会话。',
+                requestId,
+            );
+        }
+        await this.stopDurableBackupForRestore();
+        try {
+            const session = await this.restoreCoordinator.resume(command);
+            if (!this.adoptRestoreStore()) {
+                throw new RestoreSessionError('recovery-required');
+            }
+            this.restoreMaintenance = false;
+            this.startDurableBackup();
+            const outcome = this.restoreSessionOutcome(requestId, session);
+            this.workspaceEpoch = randomUUID();
+            return outcome;
+        }
+        catch (error) {
+            const outcome = this.restoreProblem(error, requestId, '无法继续恢复会话。');
+            if (this.adoptRestoreStore()) {
+                this.restoreMaintenance = true;
+            }
+            else {
+                this.restoreMaintenance = true;
+                this.enterRestoreRecovery(command.restoreSessionId);
+                this.workspaceEpoch = randomUUID();
+            }
+            return outcome;
+        }
+    }
+
+    private async rollbackRestoreSession(
+        requestId: string,
+        command: RollbackRestoreSessionRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.restoreCoordinator) {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区没有可回滚的恢复会话。',
+                requestId,
+            );
+        }
+        await this.stopDurableBackupForRestore();
+        try {
+            const session = await this.restoreCoordinator.rollback(command);
+            if (!this.adoptRestoreStore()) {
+                throw new RestoreSessionError('recovery-required');
+            }
+            this.restoreMaintenance = false;
+            this.startDurableBackup();
+            const outcome = this.restoreSessionOutcome(requestId, session);
+            this.workspaceEpoch = randomUUID();
+            return outcome;
+        }
+        catch (error) {
+            const outcome = this.restoreProblem(error, requestId, '无法回滚恢复会话。');
+            if (this.adoptRestoreStore()) {
+                this.restoreMaintenance = true;
+            }
+            else {
+                this.restoreMaintenance = true;
+                this.enterRestoreRecovery(command.restoreSessionId);
+                this.workspaceEpoch = randomUUID();
+            }
+            return outcome;
+        }
+    }
+
+    private async stopDurableBackupForRestore(): Promise<void> {
+        try {
+            this.dataState.store?.setPostCommitHint(null);
+        }
+        catch {
+            // Restore may already have closed the prior DATA connection.
+        }
+        await this.backupCoordinator?.close();
+        this.backupCoordinator = undefined;
+    }
+
+    private adoptRestoreStore(): boolean {
+        const store = this.restoreCoordinator?.activeStore();
+        if (!store) {
+            return false;
+        }
+        this.dataState = {
+            sqliteVersion: workspaceDataRuntimeVersion(),
+            status: store.status(),
+            store,
+        };
+        return true;
+    }
+
+    private enterRestoreRecovery(restoreSessionId: string): void {
+        let session: ReturnType<RestoreCoordinator['query']> | null = null;
+        try {
+            session = this.restoreCoordinator?.query(restoreSessionId) ?? null;
+        }
+        catch {
+            // A corrupt external chain remains a closed, actionless recovery state.
+        }
+        this.dataState = {
+            sqliteVersion: workspaceDataRuntimeVersion(),
+            status: {
+                kind: 'recovery',
+                problem: restoreActivationProblem(session),
+            },
+        };
     }
 
     private restoreSessionOutcome(
