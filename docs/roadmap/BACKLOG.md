@@ -75,13 +75,13 @@
 |---|---|---|---|---|---|---|
 | `WP-R5-01` | 备份目的地配置和活动 DATA/资料库/备份三类位置隔离可证明 | `WP-R4-06` | — | `A-DATA-002` | `TEST-PROTECT-001` | `Done` |
 | `WP-R5-02` | 正式 DATA commit 可异步产生结构化不可变快照，失败不回滚本地成功 | `WP-R5-01` | — | — | `TEST-PROTECT-002`, `TEST-DATA-004` | `Done` |
-| `WP-R5-03` | 最近两份已验证结构化快照、待备份和未配置状态准确持久化 | `WP-R5-02` | — | `A-DATA-003` | `TEST-PROTECT-003` | `Verification` |
+| `WP-R5-03` | 最近两份已验证结构化快照、待备份和未配置状态准确持久化 | `WP-R5-02` | — | `A-DATA-003` | `TEST-PROTECT-003` | `Done` |
 
 ### R6 — 恢复、迁移与回退内核
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-R6-01` | 备份候选分类、安全恢复集和“只整库替换、不自动合并”边界闭环 | `WP-R5-03` | — | `A-DATA-006` | `TEST-WORKSPACE-002`, `TEST-PROTECT-004` | — |
+| `WP-R6-01` | 备份候选分类、安全恢复集和“只整库替换、不自动合并”边界闭环 | `WP-R5-03` | — | `A-DATA-006` | `TEST-WORKSPACE-002`, `TEST-PROTECT-004` | `Ready` |
 | `WP-R6-02` | 同卷暂存、检查点、外部激活协调记录和确定性继续/回滚状态机闭环 | `WP-R6-01` | 故障注入环境 | — | `TEST-DATA-006` | — |
 | `WP-R6-03` | 迁移安全副本、handoff 与中断恢复内核遵循 ADR-04/08/10 | `WP-R6-02` | 精确旧/新开发 build fixture | — | — | — |
 | `WP-R6-04` | 精确版本回退入口、影响说明、删除安全副本和恢复导航闭环 | `WP-R6-03` | 精确兼容 build fixture | — | `TEST-SHELL-005`, `TEST-WORKSPACE-007`, `TEST-PROTECT-007` | — |
@@ -414,6 +414,8 @@ body {
 | 2026-08-25 | `WP-R5-03` | `— → Ready` | `WP-R5-02` clean implementation source `e2745ebea8909820344270d89d21a4a877f753ef`、`Verification → Done` 证据与本次证据提交 | `WP-R5-02` 注册表为 `Done`，目标测试、全量测试/typecheck、FECS/规范自审与 Windows package/smoke 均通过；`WP-R5-03` 硬依赖满足且无额外证据依赖 | `WP-R5-03` 成为唯一 `Ready` 主链工作包；本次只推进生命周期，不实现最近两份保留、清理、状态 UI、候选恢复或 Restore。 |
 | 2026-08-26 | `WP-R5-03` | `Ready → In Progress` | clean baseline `5c3cb9c484e88b8a10f0b7d9e27e498753b0b17e`；本工作包（待提交） | `git status --short --branch` 确认 `main` 与 `origin/main` 同步且工作树干净；定位 `A-DATA-003/004`、`TEST-PROTECT-003`、ADR-07 §9/10、schema level 13、现有 DATA/PROTECT/PLATFORM 调用链和 R5/R6 边界。Stop That Shit Guard 为 `OBSERVING / unconfirmed`，按用户的 change 合同只处理本包及必要 schema/调用者/测试/证据，不新增依赖 | 开始以 TDD 实现合法 unconfigured、backup pending/current、last success、最近两份 fresh verified snapshot 与 restartable cleanup；明确排除 R6 Restore、Library-present 完整闭包和 `WP-GA-01` 视觉优化。 |
 | 2026-08-26 | `WP-R5-03` | `In Progress → Verification` | clean implementation source 为本行所在本地提交 | TDD RED/GREEN 覆盖 schema 13→14、持久 cleanup journal、七个 quarantine/delete 边界、fresh verified projection、最近两份保留、失败后本地成功/旧好快照/水位不回滚、unknown/other BackupSet/unregistered/corrupt/identity-conflict 不删除、父树与 snapshot 大小写别名、atomic publish/final record 两个重启及同 pass 窗口、newer snapshot 再验证、最旧 corrupt 或 missing registration 不阻塞后续保护，以及首个 member 删除后 surviving manifest 在重启或同 pass 被替换。聚焦 DATA/PROTECT/Workspace 回归 88/88 PASS；`pnpm test` 482 项中 481 PASS、0 FAIL、1 个既有 Windows file-link 权限 skip；`pnpm typecheck`、`git diff --check` PASS。全量首轮仅既有 packaged-smoke 后代进程的 500ms 退出观察窗抖动，隔离 3/3 与全量重跑均 PASS；19 个改动 TypeScript 路径的 FECS `@file`、120 字符、tab、禁用语法与新增单参数箭头门禁 PASS。独立只读复审提出的 projection freshness、真实 level-13 fixture、父级及发布 exact identity、verified candidate 选择与 member-level crash/同 pass 身份问题均已补红测并修复；对当前最终树复审为零个剩余 Critical/Important finding，`Ready to merge: Yes` | schema level 14 保存单一 `planned → quarantined → deleting` cleanup operation；DATA 原子登记/完成，PROTECT 在 exact read-only BackupSet 树中 fresh full-validate 后选择最旧 verified candidate，PLATFORM 只执行同父 quarantine 和非递归精确删除。删除固定为 database 后 manifest，每次 unlink 后重新经过 PROTECT 的 journal/manifest/root digest 和 newer-snapshot 验证；任何额外、替换、alias、冲突或不足两份 newer verified 均停止。公开 Workspace projection 不泄露路径，保留 durable last success，同时只列当前重新验证通过的最近两份。未新增依赖，未进入 Restore、Library-present 闭包或 UI；clean Windows package/smoke 待本源码提交后执行。 |
+| 2026-08-26 | `WP-R5-03` | `Verification → Done` | clean source `274b86a1a2a15623ee78801c0a74aa8fb78aefba`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200.0` / AMD64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`、packaged SQLite `3.53.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:274b86a1a2a15623ee78801c0a74aa8fb78aefba SQLite 3.53.1 verified-local` | `A-DATA-003/004` 与 `TEST-PROTECT-003` 的结构化 A-only 切片关闭：合法 unconfigured、持久 pending/current、last success、最近两份 fresh verified snapshot 及 restartable exact quarantine/delete 均成立；清理失败不回滚本地或 snapshot 成功，未知、其他集合、未登记、损坏与身份冲突条目保持不删除。package 只有既有 Vite native config 与 `inlineDynamicImports` 弃用 warning。当前 Windows 主机不允许创建 file symlink，相关 negative case 保持 skip；macOS arm64、真实 iCloud/OneDrive 同步器、packaged 目的地交互、签名、安装和公开发布未在本提交上验证。Library-present 完整闭包留在 R11，候选分类、安全恢复集、Restore 与激活留在 R6，`WP-GA-01` UI 未进入本包。 |
+| 2026-08-26 | `WP-R6-01` | `— → Ready` | `WP-R5-03` clean implementation source `274b86a1a2a15623ee78801c0a74aa8fb78aefba`、`Verification → Done` 证据与本次证据提交 | `WP-R5-03` 注册表为 `Done`，目标测试、全量测试/typecheck、FECS、独立复审与 clean Windows package/smoke 均通过；`WP-R6-01` 硬依赖满足且无额外证据依赖 | `WP-R6-01` 成为唯一 `Ready` 主链工作包；本次只推进生命周期，不实现候选分类、RestoreSafetySet、影响预览、整库替换、自动合并或任何 R6 代码。 |
 
 ## 7. 拆包与变更规则
 
