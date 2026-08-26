@@ -133,7 +133,11 @@ for (const parentMode of ['live', 'exit'] as const) {
 
       const pids = fixturePids(pidPath);
       assert.equal(pids.length, 2, 'fixture must record its parent and inherited-stderr descendant');
-      assert.deepEqual(await waitForResidue(pids, 500), []);
+      assert.deepEqual(
+        await waitForResidue(pids, 500),
+        [],
+        `${evidence.message}; root PID ${pids[0]}, descendant PID ${pids[1]}`,
+      );
     } finally {
       const pids = fixturePids(pidPath);
       await cleanExactFixtureProcesses(pids);
@@ -263,6 +267,103 @@ test(
         `fallback:${pids[1]}:exit-0`,
       ]);
       assert.deepEqual(await waitForResidue(pids, 500), [], evidence.message);
+    } finally {
+      const pids = fixturePids(pidPath);
+      await cleanExactFixtureProcesses(pids);
+      assert.equal(path.dirname(fixtureRoot), path.resolve(tmpdir()));
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  'packaged smoke does not report taskkill success while an exact exited-root descendant remains',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'courseflow-smoke-postcondition-'));
+    const descendantPath = path.join(fixtureRoot, 'descendant.mjs');
+    const parentPath = path.join(fixtureRoot, 'parent.mjs');
+    const harnessPath = path.join(fixtureRoot, 'harness.mjs');
+    const pidPath = path.join(fixtureRoot, 'pids.json');
+    const invocationPath = path.join(fixtureRoot, 'taskkill-invocation.txt');
+    const fakeTaskkillPath = path.join(fixtureRoot, 'taskkill.exe');
+    const fakeTaskkillPreloadPath = path.join(fixtureRoot, 'fake-taskkill.cjs');
+
+    writeFileSync(descendantPath, "setInterval(() => {}, 1_000);\n");
+    writeFileSync(
+      parentPath,
+      [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        'const descendant = spawn(',
+        '  process.execPath,',
+        '  [process.argv[2]],',
+        "  { detached: true, stdio: ['ignore', 'ignore', 'inherit'], windowsHide: true },",
+        ');',
+        'writeFileSync(process.argv[3], JSON.stringify([process.pid, descendant.pid]));',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      fakeTaskkillPreloadPath,
+      [
+        "const fs = require('node:fs');",
+        "const path = require('node:path');",
+        "if (path.basename(process.execPath).toLowerCase() === 'taskkill.exe') {",
+        "  const pidIndex = process.argv.findIndex((value) => path.basename(value).toUpperCase() === 'PID');",
+        '  fs.writeFileSync(process.env.COURSEFLOW_FAKE_TASKKILL_INVOCATION, process.argv[pidIndex + 1]);',
+        '  process.exit(0);',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    linkSync(process.execPath, fakeTaskkillPath);
+    writeFileSync(
+      harnessPath,
+      [
+        `import { runBoundedProcess } from ${JSON.stringify(runnerUrl)};`,
+        `process.env.PATH = ${JSON.stringify(`${fixtureRoot}${path.delimiter}`)} + process.env.PATH;`,
+        `process.env.COURSEFLOW_FAKE_TASKKILL_INVOCATION = ${JSON.stringify(invocationPath)};`,
+        `process.env.NODE_OPTIONS = ${JSON.stringify(
+          `--require=${fakeTaskkillPreloadPath.split(path.sep).join('/')}`,
+        )};`,
+        'const started = performance.now();',
+        'let message;',
+        'try {',
+        '  await runBoundedProcess(',
+        '    process.execPath,',
+        `    [${JSON.stringify(parentPath)}, ${JSON.stringify(descendantPath)}, ${JSON.stringify(pidPath)}],`,
+        '    { timeoutMilliseconds: 500, terminationGraceMilliseconds: 1_200 },',
+        '  );',
+        "  message = 'process unexpectedly completed';",
+        '} catch (error) {',
+        '  message = error instanceof Error ? error.message : String(error);',
+        '}',
+        'process.stdout.write(JSON.stringify({ elapsedMilliseconds: performance.now() - started, message }));',
+        '',
+      ].join('\n'),
+    );
+
+    try {
+      const execution = spawnSync(process.execPath, [harnessPath], {
+        encoding: 'utf8',
+        timeout: 4_000,
+        windowsHide: true,
+      });
+
+      assert.equal(execution.status, 0, execution.stderr || execution.error?.message);
+      const evidence = JSON.parse(execution.stdout) as { elapsedMilliseconds: number; message: string };
+      assert.match(
+        evidence.message,
+        /timed out after 500ms; process tree termination failed: exited process descendants remain after taskkill/,
+      );
+      assert.ok(evidence.elapsedMilliseconds < 2_500, `timeout settled after ${evidence.elapsedMilliseconds}ms`);
+
+      const pids = fixturePids(pidPath);
+      assert.equal(pids.length, 2, 'fixture must record its exited parent and inherited-stderr descendant');
+      assert.equal(Number(readFileSync(invocationPath, 'utf8')), pids[1]);
+      assert.equal(isRunning(pids[1]), true, 'fake taskkill must leave the exact descendant running');
     } finally {
       const pids = fixturePids(pidPath);
       await cleanExactFixtureProcesses(pids);

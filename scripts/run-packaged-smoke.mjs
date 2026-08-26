@@ -142,7 +142,22 @@ function terminateProcessTree(child, graceMilliseconds, rootStartedAt, rootExite
       if (targetPids.length === 0) {
         return 'exited process had no verifiable live descendants';
       }
-      return killWindowsProcessTrees(targetPids, graceDeadline);
+      const killFailure = killWindowsProcessTrees(targetPids, graceDeadline);
+      if (killFailure) {
+        return killFailure;
+      }
+
+      const waitState = new Int32Array(new SharedArrayBuffer(4));
+      let remainingPids = targetPids.filter(processIsRunning);
+      while (remainingPids.length > 0) {
+        const waitTimeout = remainingGrace(graceDeadline);
+        if (waitTimeout === 0) {
+          return `exited process descendants remain after taskkill: ${remainingPids.join(', ')}`;
+        }
+        Atomics.wait(waitState, 0, 0, Math.min(20, waitTimeout));
+        remainingPids = targetPids.filter(processIsRunning);
+      }
+      return undefined;
     }
 
     const initialFailure = killWindowsProcessTrees(targetPids, graceDeadline);
