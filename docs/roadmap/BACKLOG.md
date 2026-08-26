@@ -74,8 +74,8 @@
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
 | `WP-R5-01` | 备份目的地配置和活动 DATA/资料库/备份三类位置隔离可证明 | `WP-R4-06` | — | `A-DATA-002` | `TEST-PROTECT-001` | `Done` |
-| `WP-R5-02` | 正式 DATA commit 可异步产生结构化不可变快照，失败不回滚本地成功 | `WP-R5-01` | — | — | `TEST-PROTECT-002`, `TEST-DATA-004` | `Verification` |
-| `WP-R5-03` | 最近两份已验证结构化快照、待备份和未配置状态准确持久化 | `WP-R5-02` | — | `A-DATA-003` | `TEST-PROTECT-003` | — |
+| `WP-R5-02` | 正式 DATA commit 可异步产生结构化不可变快照，失败不回滚本地成功 | `WP-R5-01` | — | — | `TEST-PROTECT-002`, `TEST-DATA-004` | `Done` |
+| `WP-R5-03` | 最近两份已验证结构化快照、待备份和未配置状态准确持久化 | `WP-R5-02` | — | `A-DATA-003` | `TEST-PROTECT-003` | `Ready` |
 
 ### R6 — 恢复、迁移与回退内核
 
@@ -410,6 +410,8 @@ body {
 | 2026-08-25 | `WP-R5-02` | `— → Ready` | `WP-R5-01` clean implementation source `708fa4febbc20cf6b498f952b288e7048955c299`、`Verification → Done` 证据与本次证据提交 | `WP-R5-01` 注册表为 `Done`，目标测试、Windows package/smoke、规范追溯、FECS 与独立复审均通过；`WP-R5-02` 硬依赖满足且无额外证据依赖 | `WP-R5-02` 成为唯一 `Ready` 主链工作包；本次只推进生命周期，不实现 snapshot 生成、发布、保留、清理或恢复。 |
 | 2026-08-25 | `WP-R5-02` | `Ready → In Progress` | 本工作包（待提交） | `git status --short --branch` 确认工作树干净且 `main` 仅领先远端 2 个既有提交；定位 `TEST-PROTECT-002`、`TEST-DATA-004`、`FLOW-04`、ADR-04/07 与现有 DATA/PROTECT/PLATFORM 调用链 | 开始实现正式 DATA commit 的 DurableFollowUp 异步结构化 snapshot 切片；范围仅含 watermark、actual revision、staging/manifest/验证/发布/final 重验/成功登记和重启收敛，不实现 R5-03 保留/清理、状态 UI 或恢复。 |
 | 2026-08-25 | `WP-R5-02` | `In Progress → Verification` | clean implementation source 为本行所在本地提交 | TDD RED 先后锁定 manifest、DATA operation、publisher/coordinator 与 Workspace wake 缺口；GREEN 后目标集合 31/31 PASS，`pnpm test` 453 项中 452 PASS、1 个既有 Windows file-link 权限 skip，`pnpm typecheck`、`git diff --check` PASS。全量首轮仅 packaged-smoke 后代进程清理时序用例抖动，独立重跑 3/3 与随后全量重跑均 PASS。改动 TypeScript 路径的 FECS `@file`、120 字符、tab、函数说明及新增语法辅助门禁 PASS；以用户合同和 `MODULE_CONTRACTS`/ADR-03/04/07 为 Spec 轴、AGENTS/FECS/Ponytail 为 Standards 轴的最终自审均无未解决 finding | schema level 13 持久化/合并 `backupNeededThrough` 与幂等 DurableFollowUp，按 Online Backup actual revision 串行执行同父 staging、同步关闭、逐成员 SHA-256、canonical manifest、staging full validation、持久 publishing intent、原子 rename、final fresh full validation 和 DATA success transaction；15 个阶段 failpoint、PostCommit 丢失/重复、重启与更高 revision 均收敛。未实现 R5-03 保留/清理、状态 UI、候选恢复或 Library-present 闭包；clean package/smoke 待本源码提交后执行。当前 Windows 主机不允许创建 file symlink，相关 link negative case保持 skip；macOS 未在本提交上重新验证。 |
+| 2026-08-25 | `WP-R5-02` | `Verification → Done` | clean source `e2745ebea8909820344270d89d21a4a877f753ef`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本次证据提交 | Windows `10.0.26200.0` / AMD64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`、packaged SQLite `3.53.1`；clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:e2745ebea8909820344270d89d21a4a877f753ef SQLite 3.53.1 verified-local` | `TEST-PROTECT-002`、`TEST-DATA-004` 与本切片 `FLOW-04` 关闭：正式 DATA commit 的本地成功不等待或回滚异步备份，持久 operation/watermark/follow-up 与结构化不可变 snapshot 在通知丢失、重复、阶段中断和重启后收敛。package 只有既有 Vite native config 与 `inlineDynamicImports` 弃用 warning。当前 Windows 主机不允许创建 file symlink；macOS arm64、真实 iCloud/OneDrive 同步器、packaged 目的地交互、签名、安装和公开发布未在本提交上验证。未实现 R5-03 保留/清理/状态、Library-present 闭包、候选恢复或 Restore。 |
+| 2026-08-25 | `WP-R5-03` | `— → Ready` | `WP-R5-02` clean implementation source `e2745ebea8909820344270d89d21a4a877f753ef`、`Verification → Done` 证据与本次证据提交 | `WP-R5-02` 注册表为 `Done`，目标测试、全量测试/typecheck、FECS/规范自审与 Windows package/smoke 均通过；`WP-R5-03` 硬依赖满足且无额外证据依赖 | `WP-R5-03` 成为唯一 `Ready` 主链工作包；本次只推进生命周期，不实现最近两份保留、清理、状态 UI、候选恢复或 Restore。 |
 
 ## 7. 拆包与变更规则
 
