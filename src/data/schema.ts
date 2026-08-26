@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 12;
+export const CURRENT_SCHEMA_LEVEL = 13;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -39,6 +39,8 @@ const holidayRangeIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'holiday_range_id'
 const taskSeriesIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_series_id');
 const taskSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_segment_id');
 const backupSetIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'backup_set_id');
+const operationIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'operation_id');
+const snapshotIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'snapshot_id');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -1329,6 +1331,65 @@ const LEVEL_12_PROTECTION_DDL = `
 const LEVEL_12_DDL = LEVEL_11_DDL.replace(LEVEL_11_RECEIPT_DDL, LEVEL_12_RECEIPT_DDL)
     + LEVEL_12_PROTECTION_DDL;
 
+const LEVEL_13_PROTECTION_DDL = `
+    CREATE TABLE backup_operations (
+        operation_id TEXT PRIMARY KEY CHECK (${operationIdCheck}),
+        backup_set_id TEXT NOT NULL CHECK (${backupSetIdCheck}),
+        backup_sequence INTEGER NOT NULL CHECK (backup_sequence > 0),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (${snapshotIdCheck}),
+        target_revision INTEGER NOT NULL CHECK (target_revision > 0),
+        actual_revision INTEGER CHECK (
+            actual_revision IS NULL OR actual_revision >= target_revision
+        ),
+        staging_directory_name TEXT NOT NULL CHECK (
+            length(staging_directory_name) BETWEEN 1 AND 255
+            AND instr(staging_directory_name, '/') = 0
+            AND instr(staging_directory_name, char(92)) = 0
+        ),
+        created_at TEXT NOT NULL,
+        phase TEXT NOT NULL CHECK (
+            phase IN (
+                'queued',
+                'database-checkpoint',
+                'library-copy',
+                'staging-validation',
+                'publishing',
+                'published-pending-record',
+                'succeeded'
+            )
+        ),
+        operation_version INTEGER NOT NULL CHECK (operation_version >= 0),
+        UNIQUE (backup_set_id, backup_sequence)
+    ) STRICT;
+
+    CREATE TABLE backup_snapshots (
+        snapshot_id TEXT PRIMARY KEY CHECK (${snapshotIdCheck}),
+        operation_id TEXT NOT NULL UNIQUE CHECK (${operationIdCheck}),
+        backup_set_id TEXT NOT NULL CHECK (${backupSetIdCheck}),
+        backup_sequence INTEGER NOT NULL CHECK (backup_sequence > 0),
+        actual_revision INTEGER NOT NULL CHECK (actual_revision > 0),
+        root_digest TEXT NOT NULL CHECK (
+            length(root_digest) = 64
+            AND root_digest = lower(root_digest)
+            AND root_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        succeeded_at TEXT NOT NULL,
+        UNIQUE (backup_set_id, backup_sequence),
+        FOREIGN KEY (operation_id) REFERENCES backup_operations(operation_id) ON DELETE RESTRICT
+    ) STRICT;
+`;
+
+const LEVEL_13_DDL = LEVEL_12_DDL
+    .replace(
+        "state TEXT NOT NULL CHECK (state = 'pending')",
+        "state TEXT NOT NULL CHECK (state IN ('pending', 'completed'))",
+    )
+    .replace(
+        'follow_up_version INTEGER NOT NULL CHECK (follow_up_version = 0)',
+        'follow_up_version INTEGER NOT NULL CHECK (follow_up_version IN (0, 1))',
+    )
+    + LEVEL_13_PROTECTION_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -1357,6 +1418,27 @@ const TABLE_COLUMNS = {
         ['destination_display_name', 'TEXT', 0, 0],
         ['originating_command_id', 'TEXT', 0, 0],
         ['configured_revision', 'INTEGER', 0, 0],
+    ],
+    backup_operations: [
+        ['operation_id', 'TEXT', 1, 1],
+        ['backup_set_id', 'TEXT', 1, 0],
+        ['backup_sequence', 'INTEGER', 1, 0],
+        ['snapshot_id', 'TEXT', 1, 0],
+        ['target_revision', 'INTEGER', 1, 0],
+        ['actual_revision', 'INTEGER', 0, 0],
+        ['staging_directory_name', 'TEXT', 1, 0],
+        ['created_at', 'TEXT', 1, 0],
+        ['phase', 'TEXT', 1, 0],
+        ['operation_version', 'INTEGER', 1, 0],
+    ],
+    backup_snapshots: [
+        ['snapshot_id', 'TEXT', 1, 1],
+        ['operation_id', 'TEXT', 1, 0],
+        ['backup_set_id', 'TEXT', 1, 0],
+        ['backup_sequence', 'INTEGER', 1, 0],
+        ['actual_revision', 'INTEGER', 1, 0],
+        ['root_digest', 'TEXT', 1, 0],
+        ['succeeded_at', 'TEXT', 1, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1625,6 +1707,8 @@ const FOREIGN_KEYS = {
         ['originating_command_id', 'command_receipts', 'command_id'],
         ['singleton', 'workspace_state', 'singleton'],
     ],
+    backup_operations: [],
+    backup_snapshots: [['operation_id', 'backup_operations', 'operation_id']],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -1706,6 +1790,12 @@ const LEVEL_12_TABLES = [
     'backup_configuration',
 ] as const;
 
+const LEVEL_13_TABLES = [
+    ...LEVEL_12_TABLES,
+    'backup_operations',
+    'backup_snapshots',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1726,7 +1816,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1753,7 +1843,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 10) {
         return LEVEL_10_TABLES;
     }
-    return level === 11 ? LEVEL_11_TABLES : LEVEL_12_TABLES;
+    if (level === 11) {
+        return LEVEL_11_TABLES;
+    }
+    return level === 12 ? LEVEL_12_TABLES : LEVEL_13_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1796,7 +1889,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                             ? LEVEL_10_DDL
                                             : level === 11
                                                 ? LEVEL_11_DDL
-                                                : LEVEL_12_DDL;
+                                                : level === 12
+                                                    ? LEVEL_12_DDL
+                                                    : LEVEL_13_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -2446,6 +2541,112 @@ function validateLevel12ProtectionFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Validates durable backup operations, completed follow-ups, and immutable success facts.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 13.
+ * @return {void}
+ */
+function validateLevel13ProtectionFacts(database: DatabaseSync): void {
+    const watermarks = database.prepare(`
+        SELECT backup_needed_through, backup_succeeded_through
+        FROM protection_watermarks
+        WHERE singleton = 1
+    `);
+    watermarks.setReadBigInts(true);
+    const watermark = watermarks.get() as {
+        backup_needed_through: bigint;
+        backup_succeeded_through: bigint;
+    };
+    const followUps = database.prepare(`
+        SELECT prerequisite_revision, state, follow_up_version
+        FROM durable_followups
+    `);
+    followUps.setReadBigInts(true);
+    const followUpRows = followUps.all() as Array<{
+        prerequisite_revision: bigint;
+        state: 'pending' | 'completed';
+        follow_up_version: bigint;
+    }>;
+    if (followUpRows.some(row => (row.state === 'pending'
+        && (row.follow_up_version !== 0n
+            || row.prerequisite_revision <= watermark.backup_succeeded_through))
+        || (row.state === 'completed'
+            && (row.follow_up_version !== 1n
+                || row.prerequisite_revision > watermark.backup_succeeded_through)))) {
+        rejectSchema('database-corrupt');
+    }
+
+    const operations = database.prepare(`
+        SELECT
+            operation.operation_id,
+            operation.backup_set_id,
+            operation.backup_sequence,
+            operation.snapshot_id,
+            operation.target_revision,
+            operation.actual_revision,
+            operation.staging_directory_name,
+            operation.created_at,
+            operation.phase,
+            snapshot.operation_id AS snapshot_operation_id,
+            snapshot.backup_set_id AS snapshot_backup_set_id,
+            snapshot.backup_sequence AS snapshot_backup_sequence,
+            snapshot.snapshot_id AS registered_snapshot_id,
+            snapshot.actual_revision AS snapshot_actual_revision,
+            snapshot.succeeded_at
+        FROM backup_operations AS operation
+        LEFT JOIN backup_snapshots AS snapshot
+            ON snapshot.operation_id = operation.operation_id
+        JOIN backup_configuration AS configuration ON configuration.singleton = 1
+    `);
+    operations.setReadBigInts(true);
+    const operationRows = operations.all() as Array<{
+        operation_id: string;
+        backup_set_id: string;
+        backup_sequence: bigint;
+        snapshot_id: string;
+        target_revision: bigint;
+        actual_revision: bigint | null;
+        staging_directory_name: string;
+        created_at: string;
+        phase: string;
+        snapshot_operation_id: string | null;
+        snapshot_backup_set_id: string | null;
+        snapshot_backup_sequence: bigint | null;
+        registered_snapshot_id: string | null;
+        snapshot_actual_revision: bigint | null;
+        succeeded_at: string | null;
+    }>;
+    const configuration = database.prepare(
+        'SELECT backup_set_id FROM backup_configuration WHERE singleton = 1',
+    ).get() as {backup_set_id: string | null};
+    const activeOperationCount = operationRows.filter(row => row.phase !== 'succeeded').length;
+    if (activeOperationCount > 1 || operationRows.some(row => {
+        const expectedStagingPrefix = `.staging-${row.operation_id}-`;
+        const stagingNonce = row.staging_directory_name.slice(expectedStagingPrefix.length);
+        const hasCheckpoint = row.phase !== 'queued';
+        const succeeded = row.phase === 'succeeded';
+        return configuration.backup_set_id === null
+            || row.backup_set_id !== configuration.backup_set_id
+            || row.target_revision > watermark.backup_needed_through
+            || !isCanonicalInstant(row.created_at)
+            || !row.staging_directory_name.startsWith(expectedStagingPrefix)
+            || !/^[0-9a-f]{16}$/.test(stagingNonce)
+            || hasCheckpoint !== (row.actual_revision !== null)
+            || succeeded !== (row.snapshot_operation_id !== null)
+            || (succeeded && (
+                row.snapshot_backup_set_id !== row.backup_set_id
+                || row.snapshot_backup_sequence !== row.backup_sequence
+                || row.registered_snapshot_id !== row.snapshot_id
+                || row.snapshot_actual_revision !== row.actual_revision
+                || row.actual_revision! > watermark.backup_succeeded_through
+                || row.succeeded_at === null
+                || !isCanonicalInstant(row.succeeded_at)
+            ));
+    })) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -2482,6 +2683,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 12) {
         validateLevel12ProtectionFacts(database);
+    }
+    if (level >= 13) {
+        validateLevel13ProtectionFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -3484,6 +3688,51 @@ export function migrateLevel11To12(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds durable backup operation and immutable snapshot success facts.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel12To13(database: DatabaseSync): void {
+    database.exec(`
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_12;
+        DROP INDEX durable_followups_by_command;
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state IN ('pending', 'completed')),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version IN (0, 1)),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_12;
+        DROP TABLE durable_followups_level_12;
+
+        ${LEVEL_13_PROTECTION_DDL}
+
+        UPDATE durable_followups
+        SET state = 'completed', follow_up_version = 1
+        WHERE prerequisite_revision <= (
+            SELECT backup_succeeded_through
+            FROM protection_watermarks
+            WHERE singleton = 1
+        );
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 13;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -3566,6 +3815,15 @@ export function createSchemaLevel11(database: DatabaseSync): void {
  */
 export function createSchemaLevel12(database: DatabaseSync): void {
     database.exec(LEVEL_12_DDL);
+}
+
+/**
+ * Creates the current level 13 schema with durable backup operation storage.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel13(database: DatabaseSync): void {
+    database.exec(LEVEL_13_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -3654,4 +3912,13 @@ export function validateSchemaLevel11(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel12(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 12);
+}
+
+/**
+ * Validates level 13 durable backup work and immutable success registration.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel13(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 13);
 }

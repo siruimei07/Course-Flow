@@ -103,7 +103,7 @@ function readyOutcome(requestId: string): BootstrapOutcome {
             workspaceData: {
                 kind: 'ready',
                 workspaceId: WORKSPACE_ID,
-                schemaLevel: 12,
+                schemaLevel: 13,
                 revision: '0',
             },
         },

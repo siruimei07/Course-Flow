@@ -31,6 +31,10 @@ const APP_BUILD_ID = 'test-build';
 const COMMAND_ID = '11111111-1111-4111-8111-111111111111';
 const FOLLOW_UP_ID = '22222222-2222-4222-8222-222222222222';
 
+type BackupAwareWorkspaceApplication = WorkspaceApplication & Readonly<{
+    waitForDurableBackups(): Promise<void>;
+}>;
+
 function createDirectory(t: test.TestContext, name: string): string {
     const directory = mkdtempSync(path.join(tmpdir(), `courseflow-${name}-`));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -143,8 +147,14 @@ test('A-DATA-002/TEST-PROTECT-001: unconfigured, configure, replay, and restart 
     });
     assert.doesNotMatch(JSON.stringify(after), /workspace\.sqlite|[A-Za-z]:[\\/]|canonicalPath/);
 
-    assert.equal(existsSync(path.join(destination, 'CourseFlow')), false);
     await application.close();
+    assert.equal(existsSync(path.join(destination, 'CourseFlow')), true);
+    assert.equal(readdirSync(path.join(
+        destination,
+        'CourseFlow',
+        workspaceId,
+        backupSetId,
+    )).length, 1);
 
     const restarted = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
     const restartedBootstrap = await bootstrap(restarted);
@@ -159,6 +169,114 @@ test('A-DATA-002/TEST-PROTECT-001: unconfigured, configure, replay, and restart 
         throw new Error('Expected restarted protection projection');
     }
     assert.deepEqual(restartedProjection.value.projection, after.value.projection);
+    await restarted.close();
+});
+
+test('TEST-DATA-004/FLOW-04: a formal commit wakes backup asynchronously', async t => {
+    const dataSlotsRoot = createDirectory(t, 'workspace-durable-backup');
+    const destination = createDirectory(t, 'durable-backup-destination');
+    const application = await WorkspaceApplication.open(
+        dataSlotsRoot,
+        APP_BUILD_ID,
+    ) as BackupAwareWorkspaceApplication;
+    const initial = await bootstrap(application);
+    const initialized = await application.handle(makeInitializeWorkspaceRequest(
+        'initialize-durable-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(initialized.ok, true);
+    if (!initialized.ok
+        || initialized.value.kind !== 'workspace.initialized'
+        || initialized.value.workspaceData.kind !== 'ready') {
+        throw new Error('Expected initialized Workspace');
+    }
+    const configured = await application.handle(makeSelectedBackupDestinationRequest(
+        makeConfigureBackupDestinationRequest(
+            'configure-durable-backup',
+            APP_BUILD_ID,
+            initial.workspaceEpoch,
+            command(initialized.value.workspaceData.workspaceId),
+        ),
+        destination,
+    ));
+    assert.equal(configured.ok, true);
+    if (!configured.ok || configured.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected committed backup configuration');
+    }
+    assert.equal(typeof application.waitForDurableBackups, 'function');
+    await application.waitForDurableBackups();
+    const backupSetId = configured.value.outcome.effects[0]!.entity.id;
+    const backupSetPath = path.join(
+        destination,
+        'CourseFlow',
+        initialized.value.workspaceData.workspaceId,
+        backupSetId,
+    );
+    assert.equal(readdirSync(backupSetPath).length, 1);
+    assert.match(readdirSync(backupSetPath)[0]!, /^snapshot-[0-9a-f-]{36}$/);
+    await application.close();
+});
+
+test('FLOW-04: an asynchronous backup failure never rolls back the local commit', async t => {
+    const dataSlotsRoot = createDirectory(t, 'workspace-failed-durable-backup');
+    const destination = createDirectory(t, 'failed-durable-backup-destination');
+    const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        durableBackupOptions: {
+            failpoint(point: string): void {
+                if (point === 'backup.after-database-temp-write') {
+                    throw new Error('injected asynchronous backup failure');
+                }
+            },
+        },
+    } as unknown as Parameters<typeof WorkspaceApplication.open>[2]) as BackupAwareWorkspaceApplication;
+    const initial = await bootstrap(application);
+    const initialized = await application.handle(makeInitializeWorkspaceRequest(
+        'initialize-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(initialized.ok, true);
+    if (!initialized.ok
+        || initialized.value.kind !== 'workspace.initialized'
+        || initialized.value.workspaceData.kind !== 'ready') {
+        throw new Error('Expected initialized Workspace');
+    }
+    const configured = await application.handle(makeSelectedBackupDestinationRequest(
+        makeConfigureBackupDestinationRequest(
+            'configure-failed-backup',
+            APP_BUILD_ID,
+            initial.workspaceEpoch,
+            command(initialized.value.workspaceData.workspaceId),
+        ),
+        destination,
+    ));
+    assert.equal(configured.ok, true);
+    await application.waitForDurableBackups();
+    const projection = await application.handle(makeDataProtectionQueryRequest(
+        'query-after-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(projection.ok, true);
+    if (!projection.ok || projection.value.kind !== 'workspace.data-protection-projection') {
+        throw new Error('Expected committed protection projection');
+    }
+    assert.equal(projection.value.projection.workspaceRevision, '1');
+    assert.equal(projection.value.projection.configuration.kind, 'configured');
+    await application.close();
+
+    const restarted = await WorkspaceApplication.open(
+        dataSlotsRoot,
+        APP_BUILD_ID,
+    ) as BackupAwareWorkspaceApplication;
+    await restarted.waitForDurableBackups();
+    assert.equal(readdirSync(path.join(
+        destination,
+        'CourseFlow',
+        initialized.value.workspaceData.workspaceId,
+        (projection.value.projection.configuration as {backupSetId: string}).backupSetId,
+    )).length, 1);
     await restarted.close();
 });
 

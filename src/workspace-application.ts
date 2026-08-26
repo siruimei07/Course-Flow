@@ -66,6 +66,10 @@ import {
 } from './protect/backup-configuration';
 import { BackupDestinationPreparationError } from './protect/backup-repository';
 import {
+    DurableBackupCoordinator,
+    type DurableBackupPassOptions,
+} from './protect/durable-backup';
+import {
     buildPlanProjection,
     createPlanEvaluationContext,
 } from './shared/workspace-plan-contract';
@@ -90,6 +94,7 @@ const SYSTEM_CLOCK: ClockPort = {
 export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     commitOptions?: CommitOptions;
     clock?: ClockPort;
+    durableBackupOptions?: DurableBackupPassOptions;
     libraryRootPath?: string | null;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
@@ -135,6 +140,7 @@ function dataStateFrom(opened: DataOpenResult): WorkspaceDataState {
 }
 
 export class WorkspaceApplication {
+    private backupCoordinator: DurableBackupCoordinator | undefined;
     private readonly workspaceEpoch = randomUUID();
 
     private constructor(
@@ -150,7 +156,14 @@ export class WorkspaceApplication {
         options: WorkspaceApplicationOptions = {},
     ): Promise<WorkspaceApplication> {
         const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, options);
-        return new WorkspaceApplication(dataSlotsRoot, appBuildId, dataStateFrom(opened), options);
+        const application = new WorkspaceApplication(
+            dataSlotsRoot,
+            appBuildId,
+            dataStateFrom(opened),
+            options,
+        );
+        application.startDurableBackup();
+        return application;
     }
 
     public handle(request: WorkspaceProbeRequest): Promise<BootstrapOutcome>;
@@ -282,7 +295,40 @@ export class WorkspaceApplication {
     }
 
     public async close(): Promise<void> {
+        try {
+            this.dataState.store?.setPostCommitHint(null);
+        }
+        catch {
+            // A terminal DATA connection already detached its in-process hint.
+        }
+        await this.backupCoordinator?.close();
         await this.dataState.store?.close();
+    }
+
+    /**
+     * Waits for the current best-effort backup pass without exposing snapshot state to UI.
+     * @return {Promise<void>} Current background pass completion.
+     */
+    public async waitForDurableBackups(): Promise<void> {
+        await this.backupCoordinator?.waitForIdle();
+    }
+
+    /**
+     * Attaches the per-open DATA hint and requests startup convergence when writable.
+     * @return {void}
+     */
+    private startDurableBackup(): void {
+        const store = this.dataState.store;
+        if (!store || this.dataState.status.kind !== 'ready' || this.backupCoordinator) {
+            return;
+        }
+        const coordinator = new DurableBackupCoordinator(store, {
+            clock: this.options.clock ?? SYSTEM_CLOCK,
+            ...this.options.durableBackupOptions,
+        });
+        this.backupCoordinator = coordinator;
+        store.setPostCommitHint(() => coordinator.wake());
+        coordinator.wake();
     }
 
     private bootstrap(request: WorkspaceProbeRequest): BootstrapOutcome {
@@ -316,6 +362,7 @@ export class WorkspaceApplication {
                     status: store.status(),
                     store,
                 };
+                this.startDurableBackup();
             }
             catch {
                 return this.problem('workspace-unavailable', '无法创建本地工作区。', requestId);

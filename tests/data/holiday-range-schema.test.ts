@@ -80,8 +80,8 @@ function createLevel6Workspace(dataSlotsRoot: string): void {
 test('ADR-04/A-TERM-004: current schema retains one strict HolidayRange row per inclusive range', async t => {
     const dataSlotsRoot = createTempDataSlots(t);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 12);
-    assert.equal(store.status().schemaLevel, 12);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 13);
+    assert.equal(store.status().schemaLevel, 13);
     await store.close();
 
     const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
@@ -107,7 +107,7 @@ test('ADR-04/A-TERM-004: current schema retains one strict HolidayRange row per 
             return [index.name, index.origin, index.partial];
         });
 
-        assert.equal(userVersion.user_version, 12n);
+        assert.equal(userVersion.user_version, 13n);
         assert.equal(table.name, 'holiday_ranges');
         assert.equal(table.strict, 1n);
         assert.deepEqual(columns, [
@@ -172,7 +172,7 @@ test('ADR-04/TEST-DATA-006: level 6 migrates through HolidayRange storage atomic
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 6 HolidayRange migration to continue');
     }
-    assert.equal(continued.store.status().schemaLevel, 12);
-    assert.equal(continued.store.status().revision, '6');
+    assert.equal(continued.store.status().schemaLevel, 13);
+    assert.equal(continued.store.status().revision, '7');
     await continued.store.close();
 });
