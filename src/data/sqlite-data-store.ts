@@ -10486,7 +10486,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 10
                 && identity.schemaLevel !== 11
                 && identity.schemaLevel !== 12
-                && identity.schemaLevel !== 13)) {
+                && identity.schemaLevel !== 13
+                && identity.schemaLevel !== 14)) {
             closeBestEffort(source);
             return opened;
         }
@@ -10526,8 +10527,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 12) {
             validateSchemaLevel12(source);
         }
-        else {
+        else if (identity.schemaLevel === 13) {
             validateSchemaLevel13(source);
+        }
+        else {
+            validateSchemaLevel14(source);
         }
         if (options.readOnly) {
             closeBestEffort(source);
@@ -10578,8 +10582,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 12) {
                 validateSchemaLevel12(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 13) {
                 validateSchemaLevel13(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel14(safetyDatabase);
             }
         }
         finally {

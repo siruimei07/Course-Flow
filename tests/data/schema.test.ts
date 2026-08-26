@@ -598,6 +598,64 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     }
 });
 
+test('TEST-DATA-005/006: level 14 migrates through its retained verified safety copy', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const initialized = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
+    await initialized.close();
+
+    const activeDatabasePath = join(dataSlotsRoot, 'active', 'workspace.sqlite');
+    const level14Database = new DatabaseSync(activeDatabasePath);
+    try {
+        level14Database.exec(`
+            BEGIN IMMEDIATE;
+            DROP TABLE restore_command_receipts;
+            DROP TABLE restore_sessions;
+            PRAGMA user_version = 14;
+            COMMIT;
+        `);
+    }
+    finally {
+        level14Database.close();
+    }
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected level 14 migration to open ready');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 15,
+        revision: '1',
+    });
+    await opened.store.close();
+
+    const safetyDirectories = readdirSync(dataSlotsRoot)
+        .filter(name => name.startsWith('migration-safety-level-14-'));
+    assert.equal(safetyDirectories.length, 1);
+    const safetyDatabase = new DatabaseSync(
+        join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
+        { readOnly: true, readBigInts: true },
+    );
+    try {
+        assert.equal(
+            (safetyDatabase.prepare('PRAGMA user_version').get() as { user_version: bigint }).user_version,
+            14n,
+        );
+        assert.equal(
+            (safetyDatabase.prepare(
+                "SELECT count(*) AS count FROM pragma_table_list WHERE name LIKE 'restore_%'",
+            ).get() as { count: bigint }).count,
+            0n,
+        );
+    }
+    finally {
+        safetyDatabase.close();
+    }
+});
+
 test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow-ups', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel1Workspace(dataSlotsRoot);
