@@ -26,6 +26,7 @@ import {
 import {
     BACKUP_REPOSITORY_SCHEMA,
     type DataProtectionProjection,
+    type RestoreCandidateProjection,
 } from '../shared/workspace-protection-contract';
 import {
     type BackupDatabaseFacts,
@@ -40,6 +41,8 @@ import {
     SnapshotValidationError,
     validateSnapshotManifestV1,
 } from './snapshot-manifest';
+
+export {RestoreCoordinator} from './restore-session';
 
 const REPOSITORY_DIRECTORY_NAME = 'CourseFlow';
 const REPOSITORY_MARKER_NAME = 'repository-v1.json';
@@ -748,6 +751,7 @@ function runSnapshotRetention(
  */
 export function readVerifiedDataProtectionProjection(
     store: SqliteDataStore,
+    restoreCandidates: readonly RestoreCandidateProjection[] = Object.freeze([]),
 ): DataProtectionProjection {
     const projection = store.readDataProtectionProjection();
     if (!('backup' in projection)) {
@@ -798,6 +802,7 @@ export function readVerifiedDataProtectionProjection(
                 snapshotFormatVersion: '1' as const,
                 integrity: 'verified' as const,
             }))),
+            restoreCandidates: Object.freeze(Array.from(restoreCandidates)),
         }),
     });
 }

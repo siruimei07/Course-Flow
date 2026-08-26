@@ -131,19 +131,19 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
 test('TEST-DATA-001/005: current schema initializes Meeting, HolidayRange, Task, and setup draft facts', async t => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 14);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 15);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 14,
+        schemaLevel: 15,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 14,
+        userVersion: 15,
         tables: [
             'backup_cleanup_operations',
             'backup_configuration',
@@ -159,6 +159,8 @@ test('TEST-DATA-001/005: current schema initializes Meeting, HolidayRange, Task,
             'plan_state',
             'protection_watermarks',
             'receipt_effects',
+            'restore_command_receipts',
+            'restore_sessions',
             'setup_draft_checkpoint',
             'setup_state',
             'task_occurrence_overrides',
@@ -266,7 +268,7 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 14,
+            schemaLevel: 15,
             revision: '0',
         });
         await store.close();
@@ -428,10 +430,10 @@ test('ADR-04/WP-R5-03: level 13 migrates to the resumable cleanup journal', asyn
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 14,
-        revision: '4',
+        schemaLevel: 15,
+        revision: '5',
     });
-    assert.equal(opened.store.readProtectionWatermark(), '4');
+    assert.equal(opened.store.readProtectionWatermark(), '5');
     assert.equal(opened.store.readBackupCleanupOperation(), null);
     assert.deepEqual(opened.store.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId), [
         '66666666-6666-4666-8666-666666666666',
@@ -567,8 +569,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 14,
-        revision: '13',
+        schemaLevel: 15,
+        revision: '14',
     });
     await opened.store.close();
 
@@ -607,7 +609,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '14');
+    assert.equal(opened.store.status().revision, '15');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -674,7 +676,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 14,
+        requiredSchemaLevel: 15,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -1069,7 +1071,7 @@ test('Q-TIME-01/TEST-DATA-006: level 5 offsets migrate atomically and restart at
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 5 offset migration to continue');
     }
-    assert.equal(continued.store.status().revision, '14');
+    assert.equal(continued.store.status().revision, '15');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-09-30' },
@@ -1134,7 +1136,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 4 migration to continue');
     }
-    assert.equal(continued.store.status().revision, '14');
+    assert.equal(continued.store.status().revision, '15');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-12-31' },
@@ -1154,7 +1156,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
         'plan.course-created',
         'plan.meeting-series-created',
     ]);
-    assert.equal(continued.store.readProtectionWatermark(), '14');
+    assert.equal(continued.store.readProtectionWatermark(), '15');
     await continued.store.close();
 });
 
@@ -1389,8 +1391,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 14,
-        revision: '13',
+        schemaLevel: 15,
+        revision: '14',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -1416,7 +1418,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '13');
+    assert.equal(opened.store.readProtectionWatermark(), '14');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -1453,8 +1455,8 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 14,
-        revision: '14',
+        schemaLevel: 15,
+        revision: '15',
     });
     const projection = opened.store.readSetupProjection();
     assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
@@ -1538,7 +1540,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
         commandId: '88888888-8888-4888-8888-888888888888',
         followUpId: '99999999-9999-4999-8999-999999999999',
     }), TypeError);
-    assert.equal(opened.store.status().revision, '14');
+    assert.equal(opened.store.status().revision, '15');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)

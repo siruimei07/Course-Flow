@@ -91,6 +91,7 @@ test('TEST-PROTECT-003: configured projections expose persistent pending and las
                 snapshotFormatVersion: '1',
                 integrity: 'verified',
             }],
+            restoreCandidates: [],
             cleanup: 'idle',
         },
     } as const;

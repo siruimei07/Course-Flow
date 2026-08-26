@@ -43,6 +43,9 @@ import {
     type MeetingOccurrenceImpactRequest,
     type MeetingSeriesQueryRequest,
     type PlanQueryRequest,
+    type ConfirmRestoreSessionRequest,
+    type RestoreSessionQueryRequest,
+    type StartRestoreSessionRequest,
     type SelectedBackupDestinationRequest,
     type SaveSetupDraftCheckpointRequest,
     type SetTaskOccurrenceStatusRequest,
@@ -70,6 +73,10 @@ import {
     type DurableBackupPassOptions,
 } from './protect/durable-backup';
 import {
+    RestoreCoordinator,
+    RestoreSessionError,
+} from './protect/restore-session';
+import {
     buildPlanProjection,
     createPlanEvaluationContext,
 } from './shared/workspace-plan-contract';
@@ -95,6 +102,7 @@ export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
     commitOptions?: CommitOptions;
     clock?: ClockPort;
     durableBackupOptions?: DurableBackupPassOptions;
+    activityControlRoot?: string;
     libraryRootPath?: string | null;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
@@ -141,6 +149,7 @@ function dataStateFrom(opened: DataOpenResult): WorkspaceDataState {
 
 export class WorkspaceApplication {
     private backupCoordinator: DurableBackupCoordinator | undefined;
+    private restoreCoordinator: RestoreCoordinator | undefined;
     private readonly workspaceEpoch = randomUUID();
 
     private constructor(
@@ -200,6 +209,9 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.protection.query'
                         || requestKind === 'workspace.protection.configure'
                         || requestKind === 'workspace.protection.configure-selected'
+                        || requestKind === 'workspace.restore.start'
+                        || requestKind === 'workspace.restore.query'
+                        || requestKind === 'workspace.restore.confirm'
                         || requestKind === 'workspace.setup-draft.save'
                         || requestKind === 'workspace.setup-draft.discard'
                         || requestKind === 'workspace.task-series.query'
@@ -235,6 +247,12 @@ export class WorkspaceApplication {
                     request.command,
                     request.selectedDirectoryPath,
                 );
+            case 'workspace.restore.start':
+                return this.startRestoreSession(request.requestId, request.command);
+            case 'workspace.restore.query':
+                return this.queryRestoreSession(request.requestId, request.restoreSessionId);
+            case 'workspace.restore.confirm':
+                return this.confirmRestoreSession(request.requestId, request.command);
             case 'workspace.term.create':
                 return this.createTerm(request.requestId, request.command);
             case 'workspace.term.update-end-date':
@@ -319,16 +337,24 @@ export class WorkspaceApplication {
      */
     private startDurableBackup(): void {
         const store = this.dataState.store;
-        if (!store || this.dataState.status.kind !== 'ready' || this.backupCoordinator) {
+        if (!store || this.dataState.status.kind !== 'ready') {
             return;
         }
-        const coordinator = new DurableBackupCoordinator(store, {
-            clock: this.options.clock ?? SYSTEM_CLOCK,
-            ...this.options.durableBackupOptions,
-        });
-        this.backupCoordinator = coordinator;
-        store.setPostCommitHint(() => coordinator.wake());
-        coordinator.wake();
+        if (!this.restoreCoordinator && this.options.activityControlRoot) {
+            this.restoreCoordinator = new RestoreCoordinator(
+                store,
+                this.options.activityControlRoot,
+            );
+        }
+        if (!this.backupCoordinator) {
+            const coordinator = new DurableBackupCoordinator(store, {
+                clock: this.options.clock ?? SYSTEM_CLOCK,
+                ...this.options.durableBackupOptions,
+            });
+            this.backupCoordinator = coordinator;
+            store.setPostCommitHint(() => coordinator.wake());
+            coordinator.wake();
+        }
     }
 
     private bootstrap(request: WorkspaceProbeRequest): BootstrapOutcome {
@@ -579,13 +605,123 @@ export class WorkspaceApplication {
                     requestId,
                     workspaceEpoch: this.workspaceEpoch,
                     dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
-                    projection: readVerifiedDataProtectionProjection(this.dataState.store),
+                    projection: readVerifiedDataProtectionProjection(
+                        this.dataState.store,
+                        this.restoreCoordinator?.listCandidates(),
+                    ),
                 },
             };
         }
         catch {
             return this.problem('recovery-required', '无法读取一致的数据保护配置。', requestId);
         }
+    }
+
+    private async startRestoreSession(
+        requestId: string,
+        command: StartRestoreSessionRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.restoreCoordinator || this.dataState.status.kind !== 'ready') {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区不能开始恢复会话。',
+                requestId,
+            );
+        }
+        try {
+            await this.backupCoordinator?.waitForIdle();
+            return this.restoreSessionOutcome(
+                requestId,
+                await this.restoreCoordinator.start(command),
+            );
+        }
+        catch (error) {
+            return this.restoreProblem(error, requestId, '无法开始恢复会话。');
+        }
+    }
+
+    private queryRestoreSession(
+        requestId: string,
+        restoreSessionId: RestoreSessionQueryRequest['restoreSessionId'],
+    ): WorkspaceSetupOutcome {
+        if (!this.restoreCoordinator) {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区没有可查询的恢复会话。',
+                requestId,
+            );
+        }
+        try {
+            return this.restoreSessionOutcome(
+                requestId,
+                this.restoreCoordinator.query(restoreSessionId),
+            );
+        }
+        catch (error) {
+            return this.restoreProblem(error, requestId, '无法查询恢复会话。');
+        }
+    }
+
+    private async confirmRestoreSession(
+        requestId: string,
+        command: ConfirmRestoreSessionRequest['command'],
+    ): Promise<WorkspaceSetupOutcome> {
+        if (!this.restoreCoordinator || this.dataState.status.kind !== 'ready') {
+            return this.problem(
+                'workspace-unavailable',
+                '当前工作区不能确认恢复预览。',
+                requestId,
+            );
+        }
+        try {
+            await this.backupCoordinator?.waitForIdle();
+            return this.restoreSessionOutcome(
+                requestId,
+                await this.restoreCoordinator.confirm(command),
+            );
+        }
+        catch (error) {
+            return this.restoreProblem(error, requestId, '无法确认恢复预览。');
+        }
+    }
+
+    private restoreSessionOutcome(
+        requestId: string,
+        session: ReturnType<RestoreCoordinator['query']>,
+    ): WorkspaceSetupOutcome {
+        return {
+            ok: true,
+            value: {
+                kind: 'workspace.restore-session',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                session,
+            },
+        };
+    }
+
+    private restoreProblem(
+        error: unknown,
+        requestId: string,
+        message: string,
+    ): WorkspaceSetupOutcome {
+        if (error instanceof RestoreSessionError) {
+            if (error.code === 'conflict') {
+                return this.problem('conflict', message, requestId);
+            }
+            if (error.code === 'identity-conflict' || error.code === 'not-found') {
+                return this.problem('identity-conflict', message, requestId);
+            }
+            if (error.code === 'snapshot-incomplete'
+                || error.code === 'snapshot-corrupt'
+                || error.code === 'incompatible-version'
+                || error.code === 'library-safety-unavailable') {
+                return this.problem('validation', message, requestId);
+            }
+        }
+        return this.problem('recovery-required', message, requestId);
     }
 
     /**

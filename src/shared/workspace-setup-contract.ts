@@ -37,9 +37,15 @@ import {
 } from './workspace-data-contract';
 import {
     isDataProtectionProjection,
+    isRestoreSessionView,
+    normalizeConfirmRestoreSessionCommand,
     normalizeConfigureBackupDestinationCommand,
+    normalizeStartRestoreSessionCommand,
+    type ConfirmRestoreSessionCommand,
     type ConfigureBackupDestinationCommand,
     type DataProtectionProjection,
+    type RestoreSessionView,
+    type StartRestoreSessionCommand,
 } from './workspace-protection-contract';
 import {
     isHolidayRangeProjection,
@@ -144,6 +150,21 @@ export type DataProtectionQueryRequest = WorkspaceRequestBase & Readonly<{
 export type ConfigureBackupDestinationRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.protection.configure';
     command: ConfigureBackupDestinationCommand;
+}>;
+
+export type StartRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.start';
+    command: StartRestoreSessionCommand;
+}>;
+
+export type RestoreSessionQueryRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.query';
+    restoreSessionId: string;
+}>;
+
+export type ConfirmRestoreSessionRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.restore.confirm';
+    command: ConfirmRestoreSessionCommand;
 }>;
 
 export type SelectedBackupDestinationRequest = WorkspaceRequestBase & Readonly<{
@@ -295,6 +316,9 @@ export type WorkspaceSetupRequest =
     | PlanQueryRequest
     | DataProtectionQueryRequest
     | ConfigureBackupDestinationRequest
+    | StartRestoreSessionRequest
+    | RestoreSessionQueryRequest
+    | ConfirmRestoreSessionRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
     | CreateHolidayRangeRequest
@@ -446,6 +470,17 @@ export type WorkspaceSetupOutcome =
             workspaceEpoch: string;
             dataMode: 'ready' | 'read-only';
             projection: DataProtectionProjection;
+        }>;
+    }>
+    | Readonly<{
+        ok: true;
+        value: Readonly<{
+            kind: 'workspace.restore-session';
+            protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
+            appBuildId: string;
+            requestId: string;
+            workspaceEpoch: string;
+            session: RestoreSessionView;
         }>;
     }>
     | Readonly<{
@@ -747,6 +782,81 @@ export function makeDataProtectionQueryRequest(
         appBuildId,
         requestId,
         workspaceEpoch,
+    };
+}
+
+/**
+ * Builds the exact path-free request that starts one RestoreSession.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {StartRestoreSessionCommand} command - Opaque verified-candidate command.
+ * @return {StartRestoreSessionRequest} Exact Workspace request.
+ */
+export function makeStartRestoreSessionRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: StartRestoreSessionCommand,
+): StartRestoreSessionRequest {
+    return {
+        kind: 'workspace.restore.start',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeStartRestoreSessionCommand(command),
+    };
+}
+
+/**
+ * Builds a side-effect-free RestoreSession query.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {string} restoreSessionId - Stable session identity.
+ * @return {RestoreSessionQueryRequest} Exact Workspace request.
+ */
+export function makeRestoreSessionQueryRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    restoreSessionId: string,
+): RestoreSessionQueryRequest {
+    if (!isCanonicalUuid(restoreSessionId)) {
+        throw new TypeError('RestoreSessionId is invalid');
+    }
+    return {
+        kind: 'workspace.restore.query',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        restoreSessionId,
+    };
+}
+
+/**
+ * Builds the exact preview-bound RestoreSession confirmation request.
+ * @param {string} requestId - Request correlation identity.
+ * @param {string} appBuildId - Calling application build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {ConfirmRestoreSessionCommand} command - Versioned confirmation command.
+ * @return {ConfirmRestoreSessionRequest} Exact Workspace request.
+ */
+export function makeConfirmRestoreSessionRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ConfirmRestoreSessionCommand,
+): ConfirmRestoreSessionRequest {
+    return {
+        kind: 'workspace.restore.confirm',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeConfirmRestoreSessionCommand(command),
     };
 }
 
@@ -1357,6 +1467,16 @@ export function isWorkspaceSetupRequest(
             'expectedVersion',
         ]) && isCanonicalUnsignedSqliteInteger(value.expectedVersion);
     }
+    if (value.kind === 'workspace.restore.query') {
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'restoreSessionId',
+        ]) && isCanonicalUuid(value.restoreSessionId);
+    }
     if (value.kind === 'workspace.meeting-series.query') {
         return hasExactDataKeys(value, [
             'kind',
@@ -1441,6 +1561,8 @@ export function isWorkspaceSetupRequest(
             && value.kind !== 'workspace.course.create-with-first-meeting'
             && value.kind !== 'workspace.meeting-occurrence.change'
             && value.kind !== 'workspace.meeting-occurrence.cancel'
+            && value.kind !== 'workspace.restore.start'
+            && value.kind !== 'workspace.restore.confirm'
             && value.kind !== 'workspace.protection.configure')
         || !hasExactDataKeys(value, [
             'kind',
@@ -1456,6 +1578,12 @@ export function isWorkspaceSetupRequest(
     try {
         if (value.kind === 'workspace.protection.configure') {
             normalizeConfigureBackupDestinationCommand(value.command);
+        }
+        else if (value.kind === 'workspace.restore.start') {
+            normalizeStartRestoreSessionCommand(value.command);
+        }
+        else if (value.kind === 'workspace.restore.confirm') {
+            normalizeConfirmRestoreSessionCommand(value.command);
         }
         else if (value.kind === 'workspace.term.create') {
             normalizeCreateTermCommand(value.command);
@@ -1890,6 +2018,16 @@ export function isWorkspaceSetupOutcome(
         ])
             && (outcome.dataMode === 'ready' || outcome.dataMode === 'read-only')
             && isDataProtectionProjection(outcome.projection);
+    }
+    if (outcome.kind === 'workspace.restore-session') {
+        return hasExactDataKeys(outcome, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+            'session',
+        ]) && isRestoreSessionView(outcome.session);
     }
     if (outcome.kind === 'workspace.meeting-series-projection') {
         return hasExactDataKeys(outcome, [

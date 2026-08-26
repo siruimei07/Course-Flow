@@ -41,6 +41,92 @@ export type VerifiedBackupSnapshotProjection = Readonly<{
     integrity: 'verified';
 }>;
 
+export type RestoreCandidateStatus =
+    | 'verified'
+    | 'incomplete-or-sync-pending'
+    | 'corrupt'
+    | 'incompatible'
+    | 'unknown-entry';
+
+export type RestoreCandidateProjection = Readonly<{
+    candidateRef: string;
+    candidateKind: 'snapshot' | 'unknown-entry';
+    snapshotId: string | null;
+    status: RestoreCandidateStatus;
+    actualRevision: string | null;
+    createdAt: string | null;
+    compatibility: 'current' | 'migration-required' | 'unsupported' | 'unknown';
+}>;
+
+export type StartRestoreSessionCommand = Readonly<{
+    commandId: string;
+    candidateRef: string;
+}>;
+
+export type ConfirmRestoreSessionCommand = Readonly<{
+    commandId: string;
+    restoreSessionId: string;
+    expectedSessionVersion: string;
+    previewToken: string;
+}>;
+
+export type RestoreLibraryRootBinding =
+    | Readonly<{kind: 'absent'}>
+    | Readonly<{
+        kind: 'present';
+        libraryRootId: string;
+        rootGeneration: string;
+    }>;
+
+export type RestoreImpactSummary = Readonly<{
+    replacement: 'complete';
+    automaticMerge: false;
+    termCount: string;
+    courseCount: string;
+    taskSeriesCount: string;
+    currentRevision: string;
+    candidateRevision: string;
+}>;
+
+export type RestoreSessionView = Readonly<{
+    restoreSessionId: string;
+    operationId: string;
+    sessionVersion: string;
+    phase: 'previewed' | 'waiting-decision' | 'protection-established';
+    candidate: Readonly<{
+        candidateRef: string;
+        snapshotId: string;
+        sourceSchemaLevel: string;
+        preparedSchemaLevel: string;
+        actualRevision: string;
+        validationCopy: 'copied' | 'migrated';
+    }>;
+    current: Readonly<{
+        workspaceId: string;
+        revision: string;
+        libraryRoot: RestoreLibraryRootBinding;
+    }>;
+    target: Readonly<{libraryRoot: RestoreLibraryRootBinding}>;
+    impact: RestoreImpactSummary;
+    recoverability: Readonly<{
+        mode: 'required';
+        safetySet:
+            | Readonly<{state: 'pending'}>
+            | Readonly<{
+                state: 'verified';
+                safetySetId: string;
+                protectedRevision: string;
+            }>;
+    }>;
+    previewToken: string | null;
+    allowedActions: readonly (
+        | 'confirm'
+        | 'repreview'
+        | 'cancel-before-checkpoint'
+    )[];
+    problem: Readonly<{code: 'impact-changed'}> | null;
+}>;
+
 export type ConfiguredBackupProjection = Readonly<{
     state: 'pending' | 'current';
     neededThrough: string;
@@ -51,6 +137,7 @@ export type ConfiguredBackupProjection = Readonly<{
         succeededAt: string;
     }> | null;
     recentVerifiedSnapshots: readonly VerifiedBackupSnapshotProjection[];
+    restoreCandidates: readonly RestoreCandidateProjection[];
     cleanup: 'idle' | 'pending';
 }>;
 
@@ -115,6 +202,206 @@ function isVerifiedBackupSnapshotProjection(
         && value.integrity === 'verified';
 }
 
+function isNullableCanonicalUuid(value: unknown): value is string | null {
+    return value === null || isCanonicalUuid(value);
+}
+
+function isNullableCanonicalInstant(value: unknown): value is string | null {
+    return value === null || isCanonicalInstant(value);
+}
+
+function isNullableCanonicalRevision(value: unknown): value is string | null {
+    return value === null || (isCanonicalUnsignedSqliteInteger(value) && value !== '0');
+}
+
+/**
+ * Validates one exact path-free restore candidate row.
+ * @param {unknown} value - Candidate projection.
+ * @return {boolean} Whether all status-dependent facts are exact.
+ */
+export function isRestoreCandidateProjection(
+    value: unknown,
+): value is RestoreCandidateProjection {
+    if (!hasExactDataKeys(value, [
+        'candidateRef',
+        'candidateKind',
+        'snapshotId',
+        'status',
+        'actualRevision',
+        'createdAt',
+        'compatibility',
+    ])
+        || !isCanonicalUuid(value.candidateRef)
+        || !isNullableCanonicalUuid(value.snapshotId)
+        || !isNullableCanonicalRevision(value.actualRevision)
+        || !isNullableCanonicalInstant(value.createdAt)) {
+        return false;
+    }
+    if (value.status === 'unknown-entry') {
+        return value.candidateKind === 'unknown-entry'
+            && value.snapshotId === null
+            && value.actualRevision === null
+            && value.createdAt === null
+            && value.compatibility === 'unknown';
+    }
+    if (value.candidateKind !== 'snapshot' || value.snapshotId === null) {
+        return false;
+    }
+    if (value.status === 'verified') {
+        return value.actualRevision !== null
+            && value.createdAt !== null
+            && (value.compatibility === 'current'
+                || value.compatibility === 'migration-required');
+    }
+    if (value.status === 'incompatible') {
+        return value.actualRevision === null
+            && value.createdAt === null
+            && value.compatibility === 'unsupported';
+    }
+    return (value.status === 'incomplete-or-sync-pending' || value.status === 'corrupt')
+        && value.actualRevision === null
+        && value.createdAt === null
+        && value.compatibility === 'unknown';
+}
+
+function isRestoreLibraryRootBinding(value: unknown): value is RestoreLibraryRootBinding {
+    if (hasExactDataKeys(value, ['kind'])) {
+        return value.kind === 'absent';
+    }
+    return hasExactDataKeys(value, ['kind', 'libraryRootId', 'rootGeneration'])
+        && value.kind === 'present'
+        && isCanonicalUuid(value.libraryRootId)
+        && isCanonicalUuid(value.rootGeneration);
+}
+
+function isRestoreImpactSummary(value: unknown): value is RestoreImpactSummary {
+    return hasExactDataKeys(value, [
+        'replacement',
+        'automaticMerge',
+        'termCount',
+        'courseCount',
+        'taskSeriesCount',
+        'currentRevision',
+        'candidateRevision',
+    ])
+        && value.replacement === 'complete'
+        && value.automaticMerge === false
+        && isCanonicalUnsignedSqliteInteger(value.termCount)
+        && isCanonicalUnsignedSqliteInteger(value.courseCount)
+        && isCanonicalUnsignedSqliteInteger(value.taskSeriesCount)
+        && isCanonicalUnsignedSqliteInteger(value.currentRevision)
+        && isCanonicalUnsignedSqliteInteger(value.candidateRevision)
+        && value.candidateRevision !== '0';
+}
+
+function isRestoreSafetySetProjection(
+    value: unknown,
+): value is RestoreSessionView['recoverability']['safetySet'] {
+    if (hasExactDataKeys(value, ['state'])) {
+        return value.state === 'pending';
+    }
+    return hasExactDataKeys(value, [
+        'state',
+        'safetySetId',
+        'protectedRevision',
+    ])
+        && value.state === 'verified'
+        && isCanonicalUuid(value.safetySetId)
+        && isCanonicalUnsignedSqliteInteger(value.protectedRevision);
+}
+
+/**
+ * Validates the bounded pre-checkpoint RestoreSession view exposed to Shell.
+ * @param {unknown} value - Candidate session view.
+ * @return {boolean} Whether the view is exact and internally consistent.
+ */
+export function isRestoreSessionView(value: unknown): value is RestoreSessionView {
+    if (!hasExactDataKeys(value, [
+        'restoreSessionId',
+        'operationId',
+        'sessionVersion',
+        'phase',
+        'candidate',
+        'current',
+        'target',
+        'impact',
+        'recoverability',
+        'previewToken',
+        'allowedActions',
+        'problem',
+    ])
+        || !isCanonicalUuid(value.restoreSessionId)
+        || !isCanonicalUuid(value.operationId)
+        || !isCanonicalUnsignedSqliteInteger(value.sessionVersion)
+        || !hasExactDataKeys(value.candidate, [
+            'candidateRef',
+            'snapshotId',
+            'sourceSchemaLevel',
+            'preparedSchemaLevel',
+            'actualRevision',
+            'validationCopy',
+        ])
+        || !isCanonicalUuid(value.candidate.candidateRef)
+        || !isCanonicalUuid(value.candidate.snapshotId)
+        || !isCanonicalUnsignedSqliteInteger(value.candidate.sourceSchemaLevel)
+        || value.candidate.sourceSchemaLevel === '0'
+        || !isCanonicalUnsignedSqliteInteger(value.candidate.preparedSchemaLevel)
+        || value.candidate.preparedSchemaLevel === '0'
+        || !isCanonicalUnsignedSqliteInteger(value.candidate.actualRevision)
+        || value.candidate.actualRevision === '0'
+        || (value.candidate.validationCopy !== 'copied'
+            && value.candidate.validationCopy !== 'migrated')
+        || (value.candidate.validationCopy === 'copied'
+            && value.candidate.sourceSchemaLevel !== value.candidate.preparedSchemaLevel)
+        || (value.candidate.validationCopy === 'migrated'
+            && BigInt(value.candidate.sourceSchemaLevel)
+                >= BigInt(value.candidate.preparedSchemaLevel))
+        || !hasExactDataKeys(value.current, [
+            'workspaceId',
+            'revision',
+            'libraryRoot',
+        ])
+        || !isCanonicalUuid(value.current.workspaceId)
+        || !isCanonicalUnsignedSqliteInteger(value.current.revision)
+        || !isRestoreLibraryRootBinding(value.current.libraryRoot)
+        || !hasExactDataKeys(value.target, ['libraryRoot'])
+        || !isRestoreLibraryRootBinding(value.target.libraryRoot)
+        || !isRestoreImpactSummary(value.impact)
+        || value.impact.currentRevision !== value.current.revision
+        || value.impact.candidateRevision !== value.candidate.actualRevision
+        || !hasExactDataKeys(value.recoverability, ['mode', 'safetySet'])
+        || value.recoverability.mode !== 'required'
+        || !isRestoreSafetySetProjection(value.recoverability.safetySet)
+        || !Array.isArray(value.allowedActions)
+        || !value.allowedActions.every(action => action === 'confirm'
+            || action === 'repreview'
+            || action === 'cancel-before-checkpoint')) {
+        return false;
+    }
+    if (value.phase === 'previewed') {
+        return typeof value.previewToken === 'string'
+            && /^[0-9a-f]{64}$/.test(value.previewToken)
+            && value.recoverability.safetySet.state === 'pending'
+            && JSON.stringify(value.allowedActions)
+                === JSON.stringify(['confirm', 'cancel-before-checkpoint'])
+            && value.problem === null;
+    }
+    if (value.phase === 'waiting-decision') {
+        return value.previewToken === null
+            && value.recoverability.safetySet.state === 'pending'
+            && JSON.stringify(value.allowedActions)
+                === JSON.stringify(['repreview', 'cancel-before-checkpoint'])
+            && hasExactDataKeys(value.problem, ['code'])
+            && value.problem.code === 'impact-changed';
+    }
+    return value.phase === 'protection-established'
+        && value.previewToken === null
+        && value.recoverability.safetySet.state === 'verified'
+        && value.recoverability.safetySet.protectedRevision === value.current.revision
+        && JSON.stringify(value.allowedActions) === JSON.stringify(['cancel-before-checkpoint'])
+        && value.problem === null;
+}
+
 function isConfiguredBackupProjection(value: unknown): value is ConfiguredBackupProjection {
     if (!hasExactDataKeys(value, [
         'state',
@@ -122,6 +409,7 @@ function isConfiguredBackupProjection(value: unknown): value is ConfiguredBackup
         'succeededThrough',
         'lastSuccess',
         'recentVerifiedSnapshots',
+        'restoreCandidates',
         'cleanup',
     ])
         || (value.state !== 'pending' && value.state !== 'current')
@@ -132,7 +420,9 @@ function isConfiguredBackupProjection(value: unknown): value is ConfiguredBackup
         || (value.cleanup !== 'idle' && value.cleanup !== 'pending')
         || !Array.isArray(value.recentVerifiedSnapshots)
         || value.recentVerifiedSnapshots.length > 2
-        || !value.recentVerifiedSnapshots.every(isVerifiedBackupSnapshotProjection)) {
+        || !value.recentVerifiedSnapshots.every(isVerifiedBackupSnapshotProjection)
+        || !Array.isArray(value.restoreCandidates)
+        || !value.restoreCandidates.every(isRestoreCandidateProjection)) {
         return false;
     }
     const snapshots = value.recentVerifiedSnapshots;
@@ -198,6 +488,54 @@ function normalizedBase(value: unknown): ConfigureBackupDestinationCommand {
             payload: {},
         },
     };
+}
+
+/**
+ * Normalizes the path-free command that starts a session from one opaque candidate.
+ * @param {unknown} value - Candidate start command.
+ * @return {StartRestoreSessionCommand} Exact command.
+ */
+export function normalizeStartRestoreSessionCommand(
+    value: unknown,
+): StartRestoreSessionCommand {
+    if (!hasExactDataKeys(value, ['commandId', 'candidateRef'])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.candidateRef)) {
+        throw new TypeError('Start restore session command is invalid');
+    }
+    return Object.freeze({
+        commandId: value.commandId,
+        candidateRef: value.candidateRef,
+    });
+}
+
+/**
+ * Normalizes the version- and preview-bound pre-checkpoint confirmation command.
+ * @param {unknown} value - Candidate confirmation command.
+ * @return {ConfirmRestoreSessionCommand} Exact command.
+ */
+export function normalizeConfirmRestoreSessionCommand(
+    value: unknown,
+): ConfirmRestoreSessionCommand {
+    if (!hasExactDataKeys(value, [
+        'commandId',
+        'restoreSessionId',
+        'expectedSessionVersion',
+        'previewToken',
+    ])
+        || !isCanonicalUuid(value.commandId)
+        || !isCanonicalUuid(value.restoreSessionId)
+        || !isCanonicalUnsignedSqliteInteger(value.expectedSessionVersion)
+        || typeof value.previewToken !== 'string'
+        || !/^[0-9a-f]{64}$/.test(value.previewToken)) {
+        throw new TypeError('Confirm restore session command is invalid');
+    }
+    return Object.freeze({
+        commandId: value.commandId,
+        restoreSessionId: value.restoreSessionId,
+        expectedSessionVersion: value.expectedSessionVersion,
+        previewToken: value.previewToken,
+    });
 }
 
 /**

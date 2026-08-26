@@ -2,7 +2,15 @@
  * @file Implements the transactional SQLite owner for Workspace facts and receipts.
  */
 
-import { existsSync, lstatSync, mkdirSync, renameSync, rmSync } from 'node:fs';
+import {
+    constants as fsConstants,
+    copyFileSync,
+    existsSync,
+    lstatSync,
+    mkdirSync,
+    renameSync,
+    rmSync,
+} from 'node:fs';
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {isAbsolute, join} from 'node:path';
 import { backup, DatabaseSync, type DatabaseSyncOptions } from 'node:sqlite';
@@ -155,7 +163,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel14,
+    createSchemaLevel15,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -169,6 +177,7 @@ import {
     migrateLevel11To12,
     migrateLevel12To13,
     migrateLevel13To14,
+    migrateLevel14To15,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -184,6 +193,7 @@ import {
     validateSchemaLevel12,
     validateSchemaLevel13,
     validateSchemaLevel14,
+    validateSchemaLevel15,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -233,7 +243,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 14 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 15 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -266,13 +276,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 14;
+        schemaLevel: 15;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 14;
+        schemaLevel: 15;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -410,6 +420,65 @@ export type SuccessfulBackupSnapshot = Readonly<{
     succeededAt: string;
 }>;
 
+export type RestoreDatabaseFacts = BackupDatabaseFacts & Readonly<{
+    termCount: string;
+    courseCount: string;
+    taskSeriesCount: string;
+    sourceBackup: Readonly<{
+        backupSetId: string;
+        backupSequence: string;
+        snapshotId: string;
+        targetRevision: string;
+    }>;
+}>;
+
+export type PreparedRestoreDatabaseFacts = RestoreDatabaseFacts & Readonly<{
+    sourceSchemaLevel: string;
+    preparedSchemaLevel: string;
+    validationCopy: 'copied' | 'migrated';
+}>;
+
+export type StoredRestoreSession = Readonly<{
+    restoreSessionId: string;
+    operationId: string;
+    candidateRef: string;
+    snapshotId: string;
+    candidateRootDigest: string;
+    candidateDatabaseDigest: string;
+    sourceSchemaLevel: string;
+    preparedSchemaLevel: string;
+    candidateRevision: string;
+    validationCopy: 'copied' | 'migrated';
+    currentWorkspaceId: string;
+    currentRevision: string;
+    currentLibrary: Readonly<{kind: 'absent'}> | Readonly<{
+        kind: 'present';
+        libraryRootId: string;
+        rootGeneration: string;
+    }>;
+    targetBindingVersion: string;
+    termCount: string;
+    courseCount: string;
+    taskSeriesCount: string;
+    impactDigest: string;
+    bindingDigest: string;
+    previewToken: string | null;
+    phase: 'previewed' | 'waiting-decision' | 'protection-established';
+    sessionVersion: string;
+    problemCode: 'impact-changed' | null;
+    safetySetId: string | null;
+    safetyProtectedRevision: string | null;
+    safetyRootDigest: string | null;
+}>;
+
+export type StoredRestoreCommandReceipt = Readonly<{
+    commandId: string;
+    commandKind: 'start' | 'confirm';
+    payloadDigest: string;
+    restoreSessionId: string;
+    resultSessionVersion: string;
+}>;
+
 export type BackupCleanupOperation = Readonly<{
     operationId: string;
     backupSetId: string;
@@ -458,6 +527,37 @@ type BackupCleanupOperationRow = {
     operation_version: bigint;
 };
 
+type RestoreSessionRow = {
+    restore_session_id: string;
+    operation_id: string;
+    candidate_ref: string;
+    snapshot_id: string;
+    candidate_root_digest: string;
+    candidate_database_digest: string;
+    source_schema_level: bigint;
+    prepared_schema_level: bigint;
+    candidate_revision: bigint;
+    validation_copy: 'copied' | 'migrated';
+    current_workspace_id: string;
+    current_revision: bigint;
+    current_library_kind: 'absent' | 'present';
+    current_library_root_id: string | null;
+    current_root_generation: string | null;
+    target_binding_version: bigint;
+    term_count: bigint;
+    course_count: bigint;
+    task_series_count: bigint;
+    impact_digest: string;
+    binding_digest: string;
+    preview_token: string | null;
+    phase: 'previewed' | 'waiting-decision' | 'protection-established';
+    session_version: bigint;
+    problem_code: 'impact-changed' | null;
+    safety_set_id: string | null;
+    safety_protected_revision: bigint | null;
+    safety_root_digest: string | null;
+};
+
 /**
  * Converts one validated storage row into the path-safe PROTECT operation contract.
  * @param {BackupOperationRow} row - Typed SQLite operation row.
@@ -494,6 +594,43 @@ function backupCleanupOperationFromRow(row: BackupCleanupOperationRow): BackupCl
         quarantineDirectoryName: row.quarantine_directory_name,
         phase: row.phase,
         version: row.operation_version.toString(),
+    });
+}
+
+function restoreSessionFromRow(row: RestoreSessionRow): StoredRestoreSession {
+    return Object.freeze({
+        restoreSessionId: row.restore_session_id,
+        operationId: row.operation_id,
+        candidateRef: row.candidate_ref,
+        snapshotId: row.snapshot_id,
+        candidateRootDigest: row.candidate_root_digest,
+        candidateDatabaseDigest: row.candidate_database_digest,
+        sourceSchemaLevel: row.source_schema_level.toString(),
+        preparedSchemaLevel: row.prepared_schema_level.toString(),
+        candidateRevision: row.candidate_revision.toString(),
+        validationCopy: row.validation_copy,
+        currentWorkspaceId: row.current_workspace_id,
+        currentRevision: row.current_revision.toString(),
+        currentLibrary: row.current_library_kind === 'absent'
+            ? Object.freeze({kind: 'absent' as const})
+            : Object.freeze({
+                kind: 'present' as const,
+                libraryRootId: row.current_library_root_id!,
+                rootGeneration: row.current_root_generation!,
+            }),
+        targetBindingVersion: row.target_binding_version.toString(),
+        termCount: row.term_count.toString(),
+        courseCount: row.course_count.toString(),
+        taskSeriesCount: row.task_series_count.toString(),
+        impactDigest: row.impact_digest,
+        bindingDigest: row.binding_digest,
+        previewToken: row.preview_token,
+        phase: row.phase,
+        sessionVersion: row.session_version.toString(),
+        problemCode: row.problem_code,
+        safetySetId: row.safety_set_id,
+        safetyProtectedRevision: row.safety_protected_revision?.toString() ?? null,
+        safetyRootDigest: row.safety_root_digest,
     });
 }
 
@@ -755,6 +892,88 @@ function normalizeBackupDatabaseCopy(path: string): void {
     finally {
         database.close();
     }
+}
+
+/**
+ * Validates a supported restore candidate schema without changing its bytes.
+ * @param {DatabaseSync} database - Read-only candidate database.
+ * @param {number} schemaLevel - Fresh application schema level.
+ * @return {SchemaFacts | null} Validated identity or null for an unsupported level.
+ */
+function validateSupportedRestoreSchema(
+    database: DatabaseSync,
+    schemaLevel: number,
+): Readonly<{workspaceId: string; revision: bigint}> | null {
+    if (schemaLevel === 13) {
+        return validateSchemaLevel13(database);
+    }
+    if (schemaLevel === 14) {
+        return validateSchemaLevel14(database);
+    }
+    if (schemaLevel === 15) {
+        return validateSchemaLevel15(database);
+    }
+    return null;
+}
+
+/**
+ * Reads the bounded whole-replacement counts from one already validated database.
+ * @param {DatabaseSync} database - Validated candidate or safety database.
+ * @return {object} Exact DATA impact counts.
+ */
+function readRestoreImpactCounts(database: DatabaseSync): Readonly<{
+    termCount: string;
+    courseCount: string;
+    taskSeriesCount: string;
+}> {
+    const statement = database.prepare(`
+        SELECT
+            (SELECT count(*) FROM terms) AS term_count,
+            (SELECT count(*) FROM courses) AS course_count,
+            (SELECT count(*) FROM task_series) AS task_series_count
+    `);
+    statement.setReadBigInts(true);
+    const row = statement.get() as {
+        term_count: bigint;
+        course_count: bigint;
+        task_series_count: bigint;
+    };
+    return Object.freeze({
+        termCount: row.term_count.toString(),
+        courseCount: row.course_count.toString(),
+        taskSeriesCount: row.task_series_count.toString(),
+    });
+}
+
+/**
+ * Reads the one queued source operation frozen into an ADR-07 snapshot database.
+ * @param {DatabaseSync} database - Validated candidate database.
+ * @return {object} Manifest-binding source snapshot facts.
+ */
+function readRestoreSourceBackup(database: DatabaseSync): RestoreDatabaseFacts['sourceBackup'] {
+    const statement = database.prepare(`
+        SELECT backup_set_id, backup_sequence, snapshot_id, target_revision, phase
+        FROM backup_operations
+        WHERE phase <> 'succeeded'
+    `);
+    statement.setReadBigInts(true);
+    const rows = statement.all() as Array<{
+        backup_set_id: string;
+        backup_sequence: bigint;
+        snapshot_id: string;
+        target_revision: bigint;
+        phase: string;
+    }>;
+    if (rows.length !== 1 || rows[0]!.phase !== 'queued') {
+        throw new Error('Restore candidate lacks its queued source backup operation');
+    }
+    const row = rows[0]!;
+    return Object.freeze({
+        backupSetId: row.backup_set_id,
+        backupSequence: row.backup_sequence.toString(),
+        snapshotId: row.snapshot_id,
+        targetRevision: row.target_revision.toString(),
+    });
 }
 
 function decimalFromCoefficient(coefficient: bigint, scale: bigint): string {
@@ -5106,6 +5325,7 @@ class SqliteDataStoreImplementation {
                     })
                     : null,
                 recentVerifiedSnapshots: Object.freeze(snapshots),
+                restoreCandidates: Object.freeze([]),
                 cleanup: row.cleanup_operation_id === null
                     && row.registered_snapshot_count <= 2n
                     ? 'idle' as const
@@ -5148,6 +5368,394 @@ class SqliteDataStoreImplementation {
             displayName: row.destination_display_name!,
             repositorySchema: row.repository_schema!,
         });
+    }
+
+    /**
+     * Reads every typed pre-checkpoint RestoreSession for restart reconstruction.
+     * @return {readonly StoredRestoreSession[]} Sessions ordered by stable identity.
+     */
+    public readRestoreSessions(): readonly StoredRestoreSession[] {
+        this.requireOpen();
+        const statement = this.database.prepare(`
+            SELECT *
+            FROM restore_sessions
+            ORDER BY restore_session_id
+        `);
+        statement.setReadBigInts(true);
+        return Object.freeze((statement.all() as RestoreSessionRow[]).map(restoreSessionFromRow));
+    }
+
+    /**
+     * Reads one durable restore command receipt for exact CommandId replay.
+     * @param {string} commandId - Canonical command identity.
+     * @return {StoredRestoreCommandReceipt | null} Matching receipt or null.
+     */
+    public readRestoreCommandReceipt(commandId: string): StoredRestoreCommandReceipt | null {
+        this.requireOpen();
+        if (!isCanonicalUuid(commandId)) {
+            throw new TypeError('Restore CommandId is invalid');
+        }
+        const row = this.database.prepare(`
+            SELECT
+                command_id,
+                command_kind,
+                payload_digest,
+                restore_session_id,
+                result_session_version
+            FROM restore_command_receipts
+            WHERE command_id = ?
+        `).get(commandId) as {
+            command_id: string;
+            command_kind: 'start' | 'confirm';
+            payload_digest: Uint8Array;
+            restore_session_id: string;
+            result_session_version: bigint;
+        } | undefined;
+        return row
+            ? Object.freeze({
+                commandId: row.command_id,
+                commandKind: row.command_kind,
+                payloadDigest: Buffer.from(row.payload_digest).toString('hex'),
+                restoreSessionId: row.restore_session_id,
+                resultSessionVersion: row.result_session_version.toString(),
+            })
+            : null;
+    }
+
+    /**
+     * Atomically stores a previewed RestoreSession and its start receipt.
+     * @param {StoredRestoreSession} session - Complete preview-bound typed facts.
+     * @param {StoredRestoreCommandReceipt} receipt - Matching start receipt.
+     * @return {void}
+     */
+    public createRestoreSession(
+        session: StoredRestoreSession,
+        receipt: StoredRestoreCommandReceipt,
+    ): void {
+        this.requireBackupMutationAllowed();
+        if (session.phase !== 'previewed'
+            || session.sessionVersion !== '0'
+            || receipt.commandKind !== 'start'
+            || receipt.restoreSessionId !== session.restoreSessionId
+            || receipt.resultSessionVersion !== '0'
+            || !/^[0-9a-f]{64}$/.test(receipt.payloadDigest)) {
+            throw new TypeError('RestoreSession start facts are invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            this.database.prepare(`
+                INSERT INTO restore_sessions (
+                    restore_session_id,
+                    operation_id,
+                    candidate_ref,
+                    snapshot_id,
+                    candidate_root_digest,
+                    candidate_database_digest,
+                    source_schema_level,
+                    prepared_schema_level,
+                    candidate_revision,
+                    validation_copy,
+                    current_workspace_id,
+                    current_revision,
+                    current_library_kind,
+                    current_library_root_id,
+                    current_root_generation,
+                    target_binding_version,
+                    term_count,
+                    course_count,
+                    task_series_count,
+                    impact_digest,
+                    binding_digest,
+                    preview_token,
+                    phase,
+                    session_version,
+                    problem_code,
+                    safety_set_id,
+                    safety_protected_revision,
+                    safety_root_digest
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?
+                )
+            `).run(
+                session.restoreSessionId,
+                session.operationId,
+                session.candidateRef,
+                session.snapshotId,
+                session.candidateRootDigest,
+                session.candidateDatabaseDigest,
+                BigInt(session.sourceSchemaLevel),
+                BigInt(session.preparedSchemaLevel),
+                BigInt(session.candidateRevision),
+                session.validationCopy,
+                session.currentWorkspaceId,
+                BigInt(session.currentRevision),
+                session.currentLibrary.kind,
+                session.currentLibrary.kind === 'present'
+                    ? session.currentLibrary.libraryRootId
+                    : null,
+                session.currentLibrary.kind === 'present'
+                    ? session.currentLibrary.rootGeneration
+                    : null,
+                BigInt(session.targetBindingVersion),
+                BigInt(session.termCount),
+                BigInt(session.courseCount),
+                BigInt(session.taskSeriesCount),
+                session.impactDigest,
+                session.bindingDigest,
+                session.previewToken,
+                session.phase,
+                BigInt(session.sessionVersion),
+                session.problemCode,
+                session.safetySetId,
+                session.safetyProtectedRevision === null
+                    ? null
+                    : BigInt(session.safetyProtectedRevision),
+                session.safetyRootDigest,
+            );
+            this.insertRestoreCommandReceipt(receipt);
+            this.database.exec('COMMIT');
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
+    /**
+     * Atomically advances one preview and records its exact confirm receipt.
+     * @param {StoredRestoreSession} session - Complete next typed state.
+     * @param {string} expectedVersion - Required current session version.
+     * @param {StoredRestoreCommandReceipt} receipt - Matching confirmation receipt.
+     * @return {void}
+     */
+    public advanceRestoreSession(
+        session: StoredRestoreSession,
+        expectedVersion: string,
+        receipt: StoredRestoreCommandReceipt,
+    ): void {
+        this.requireBackupMutationAllowed();
+        if (expectedVersion !== '0'
+            || session.sessionVersion !== '1'
+            || session.phase === 'previewed'
+            || receipt.commandKind !== 'confirm'
+            || receipt.restoreSessionId !== session.restoreSessionId
+            || receipt.resultSessionVersion !== '1'
+            || !/^[0-9a-f]{64}$/.test(receipt.payloadDigest)) {
+            throw new TypeError('RestoreSession transition facts are invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const result = this.database.prepare(`
+                UPDATE restore_sessions
+                SET
+                    preview_token = ?,
+                    phase = ?,
+                    session_version = ?,
+                    problem_code = ?,
+                    safety_set_id = ?,
+                    safety_protected_revision = ?,
+                    safety_root_digest = ?
+                WHERE restore_session_id = ? AND session_version = ?
+            `).run(
+                session.previewToken,
+                session.phase,
+                BigInt(session.sessionVersion),
+                session.problemCode,
+                session.safetySetId,
+                session.safetyProtectedRevision === null
+                    ? null
+                    : BigInt(session.safetyProtectedRevision),
+                session.safetyRootDigest,
+                session.restoreSessionId,
+                BigInt(expectedVersion),
+            );
+            if (BigInt(result.changes) !== 1n) {
+                throw new Error('RestoreSession version changed');
+            }
+            this.insertRestoreCommandReceipt(receipt);
+            this.database.exec('COMMIT');
+        }
+        catch (error) {
+            this.rollbackOrRequireReopen();
+            throw error;
+        }
+    }
+
+    private insertRestoreCommandReceipt(receipt: StoredRestoreCommandReceipt): void {
+        this.database.prepare(`
+            INSERT INTO restore_command_receipts (
+                command_id,
+                command_kind,
+                payload_digest,
+                restore_session_id,
+                result_session_version
+            ) VALUES (?, ?, ?, ?, ?)
+        `).run(
+            receipt.commandId,
+            receipt.commandKind,
+            Buffer.from(receipt.payloadDigest, 'hex'),
+            receipt.restoreSessionId,
+            BigInt(receipt.resultSessionVersion),
+        );
+    }
+
+    /**
+     * Revalidates one raw snapshot database as a supported restore candidate.
+     * @param {string} candidatePath - Exact immutable snapshot member path.
+     * @return {RestoreDatabaseFacts} Fresh identity, revision, schema, and impact facts.
+     */
+    public inspectRestoreCandidateDatabase(candidatePath: string): RestoreDatabaseFacts {
+        this.requireOpen();
+        if (!isAbsolute(candidatePath) || candidatePath.includes('\0')) {
+            throw new TypeError('Restore candidate database path is invalid');
+        }
+        const candidate = openDatabase(candidatePath, true);
+        try {
+            const identity = readDatabaseIdentity(candidate);
+            const facts = validateSupportedRestoreSchema(candidate, identity.schemaLevel);
+            if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
+                || facts === null
+                || facts.workspaceId !== this.workspaceId
+                || facts.revision <= 0n) {
+                throw new Error('Restore candidate database identity is invalid');
+            }
+            return Object.freeze({
+                workspaceId: facts.workspaceId,
+                applicationId: identity.applicationId.toString(),
+                schemaLevel: identity.schemaLevel.toString(),
+                actualRevision: facts.revision.toString(),
+                ...readRestoreImpactCounts(candidate),
+                sourceBackup: readRestoreSourceBackup(candidate),
+            });
+        }
+        finally {
+            candidate.close();
+        }
+    }
+
+    /**
+     * Copies and migrates one verified candidate in an isolated validation directory.
+     * @param {string} sourcePath - Immutable raw snapshot database member.
+     * @param {string} destinationPath - Absent operation-owned validation copy path.
+     * @return {PreparedRestoreDatabaseFacts} Validated prepared copy facts.
+     */
+    public prepareRestoreCandidateDatabaseCopy(
+        sourcePath: string,
+        destinationPath: string,
+    ): PreparedRestoreDatabaseFacts {
+        this.requireOpen();
+        if (!isAbsolute(sourcePath)
+            || sourcePath.includes('\0')
+            || !isAbsolute(destinationPath)
+            || destinationPath.includes('\0')) {
+            throw new TypeError('Restore candidate copy paths are invalid');
+        }
+        const sourceFacts = this.inspectRestoreCandidateDatabase(sourcePath);
+        copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
+        const prepared = openDatabase(destinationPath, false);
+        try {
+            let schemaLevel = Number(sourceFacts.schemaLevel);
+            while (schemaLevel < CURRENT_SCHEMA_LEVEL) {
+                prepared.exec('BEGIN IMMEDIATE');
+                try {
+                    if (schemaLevel === 13) {
+                        validateSchemaLevel13(prepared);
+                        migrateLevel13To14(prepared);
+                        validateSchemaLevel14(prepared);
+                    }
+                    else if (schemaLevel === 14) {
+                        validateSchemaLevel14(prepared);
+                        migrateLevel14To15(prepared);
+                        validateSchemaLevel15(prepared);
+                    }
+                    else {
+                        throw new Error('Restore candidate schema is unsupported');
+                    }
+                    prepared.exec('COMMIT');
+                    schemaLevel += 1;
+                }
+                catch (error) {
+                    if (prepared.isTransaction) {
+                        prepared.exec('ROLLBACK');
+                    }
+                    throw error;
+                }
+            }
+        }
+        finally {
+            prepared.close();
+        }
+        normalizeBackupDatabaseCopy(destinationPath);
+        const preparedFacts = this.inspectRestoreCandidateDatabase(destinationPath);
+        return Object.freeze({
+            ...preparedFacts,
+            sourceSchemaLevel: sourceFacts.schemaLevel,
+            preparedSchemaLevel: preparedFacts.schemaLevel,
+            validationCopy: sourceFacts.schemaLevel === preparedFacts.schemaLevel
+                ? 'copied'
+                : 'migrated',
+        });
+    }
+
+    /**
+     * Writes and verifies a healthy current DATA member for a RestoreSafetySet.
+     * @param {string} destinationPath - Absent operation-owned safety member path.
+     * @param {string} expectedRevision - Minimum preview-bound current revision.
+     * @return {Promise<BackupDatabaseFacts>} Fresh copied current DATA facts.
+     */
+    public async writeRestoreSafetyDatabaseCopy(
+        destinationPath: string,
+        expectedRevision: string,
+    ): Promise<BackupDatabaseFacts> {
+        this.requireBackupMutationAllowed();
+        if (!isAbsolute(destinationPath)
+            || destinationPath.includes('\0')
+            || !isCanonicalUnsignedSqliteInteger(expectedRevision)) {
+            throw new TypeError('Restore safety database destination is invalid');
+        }
+        await backup(this.database, destinationPath);
+        normalizeBackupDatabaseCopy(destinationPath);
+        return this.validateRestoreSafetyDatabaseCopy(destinationPath, expectedRevision);
+    }
+
+    /**
+     * Revalidates one healthy RestoreSafetySet DATA member against the current schema.
+     * @param {string} copyPath - Exact copied database path.
+     * @param {string} minimumRevision - Minimum revision the copy must cover.
+     * @return {BackupDatabaseFacts} Fresh current DATA facts.
+     */
+    public validateRestoreSafetyDatabaseCopy(
+        copyPath: string,
+        minimumRevision: string,
+    ): BackupDatabaseFacts {
+        this.requireOpen();
+        if (!isAbsolute(copyPath)
+            || copyPath.includes('\0')
+            || !isCanonicalUnsignedSqliteInteger(minimumRevision)) {
+            throw new TypeError('Restore safety database validation input is invalid');
+        }
+        const copied = openDatabase(copyPath, true);
+        try {
+            const identity = readDatabaseIdentity(copied);
+            const facts = validateSupportedRestoreSchema(copied, identity.schemaLevel);
+            if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
+                || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL
+                || facts === null
+                || facts.workspaceId !== this.workspaceId
+                || facts.revision < BigInt(minimumRevision)) {
+                throw new Error('Restore safety database does not match current DATA');
+            }
+            return Object.freeze({
+                workspaceId: facts.workspaceId,
+                applicationId: identity.applicationId.toString(),
+                schemaLevel: identity.schemaLevel.toString(),
+                actualRevision: facts.revision.toString(),
+            });
+        }
+        finally {
+            copied.close();
+        }
     }
 
     /**
@@ -5196,7 +5804,9 @@ class SqliteDataStoreImplementation {
                 ? validateSchemaLevel13(copied)
                 : identity.schemaLevel === 14
                     ? validateSchemaLevel14(copied)
-                    : null;
+                    : identity.schemaLevel === 15
+                        ? validateSchemaLevel15(copied)
+                        : null;
             if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
                 || facts === null
                 || facts.workspaceId !== this.workspaceId
@@ -9647,7 +10257,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel14(stagingDatabase);
+        createSchemaLevel15(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -9696,7 +10306,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel14(validationDatabase);
+            validateSchemaLevel15(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -9705,7 +10315,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel14(activeDatabase);
+        const facts = validateSchemaLevel15(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -9778,7 +10388,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel14(validationDatabase);
+        const facts = validateSchemaLevel15(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -9828,7 +10438,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel14(activeDatabase);
+        const facts = validateSchemaLevel15(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -10051,10 +10661,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel12To13(maintenance);
                         validateSchemaLevel13(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 13) {
                         validateSchemaLevel13(maintenance);
                         migrateLevel13To14(maintenance);
                         validateSchemaLevel14(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel14(maintenance);
+                        migrateLevel14To15(maintenance);
+                        validateSchemaLevel15(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -10078,7 +10693,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel14(maintenance);
+            validateSchemaLevel15(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

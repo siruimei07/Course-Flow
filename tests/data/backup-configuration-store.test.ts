@@ -161,6 +161,7 @@ test('A-DATA-002: configuration commits atomically, replays, conflicts, and surv
             succeededThrough: '0',
             lastSuccess: null,
             recentVerifiedSnapshots: [],
+            restoreCandidates: [],
             cleanup: 'idle',
         },
     });
@@ -190,6 +191,7 @@ test('A-DATA-002: configuration commits atomically, replays, conflicts, and surv
             succeededThrough: '0',
             lastSuccess: null,
             recentVerifiedSnapshots: [],
+            restoreCandidates: [],
             cleanup: 'idle',
         },
     });
@@ -278,8 +280,8 @@ test('schema level 11 migrates to a legal unconfigured protection state', async 
     if (opened.kind !== 'ready') {
         throw new Error('Expected current migrated DATA');
     }
-    assert.equal(opened.store.status().schemaLevel, 14);
-    assert.equal(opened.store.status().revision, '7');
+    assert.equal(opened.store.status().schemaLevel, 15);
+    assert.equal(opened.store.status().revision, '8');
     assert.deepEqual(opened.store.readDataProtectionProjection().configuration, { kind: 'unconfigured' });
     await opened.store.close();
 });

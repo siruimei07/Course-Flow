@@ -230,6 +230,8 @@ async function startApplication(roots: DevelopmentRoots): Promise<void> {
   const workspace = utilityProcess.fork(path.join(__dirname, 'workspace.js'), [
     '--courseflow-data-slots-root',
     roots.dataSlotsRoot,
+    '--courseflow-activity-control-root',
+    roots.activityControlRoot,
   ], {
     serviceName: 'CourseFlow Workspace',
   });

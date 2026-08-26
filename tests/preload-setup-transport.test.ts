@@ -20,11 +20,17 @@ import {
     type WorkspaceSetupRequest,
 } from '../src/shared/workspace-setup-contract';
 import type { CreateTermCommand } from '../src/shared/workspace-term-contract';
-import type { ConfigureBackupDestinationCommand } from '../src/shared/workspace-protection-contract';
+import type {
+    ConfigureBackupDestinationCommand,
+    ConfirmRestoreSessionCommand,
+    StartRestoreSessionCommand,
+} from '../src/shared/workspace-protection-contract';
 
 const APP_BUILD_ID = 'development:1234567890abcdef1234567890abcdef12345678';
 const WORKSPACE_EPOCH = '11111111-1111-4111-8111-111111111111';
 const WORKSPACE_ID = '22222222-2222-4222-8222-222222222222';
+const CANDIDATE_REF = '77777777-7777-4777-8777-777777777777';
+const RESTORE_SESSION_ID = '88888888-8888-4888-8888-888888888888';
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const preloadPath = path.join(repositoryRoot, 'src', 'preload.ts');
 const compiledPreloadRoot = path.join(repositoryRoot, '.test-dist', 'preload-runtime');
@@ -63,12 +69,27 @@ const PROTECTION_COMMAND = {
     },
 } as const satisfies ConfigureBackupDestinationCommand;
 
+const START_RESTORE_COMMAND = {
+    commandId: '99999999-9999-4999-8999-999999999999',
+    candidateRef: CANDIDATE_REF,
+} as const satisfies StartRestoreSessionCommand;
+
+const CONFIRM_RESTORE_COMMAND = {
+    commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    restoreSessionId: RESTORE_SESSION_ID,
+    expectedSessionVersion: '0',
+    previewToken: 'b'.repeat(64),
+} as const satisfies ConfirmRestoreSessionCommand;
+
 type PreloadCourseFlow = Readonly<{
     query(): Promise<BootstrapOutcome>;
     querySetup(): Promise<WorkspaceSetupOutcome>;
     createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
     queryDataProtection(): Promise<WorkspaceSetupOutcome>;
     configureBackupDestination(command: ConfigureBackupDestinationCommand): Promise<WorkspaceSetupOutcome>;
+    startRestoreSession(command: StartRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
+    queryRestoreSession(restoreSessionId: string): Promise<WorkspaceSetupOutcome>;
+    confirmRestoreSession(command: ConfirmRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;
 }>;
 
 type PreloadWindowFrame = Readonly<{
@@ -103,7 +124,7 @@ function readyOutcome(requestId: string): BootstrapOutcome {
             workspaceData: {
                 kind: 'ready',
                 workspaceId: WORKSPACE_ID,
-                schemaLevel: 14,
+                schemaLevel: 15,
                 revision: '0',
             },
         },
@@ -269,7 +290,7 @@ test('preload exposes a separate fixed-channel window control surface', () => {
     ]);
 });
 
-test('preload sends protection queries and path-free configuration intents on the bounded channel', async () => {
+test('preload sends path-free protection and restore requests on the bounded channel', async () => {
     const harness = loadPreload(async request => {
         if (request.kind === 'workspace.protection.query') {
             return {
@@ -305,12 +326,20 @@ test('preload sends protection queries and path-free configuration intents on th
 
     const projection = await harness.courseFlow.queryDataProtection();
     const cancelled = await harness.courseFlow.configureBackupDestination(PROTECTION_COMMAND);
+    await harness.courseFlow.startRestoreSession(START_RESTORE_COMMAND);
+    await harness.courseFlow.queryRestoreSession(RESTORE_SESSION_ID);
+    await harness.courseFlow.confirmRestoreSession(CONFIRM_RESTORE_COMMAND);
 
     assert.equal(projection.ok, true);
     assert.equal(cancelled.ok, false);
     assert.deepEqual(harness.setupRequests.map(request => request.kind), [
         'workspace.protection.query',
         'workspace.protection.configure',
+        'workspace.restore.start',
+        'workspace.restore.query',
+        'workspace.restore.confirm',
     ]);
-    assert.equal(JSON.stringify(harness.setupRequests).includes('selectedDirectoryPath'), false);
+    const requestsJson = JSON.stringify(harness.setupRequests);
+    assert.equal(requestsJson.includes('selectedDirectoryPath'), false);
+    assert.doesNotMatch(requestsJson, /(?:[A-Za-z]:[\\/]|canonicalPath|directoryPath)/);
 });

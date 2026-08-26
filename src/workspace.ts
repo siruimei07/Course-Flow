@@ -1,3 +1,7 @@
+/**
+ * @file Runs the single Workspace utility process and its bounded request transport.
+ */
+
 import { makeBootstrapProblem } from './shared/bootstrap-contract';
 import type { WorkspaceSetupOutcome } from './shared/workspace-setup-contract';
 import { WorkspaceApplication } from './workspace-application';
@@ -8,9 +12,11 @@ if (!parentPort) {
   throw new Error('CourseFlow Workspace utility process requires process.parentPort.');
 }
 
-const dataSlotsRoot = dataSlotsRootFrom(process.argv);
-const applicationPromise = dataSlotsRoot
-  ? WorkspaceApplication.open(dataSlotsRoot, __COURSEFLOW_APP_BUILD_ID__).catch(() => undefined)
+const workspaceRoots = workspaceRootsFrom(process.argv);
+const applicationPromise = workspaceRoots
+  ? WorkspaceApplication.open(workspaceRoots.dataSlotsRoot, __COURSEFLOW_APP_BUILD_ID__, {
+      activityControlRoot: workspaceRoots.activityControlRoot,
+    }).catch(() => undefined)
   : Promise.resolve(undefined);
 const inFlight = new Set<Promise<void>>();
 let acceptsRequests = true;
@@ -130,13 +136,27 @@ async function closeWorkspace(): Promise<void> {
   await application?.close();
 }
 
-function dataSlotsRootFrom(argv: readonly string[]): string | undefined {
-  const marker = '--courseflow-data-slots-root';
-  const markerIndex = argv.indexOf(marker);
-  if (markerIndex !== argv.length - 2 || argv.lastIndexOf(marker) !== markerIndex) {
+function workspaceRootsFrom(argv: readonly string[]): Readonly<{
+  dataSlotsRoot: string;
+  activityControlRoot: string;
+}> | undefined {
+  const dataMarker = '--courseflow-data-slots-root';
+  const activityMarker = '--courseflow-activity-control-root';
+  const dataIndex = argv.indexOf(dataMarker);
+  const activityIndex = argv.indexOf(activityMarker);
+  if (dataIndex !== argv.length - 4
+    || activityIndex !== argv.length - 2
+    || argv.lastIndexOf(dataMarker) !== dataIndex
+    || argv.lastIndexOf(activityMarker) !== activityIndex) {
     return undefined;
   }
 
-  const value = argv[markerIndex + 1];
-  return typeof value === 'string' && value.length > 0 ? value : undefined;
+  const dataSlotsRoot = argv[dataIndex + 1];
+  const activityControlRoot = argv[activityIndex + 1];
+  return typeof dataSlotsRoot === 'string'
+    && dataSlotsRoot.length > 0
+    && typeof activityControlRoot === 'string'
+    && activityControlRoot.length > 0
+    ? {dataSlotsRoot, activityControlRoot}
+    : undefined;
 }

@@ -475,7 +475,7 @@ test('production keeps one utility process and Renderer imports no privileged ru
   assert.equal(utilityForkCalls.length, 1);
   const dataSlotsRootArgument = utilityForkCalls[0]!.arguments[1];
   assert.ok(dataSlotsRootArgument && state.is.isArrayLiteralExpression(dataSlotsRootArgument));
-  assert.equal(dataSlotsRootArgument.elements.length, 2);
+  assert.equal(dataSlotsRootArgument.elements.length, 4);
   assert.equal(stringLiteralText(state, dataSlotsRootArgument.elements[0]), '--courseflow-data-slots-root');
   const rootValue = dataSlotsRootArgument.elements[1];
   assert.equal(
@@ -483,6 +483,18 @@ test('production keeps one utility process and Renderer imports no privileged ru
       && state.is.isIdentifier(rootValue.expression)
       && rootValue.expression.text === 'roots'
       && rootValue.name.text === 'dataSlotsRoot',
+    true,
+  );
+  assert.equal(
+    stringLiteralText(state, dataSlotsRootArgument.elements[2]),
+    '--courseflow-activity-control-root',
+  );
+  const activityRootValue = dataSlotsRootArgument.elements[3];
+  assert.equal(
+    activityRootValue !== undefined && state.is.isPropertyAccessExpression(activityRootValue)
+      && state.is.isIdentifier(activityRootValue.expression)
+      && activityRootValue.expression.text === 'roots'
+      && activityRootValue.name.text === 'activityControlRoot',
     true,
   );
 
@@ -640,6 +652,9 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
       'querySetup',
       'queryDataProtection',
       'configureBackupDestination',
+      'startRestoreSession',
+      'queryRestoreSession',
+      'confirmRestoreSession',
       'saveSetupDraftCheckpoint',
       'discardSetupDraftCheckpoint',
       'queryPlan',
@@ -670,7 +685,7 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
     ],
   );
   const expectedParameterCounts = [
-    0, 0, 0, 0, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
   ];
   exposedObject.properties.forEach((property, index) => {

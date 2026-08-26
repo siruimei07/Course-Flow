@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 14;
+export const CURRENT_SCHEMA_LEVEL = 15;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -41,6 +41,11 @@ const taskSegmentIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'task_segment_id');
 const backupSetIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'backup_set_id');
 const operationIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'operation_id');
 const snapshotIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'snapshot_id');
+const restoreSessionIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'restore_session_id');
+const candidateRefCheck = UUID_CHECK.replaceAll('%COLUMN%', 'candidate_ref');
+const safetySetIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'safety_set_id');
+const libraryRootIdCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_library_root_id');
+const rootGenerationCheck = UUID_CHECK.replaceAll('%COLUMN%', 'current_root_generation');
 
 const LEVEL_1_DDL = `
     CREATE TABLE workspace_state (
@@ -1419,6 +1424,128 @@ const LEVEL_14_PROTECTION_DDL = `
 
 const LEVEL_14_DDL = LEVEL_13_DDL + LEVEL_14_PROTECTION_DDL;
 
+const LEVEL_15_RESTORE_DDL = `
+    CREATE TABLE restore_sessions (
+        restore_session_id TEXT PRIMARY KEY CHECK (${restoreSessionIdCheck}),
+        operation_id TEXT NOT NULL UNIQUE CHECK (${operationIdCheck}),
+        candidate_ref TEXT NOT NULL CHECK (${candidateRefCheck}),
+        snapshot_id TEXT NOT NULL CHECK (${snapshotIdCheck}),
+        candidate_root_digest TEXT NOT NULL CHECK (
+            length(candidate_root_digest) = 64
+            AND candidate_root_digest = lower(candidate_root_digest)
+            AND candidate_root_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        candidate_database_digest TEXT NOT NULL CHECK (
+            length(candidate_database_digest) = 64
+            AND candidate_database_digest = lower(candidate_database_digest)
+            AND candidate_database_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        source_schema_level INTEGER NOT NULL CHECK (source_schema_level BETWEEN 13 AND 15),
+        prepared_schema_level INTEGER NOT NULL CHECK (prepared_schema_level = 15),
+        candidate_revision INTEGER NOT NULL CHECK (candidate_revision > 0),
+        validation_copy TEXT NOT NULL CHECK (validation_copy IN ('copied', 'migrated')),
+        current_workspace_id TEXT NOT NULL CHECK (${workspaceIdCheck.replaceAll(
+            'workspace_id',
+            'current_workspace_id',
+        )}),
+        current_revision INTEGER NOT NULL CHECK (current_revision >= 0),
+        current_library_kind TEXT NOT NULL CHECK (current_library_kind IN ('absent', 'present')),
+        current_library_root_id TEXT CHECK (
+            current_library_root_id IS NULL OR (${libraryRootIdCheck})
+        ),
+        current_root_generation TEXT CHECK (
+            current_root_generation IS NULL OR (${rootGenerationCheck})
+        ),
+        target_binding_version INTEGER NOT NULL CHECK (target_binding_version >= 0),
+        term_count INTEGER NOT NULL CHECK (term_count >= 0),
+        course_count INTEGER NOT NULL CHECK (course_count >= 0),
+        task_series_count INTEGER NOT NULL CHECK (task_series_count >= 0),
+        impact_digest TEXT NOT NULL CHECK (
+            length(impact_digest) = 64
+            AND impact_digest = lower(impact_digest)
+            AND impact_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        binding_digest TEXT NOT NULL CHECK (
+            length(binding_digest) = 64
+            AND binding_digest = lower(binding_digest)
+            AND binding_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        preview_token TEXT CHECK (
+            preview_token IS NULL OR (
+                length(preview_token) = 64
+                AND preview_token = lower(preview_token)
+                AND preview_token NOT GLOB '*[^0-9a-f]*'
+            )
+        ),
+        phase TEXT NOT NULL CHECK (
+            phase IN ('previewed', 'waiting-decision', 'protection-established')
+        ),
+        session_version INTEGER NOT NULL CHECK (session_version >= 0),
+        problem_code TEXT CHECK (problem_code IS NULL OR problem_code = 'impact-changed'),
+        safety_set_id TEXT CHECK (safety_set_id IS NULL OR (${safetySetIdCheck})),
+        safety_protected_revision INTEGER CHECK (
+            safety_protected_revision IS NULL OR safety_protected_revision >= 0
+        ),
+        safety_root_digest TEXT CHECK (
+            safety_root_digest IS NULL OR (
+                length(safety_root_digest) = 64
+                AND safety_root_digest = lower(safety_root_digest)
+                AND safety_root_digest NOT GLOB '*[^0-9a-f]*'
+            )
+        ),
+        CHECK (
+            (validation_copy = 'copied' AND source_schema_level = prepared_schema_level)
+            OR (validation_copy = 'migrated' AND source_schema_level < prepared_schema_level)
+        ),
+        CHECK (
+            (current_library_kind = 'absent'
+                AND current_library_root_id IS NULL
+                AND current_root_generation IS NULL)
+            OR (current_library_kind = 'present'
+                AND current_library_root_id IS NOT NULL
+                AND current_root_generation IS NOT NULL)
+        ),
+        CHECK (
+            (phase = 'previewed'
+                AND session_version = 0
+                AND preview_token IS NOT NULL
+                AND problem_code IS NULL
+                AND safety_set_id IS NULL
+                AND safety_protected_revision IS NULL
+                AND safety_root_digest IS NULL)
+            OR (phase = 'waiting-decision'
+                AND session_version = 1
+                AND preview_token IS NULL
+                AND problem_code = 'impact-changed'
+                AND safety_set_id IS NULL
+                AND safety_protected_revision IS NULL
+                AND safety_root_digest IS NULL)
+            OR (phase = 'protection-established'
+                AND session_version = 1
+                AND preview_token IS NULL
+                AND problem_code IS NULL
+                AND safety_set_id IS NOT NULL
+                AND safety_protected_revision = current_revision
+                AND safety_root_digest IS NOT NULL)
+        )
+    ) STRICT;
+
+    CREATE TABLE restore_command_receipts (
+        command_id TEXT PRIMARY KEY CHECK (${commandIdCheck}),
+        command_kind TEXT NOT NULL CHECK (command_kind IN ('start', 'confirm')),
+        payload_digest BLOB NOT NULL CHECK (length(payload_digest) = 32),
+        restore_session_id TEXT NOT NULL CHECK (${restoreSessionIdCheck}),
+        result_session_version INTEGER NOT NULL CHECK (result_session_version IN (0, 1)),
+        FOREIGN KEY (restore_session_id)
+            REFERENCES restore_sessions(restore_session_id) ON DELETE RESTRICT
+    ) STRICT;
+
+    CREATE INDEX restore_command_receipts_by_session
+        ON restore_command_receipts(restore_session_id);
+`;
+
+const LEVEL_15_DDL = LEVEL_14_DDL + LEVEL_15_RESTORE_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -1480,6 +1607,43 @@ const TABLE_COLUMNS = {
         ['quarantine_directory_name', 'TEXT', 1, 0],
         ['phase', 'TEXT', 1, 0],
         ['operation_version', 'INTEGER', 1, 0],
+    ],
+    restore_sessions: [
+        ['restore_session_id', 'TEXT', 1, 1],
+        ['operation_id', 'TEXT', 1, 0],
+        ['candidate_ref', 'TEXT', 1, 0],
+        ['snapshot_id', 'TEXT', 1, 0],
+        ['candidate_root_digest', 'TEXT', 1, 0],
+        ['candidate_database_digest', 'TEXT', 1, 0],
+        ['source_schema_level', 'INTEGER', 1, 0],
+        ['prepared_schema_level', 'INTEGER', 1, 0],
+        ['candidate_revision', 'INTEGER', 1, 0],
+        ['validation_copy', 'TEXT', 1, 0],
+        ['current_workspace_id', 'TEXT', 1, 0],
+        ['current_revision', 'INTEGER', 1, 0],
+        ['current_library_kind', 'TEXT', 1, 0],
+        ['current_library_root_id', 'TEXT', 0, 0],
+        ['current_root_generation', 'TEXT', 0, 0],
+        ['target_binding_version', 'INTEGER', 1, 0],
+        ['term_count', 'INTEGER', 1, 0],
+        ['course_count', 'INTEGER', 1, 0],
+        ['task_series_count', 'INTEGER', 1, 0],
+        ['impact_digest', 'TEXT', 1, 0],
+        ['binding_digest', 'TEXT', 1, 0],
+        ['preview_token', 'TEXT', 0, 0],
+        ['phase', 'TEXT', 1, 0],
+        ['session_version', 'INTEGER', 1, 0],
+        ['problem_code', 'TEXT', 0, 0],
+        ['safety_set_id', 'TEXT', 0, 0],
+        ['safety_protected_revision', 'INTEGER', 0, 0],
+        ['safety_root_digest', 'TEXT', 0, 0],
+    ],
+    restore_command_receipts: [
+        ['command_id', 'TEXT', 1, 1],
+        ['command_kind', 'TEXT', 1, 0],
+        ['payload_digest', 'BLOB', 1, 0],
+        ['restore_session_id', 'TEXT', 1, 0],
+        ['result_session_version', 'INTEGER', 1, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1751,6 +1915,8 @@ const FOREIGN_KEYS = {
     backup_operations: [],
     backup_snapshots: [['operation_id', 'backup_operations', 'operation_id']],
     backup_cleanup_operations: [],
+    restore_sessions: [],
+    restore_command_receipts: [['restore_session_id', 'restore_sessions', 'restore_session_id']],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -1843,6 +2009,12 @@ const LEVEL_14_TABLES = [
     'backup_cleanup_operations',
 ] as const;
 
+const LEVEL_15_TABLES = [
+    ...LEVEL_14_TABLES,
+    'restore_sessions',
+    'restore_command_receipts',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1863,7 +2035,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1896,7 +2068,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 12) {
         return LEVEL_12_TABLES;
     }
-    return level === 13 ? LEVEL_13_TABLES : LEVEL_14_TABLES;
+    if (level === 13) {
+        return LEVEL_13_TABLES;
+    }
+    return level === 14 ? LEVEL_14_TABLES : LEVEL_15_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1943,7 +2118,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                                     ? LEVEL_12_DDL
                                                     : level === 13
                                                         ? LEVEL_13_DDL
-                                                        : LEVEL_14_DDL;
+                                                        : level === 14
+                                                            ? LEVEL_14_DDL
+                                                            : LEVEL_15_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -2047,6 +2224,11 @@ function validateIndexes(database: DatabaseSync, table: CurrentTable, level: Sch
     ]);
     const indexByTable: Partial<Record<CurrentTable, readonly (readonly [string, number, readonly string[]])[]>> = {
         durable_followups: [['durable_followups_by_command', 0, ['originating_command_id']]],
+        restore_command_receipts: [[
+            'restore_command_receipts_by_session',
+            0,
+            ['restore_session_id'],
+        ]],
         courses: [['courses_by_term', 0, ['term_id']]],
         meeting_series: [['meeting_series_by_course', 0, ['course_id']]],
         meeting_segments: [['meeting_segments_by_series', 0, ['meeting_series_id']]],
@@ -2775,6 +2957,75 @@ function validateLevel14ProtectionFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Validates typed pre-checkpoint RestoreSession facts and their idempotent receipts.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 15.
+ * @return {void}
+ */
+function validateLevel15RestoreFacts(database: DatabaseSync): void {
+    const sessions = database.prepare(`
+        SELECT
+            session.restore_session_id,
+            session.current_workspace_id,
+            session.current_revision,
+            session.phase,
+            session.session_version,
+            session.safety_protected_revision,
+            workspace.workspace_id,
+            workspace.revision,
+            (
+                SELECT count(*)
+                FROM restore_command_receipts AS receipt
+                WHERE receipt.restore_session_id = session.restore_session_id
+                    AND receipt.command_kind = 'start'
+                    AND receipt.result_session_version = 0
+            ) AS start_receipt_count,
+            (
+                SELECT count(*)
+                FROM restore_command_receipts AS receipt
+                WHERE receipt.restore_session_id = session.restore_session_id
+                    AND receipt.command_kind = 'confirm'
+                    AND receipt.result_session_version = 1
+            ) AS confirm_receipt_count,
+            (
+                SELECT count(*)
+                FROM restore_command_receipts AS receipt
+                WHERE receipt.restore_session_id = session.restore_session_id
+            ) AS receipt_count
+        FROM restore_sessions AS session
+        JOIN workspace_state AS workspace ON workspace.singleton = 1
+    `);
+    sessions.setReadBigInts(true);
+    const rows = sessions.all() as Array<{
+        restore_session_id: string;
+        current_workspace_id: string;
+        current_revision: bigint;
+        phase: 'previewed' | 'waiting-decision' | 'protection-established';
+        session_version: bigint;
+        safety_protected_revision: bigint | null;
+        workspace_id: string;
+        revision: bigint;
+        start_receipt_count: bigint;
+        confirm_receipt_count: bigint;
+        receipt_count: bigint;
+    }>;
+    if (rows.some(row => row.current_workspace_id !== row.workspace_id
+        || row.current_revision > row.revision
+        || row.start_receipt_count !== 1n
+        || (row.phase === 'previewed'
+            && (row.session_version !== 0n
+                || row.confirm_receipt_count !== 0n
+                || row.receipt_count !== 1n))
+        || (row.phase !== 'previewed'
+            && (row.session_version !== 1n
+                || row.confirm_receipt_count !== 1n
+                || row.receipt_count !== 2n))
+        || (row.phase === 'protection-established'
+            && row.safety_protected_revision !== row.current_revision))) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -2817,6 +3068,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 14) {
         validateLevel14ProtectionFacts(database);
+    }
+    if (level >= 15) {
+        validateLevel15RestoreFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -3883,6 +4137,25 @@ export function migrateLevel13To14(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds typed pre-checkpoint RestoreSession state and marks the migration revision pending.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel14To15(database: DatabaseSync): void {
+    database.exec(`
+        ${LEVEL_15_RESTORE_DDL}
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 15;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -3983,6 +4256,15 @@ export function createSchemaLevel13(database: DatabaseSync): void {
  */
 export function createSchemaLevel14(database: DatabaseSync): void {
     database.exec(LEVEL_14_DDL);
+}
+
+/**
+ * Creates the current level 15 schema with typed pre-checkpoint RestoreSession storage.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel15(database: DatabaseSync): void {
+    database.exec(LEVEL_15_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -4089,4 +4371,13 @@ export function validateSchemaLevel13(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel14(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 14);
+}
+
+/**
+ * Validates the current level 15 schema and typed RestoreSession closure.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel15(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 15);
 }
