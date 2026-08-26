@@ -155,6 +155,14 @@ test('A-DATA-002: configuration commits atomically, replays, conflicts, and surv
             repositorySchema: BACKUP_REPOSITORY_SCHEMA,
             destinationDisplayName: path.basename(destination),
         },
+        backup: {
+            state: 'pending',
+            neededThrough: '1',
+            succeededThrough: '0',
+            lastSuccess: null,
+            recentVerifiedSnapshots: [],
+            cleanup: 'idle',
+        },
     });
     assert.deepEqual(await store.commit(command), committed);
 
@@ -175,6 +183,14 @@ test('A-DATA-002: configuration commits atomically, replays, conflicts, and surv
             backupSetId: FIRST_BACKUP_SET_ID,
             repositorySchema: BACKUP_REPOSITORY_SCHEMA,
             destinationDisplayName: path.basename(destination),
+        },
+        backup: {
+            state: 'pending',
+            neededThrough: '1',
+            succeededThrough: '0',
+            lastSuccess: null,
+            recentVerifiedSnapshots: [],
+            cleanup: 'idle',
         },
     });
     assert.deepEqual(reopened.readBackupConfigurationForCommand(COMMAND_ID), command.destination);
@@ -262,8 +278,8 @@ test('schema level 11 migrates to a legal unconfigured protection state', async 
     if (opened.kind !== 'ready') {
         throw new Error('Expected current migrated DATA');
     }
-    assert.equal(opened.store.status().schemaLevel, 13);
-    assert.equal(opened.store.status().revision, '6');
+    assert.equal(opened.store.status().schemaLevel, 14);
+    assert.equal(opened.store.status().revision, '7');
     assert.deepEqual(opened.store.readDataProtectionProjection().configuration, { kind: 'unconfigured' });
     await opened.store.close();
 });

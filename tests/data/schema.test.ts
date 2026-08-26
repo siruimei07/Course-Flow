@@ -12,6 +12,7 @@ import test from 'node:test';
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
+    createSchemaLevel13,
     createSchemaLevel2,
     migrateLevel0To1,
     migrateLevel2To3,
@@ -130,20 +131,21 @@ function assertUnchangedAfterRejectedWrite(dataSlotsRoot: string, statement: str
 test('TEST-DATA-001/005: current schema initializes Meeting, HolidayRange, Task, and setup draft facts', async t => {
     const dataSlotsRoot = createTempDataSlots(t);
     assert.equal(COURSEFLOW_APPLICATION_ID, 0x43464C57);
-    assert.equal(CURRENT_SCHEMA_LEVEL, 13);
+    assert.equal(CURRENT_SCHEMA_LEVEL, 14);
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     assert.deepEqual(store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 13,
+        schemaLevel: 14,
         revision: '0',
     });
     await store.close();
 
     assert.deepEqual(readSchemaFacts(dataSlotsRoot), {
         applicationId: 0x43464C57,
-        userVersion: 13,
+        userVersion: 14,
         tables: [
+            'backup_cleanup_operations',
             'backup_configuration',
             'backup_operations',
             'backup_snapshots',
@@ -264,11 +266,182 @@ test('initialization failpoints leave no active slot and permit a clean retry', 
         assert.deepEqual(store.status(), {
             kind: 'ready',
             workspaceId: WORKSPACE_ID,
-            schemaLevel: 13,
+            schemaLevel: 14,
             revision: '0',
         });
         await store.close();
     }
+});
+
+test('ADR-04/WP-R5-03: level 13 migrates to the resumable cleanup journal', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const active = join(dataSlotsRoot, 'active');
+    mkdirSync(active);
+    const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
+    try {
+        database.exec('BEGIN IMMEDIATE');
+        database.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
+        createSchemaLevel13(database);
+        database.prepare(
+            'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 3)',
+        ).run(WORKSPACE_ID);
+        database.exec(`
+            INSERT INTO setup_state (
+                singleton,
+                last_decision,
+                setup_decision_version,
+                ever_reached_minimum
+            ) VALUES (1, NULL, 0, 0);
+            INSERT INTO setup_draft_checkpoint (
+                singleton,
+                checkpoint_version,
+                schema_version,
+                updated_at,
+                opaque_payload
+            ) VALUES (1, 0, NULL, NULL, NULL);
+            INSERT INTO protection_watermarks (
+                singleton,
+                backup_needed_through,
+                backup_succeeded_through
+            ) VALUES (1, 3, 2);
+            INSERT INTO plan_state (
+                singleton,
+                current_term_id,
+                plan_entity_version
+            ) VALUES (1, NULL, 0);
+            INSERT INTO command_receipts (
+                command_id,
+                intent_kind,
+                intent_schema_version,
+                canonical_encoding,
+                digest_algorithm,
+                payload_digest,
+                committed_revision,
+                result_kind
+            ) VALUES (
+                '22222222-2222-4222-8222-222222222222',
+                'protect.configure-backup-destination',
+                1,
+                'courseflow-canonical-json-v1',
+                'sha256',
+                zeroblob(32),
+                1,
+                'committed'
+            );
+            INSERT INTO receipt_effects (
+                command_id,
+                effect_order,
+                effect_code,
+                entity_kind,
+                entity_id,
+                entity_version
+            ) VALUES (
+                '22222222-2222-4222-8222-222222222222',
+                0,
+                'protect.backup-destination-configured',
+                'backup-configuration',
+                '33333333-3333-4333-8333-333333333333',
+                1
+            );
+            INSERT INTO durable_followups (
+                follow_up_id,
+                originating_command_id,
+                owner,
+                kind,
+                prerequisite_revision,
+                state,
+                follow_up_version
+            ) VALUES (
+                '44444444-4444-4444-8444-444444444444',
+                '22222222-2222-4222-8222-222222222222',
+                'protect',
+                'backup-needed-through',
+                1,
+                'completed',
+                1
+            );
+            INSERT INTO backup_configuration (
+                singleton,
+                configuration_version,
+                backup_set_id,
+                repository_schema,
+                canonical_destination_path,
+                destination_display_name,
+                originating_command_id,
+                configured_revision
+            ) VALUES (
+                1,
+                1,
+                '33333333-3333-4333-8333-333333333333',
+                'courseflow-backup-repository-v1',
+                'fixture-destination',
+                'fixture-destination',
+                '22222222-2222-4222-8222-222222222222',
+                1
+            );
+            INSERT INTO backup_operations VALUES (
+                '55555555-5555-4555-8555-555555555555',
+                '33333333-3333-4333-8333-333333333333',
+                1,
+                '66666666-6666-4666-8666-666666666666',
+                1,
+                2,
+                '.staging-55555555-5555-4555-8555-555555555555-0123456789abcdef',
+                '2026-08-25T12:00:00.000Z',
+                'succeeded',
+                7
+            );
+            INSERT INTO backup_snapshots VALUES (
+                '66666666-6666-4666-8666-666666666666',
+                '55555555-5555-4555-8555-555555555555',
+                '33333333-3333-4333-8333-333333333333',
+                1,
+                2,
+                '${'a'.repeat(64)}',
+                '2026-08-25T12:00:01.000Z'
+            );
+            INSERT INTO backup_operations VALUES (
+                '77777777-7777-4777-8777-777777777777',
+                '33333333-3333-4333-8333-333333333333',
+                2,
+                '88888888-8888-4888-8888-888888888888',
+                3,
+                NULL,
+                '.staging-77777777-7777-4777-8777-777777777777-fedcba9876543210',
+                '2026-08-25T12:00:02.000Z',
+                'queued',
+                0
+            );
+            PRAGMA user_version = 13;
+            COMMIT;
+        `);
+    }
+    finally {
+        database.close();
+    }
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind !== 'ready') {
+        throw new Error('Expected level 13 migration to open ready');
+    }
+    assert.deepEqual(opened.store.status(), {
+        kind: 'ready',
+        workspaceId: WORKSPACE_ID,
+        schemaLevel: 14,
+        revision: '4',
+    });
+    assert.equal(opened.store.readProtectionWatermark(), '4');
+    assert.equal(opened.store.readBackupCleanupOperation(), null);
+    assert.deepEqual(opened.store.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId), [
+        '66666666-6666-4666-8666-666666666666',
+    ]);
+    assert.equal(opened.store.readBackupOperation()?.snapshotId, '88888888-8888-4888-8888-888888888888');
+    await opened.store.close();
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-13-')).length,
+        1,
+    );
 });
 
 function createLevel1Workspace(dataSlotsRoot: string): void {
@@ -394,8 +567,8 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 13,
-        revision: '12',
+        schemaLevel: 14,
+        revision: '13',
     });
     await opened.store.close();
 
@@ -434,7 +607,7 @@ test('TEST-DATA-002/006: level 1 migration preserves receipts and pending follow
     if (opened.kind !== 'ready') {
         throw new Error('Expected migrated ready workspace');
     }
-    assert.equal(opened.store.status().revision, '13');
+    assert.equal(opened.store.status().revision, '14');
     assert.deepEqual(opened.store.receipt('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'), {
         kind: 'committed',
         revision: '1',
@@ -501,7 +674,7 @@ test('TEST-DATA-005/006: a read-only old level stops without migration or reset'
     assert.equal(opened.problem.code, 'incompatible-version');
     assert.deepEqual(opened.problem.details, {
         actualSchemaLevel: 1,
-        requiredSchemaLevel: 13,
+        requiredSchemaLevel: 14,
     });
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
 });
@@ -896,7 +1069,7 @@ test('Q-TIME-01/TEST-DATA-006: level 5 offsets migrate atomically and restart at
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 5 offset migration to continue');
     }
-    assert.equal(continued.store.status().revision, '13');
+    assert.equal(continued.store.status().revision, '14');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-09-30' },
@@ -961,7 +1134,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
     if (continued.kind !== 'ready') {
         throw new Error('Expected level 4 migration to continue');
     }
-    assert.equal(continued.store.status().revision, '13');
+    assert.equal(continued.store.status().revision, '14');
     const detail = continued.store.readMeetingSeriesDetail(
         '44444444-4444-4444-8444-444444444444',
         { startDate: '2026-09-01', endDate: '2026-12-31' },
@@ -981,7 +1154,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
         'plan.course-created',
         'plan.meeting-series-created',
     ]);
-    assert.equal(continued.store.readProtectionWatermark(), '13');
+    assert.equal(continued.store.readProtectionWatermark(), '14');
     await continued.store.close();
 });
 
@@ -1216,8 +1389,8 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 13,
-        revision: '12',
+        schemaLevel: 14,
+        revision: '13',
     });
     assert.deepEqual(opened.store.readSetupProjection().currentTerm, {
         termId: '22222222-2222-4222-8222-222222222222',
@@ -1243,7 +1416,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
         pendingFollowUps: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
     });
     assert.equal(opened.store.readPendingFollowUps().length, 1);
-    assert.equal(opened.store.readProtectionWatermark(), '12');
+    assert.equal(opened.store.readProtectionWatermark(), '13');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
@@ -1280,8 +1453,8 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
     assert.deepEqual(opened.store.status(), {
         kind: 'ready',
         workspaceId: WORKSPACE_ID,
-        schemaLevel: 13,
-        revision: '13',
+        schemaLevel: 14,
+        revision: '14',
     });
     const projection = opened.store.readSetupProjection();
     assert.equal(projection.currentTerm?.termId, '22222222-2222-4222-8222-222222222222');
@@ -1365,7 +1538,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
         commandId: '88888888-8888-4888-8888-888888888888',
         followUpId: '99999999-9999-4999-8999-999999999999',
     }), TypeError);
-    assert.equal(opened.store.status().revision, '13');
+    assert.equal(opened.store.status().revision, '14');
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)

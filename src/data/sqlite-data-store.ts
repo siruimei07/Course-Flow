@@ -155,7 +155,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel13,
+    createSchemaLevel14,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -168,6 +168,7 @@ import {
     migrateLevel10To11,
     migrateLevel11To12,
     migrateLevel12To13,
+    migrateLevel13To14,
     SchemaValidationError,
     validateSchemaLevel1,
     validateSchemaLevel2,
@@ -182,6 +183,7 @@ import {
     validateSchemaLevel11,
     validateSchemaLevel12,
     validateSchemaLevel13,
+    validateSchemaLevel14,
 } from './schema';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
@@ -231,7 +233,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 13 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 14 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -264,13 +266,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 13;
+        schemaLevel: 14;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 13;
+        schemaLevel: 14;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -408,6 +410,18 @@ export type SuccessfulBackupSnapshot = Readonly<{
     succeededAt: string;
 }>;
 
+export type BackupCleanupOperation = Readonly<{
+    operationId: string;
+    backupSetId: string;
+    snapshotId: string;
+    backupSequence: string;
+    rootDigest: string;
+    snapshotDirectoryName: string;
+    quarantineDirectoryName: string;
+    phase: 'planned' | 'quarantined' | 'deleting';
+    version: string;
+}>;
+
 export type BackupDatabaseFacts = Readonly<{
     workspaceId: string;
     applicationId: string;
@@ -432,6 +446,18 @@ type BackupOperationRow = {
     operation_version: bigint;
 };
 
+type BackupCleanupOperationRow = {
+    operation_id: string;
+    backup_set_id: string;
+    snapshot_id: string;
+    backup_sequence: bigint;
+    root_digest: string;
+    snapshot_directory_name: string;
+    quarantine_directory_name: string;
+    phase: 'planned' | 'quarantined' | 'deleting';
+    operation_version: bigint;
+};
+
 /**
  * Converts one validated storage row into the path-safe PROTECT operation contract.
  * @param {BackupOperationRow} row - Typed SQLite operation row.
@@ -447,6 +473,25 @@ function backupOperationFromRow(row: BackupOperationRow): BackupOperation {
         actualRevision: row.actual_revision?.toString() ?? null,
         stagingDirectoryName: row.staging_directory_name,
         createdAt: row.created_at,
+        phase: row.phase,
+        version: row.operation_version.toString(),
+    });
+}
+
+/**
+ * Converts one validated cleanup journal row into the path-safe PROTECT contract.
+ * @param {BackupCleanupOperationRow} row - Typed SQLite cleanup row.
+ * @return {BackupCleanupOperation} Immutable cleanup operation facts.
+ */
+function backupCleanupOperationFromRow(row: BackupCleanupOperationRow): BackupCleanupOperation {
+    return Object.freeze({
+        operationId: row.operation_id,
+        backupSetId: row.backup_set_id,
+        snapshotId: row.snapshot_id,
+        backupSequence: row.backup_sequence.toString(),
+        rootDigest: row.root_digest,
+        snapshotDirectoryName: row.snapshot_directory_name,
+        quarantineDirectoryName: row.quarantine_directory_name,
         phase: row.phase,
         version: row.operation_version.toString(),
     });
@@ -4359,6 +4404,20 @@ class SqliteDataStoreImplementation {
     }
 
     /**
+     * Reads the durable operation that owns one registered or in-progress snapshot identity.
+     * @param {string} snapshotId - Canonical snapshot UUID.
+     * @return {BackupOperation | null} Matching durable operation when registered.
+     */
+    public readBackupOperationForSnapshot(snapshotId: string): BackupOperation | null {
+        this.requireOpen();
+        if (!isCanonicalUuid(snapshotId)) {
+            throw new TypeError('Snapshot identity is invalid');
+        }
+        const row = this.readBackupOperationRow('snapshot_id = ?', snapshotId);
+        return row ? backupOperationFromRow(row) : null;
+    }
+
+    /**
      * Records the actual revision observed in the validated SQLite backup member.
      * @param {string} operationId - Claimed operation identity.
      * @param {string} actualRevision - Revision read from the checkpoint copy.
@@ -4545,6 +4604,262 @@ class SqliteDataStoreImplementation {
     }
 
     /**
+     * Claims one PROTECT-selected registration when two newer successes are still recorded.
+     * @param {string} operationId - Fresh cleanup operation UUID.
+     * @param {string} snapshotId - Freshly selected registered Snapshot UUID.
+     * @return {BackupCleanupOperation | null} Resumable cleanup, or null when ineligible.
+     */
+    public claimBackupCleanupOperation(
+        operationId: string,
+        snapshotId: string,
+    ): BackupCleanupOperation | null {
+        this.requireBackupMutationAllowed();
+        if (!isCanonicalUuid(operationId) || !isCanonicalUuid(snapshotId)) {
+            throw new TypeError('Backup cleanup identity is invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const active = this.readBackupCleanupOperationRow();
+            if (active) {
+                this.database.exec('COMMIT');
+                return backupCleanupOperationFromRow(active);
+            }
+            const candidateStatement = this.database.prepare(`
+                SELECT
+                    snapshot.backup_set_id,
+                    snapshot.snapshot_id,
+                    snapshot.backup_sequence,
+                    snapshot.root_digest
+                FROM backup_snapshots AS snapshot
+                JOIN backup_configuration AS configuration ON configuration.singleton = 1
+                WHERE snapshot.backup_set_id = configuration.backup_set_id
+                    AND snapshot.snapshot_id = ?
+                    AND (
+                        SELECT count(*)
+                        FROM backup_snapshots AS newer
+                        WHERE newer.backup_set_id = snapshot.backup_set_id
+                            AND newer.backup_sequence > snapshot.backup_sequence
+                    ) >= 2
+                LIMIT 1
+            `);
+            candidateStatement.setReadBigInts(true);
+            const candidate = candidateStatement.get(snapshotId) as {
+                backup_set_id: string;
+                snapshot_id: string;
+                backup_sequence: bigint;
+                root_digest: string;
+            } | undefined;
+            if (!candidate) {
+                this.database.exec('COMMIT');
+                return null;
+            }
+            this.database.prepare(`
+                INSERT INTO backup_cleanup_operations (
+                    singleton,
+                    operation_id,
+                    backup_set_id,
+                    snapshot_id,
+                    backup_sequence,
+                    root_digest,
+                    snapshot_directory_name,
+                    quarantine_directory_name,
+                    phase,
+                    operation_version
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, 'planned', 0)
+            `).run(
+                operationId,
+                candidate.backup_set_id,
+                candidate.snapshot_id,
+                candidate.backup_sequence,
+                candidate.root_digest,
+                `snapshot-${candidate.snapshot_id}`,
+                `.quarantine-${operationId}-${candidate.snapshot_id}`,
+            );
+            const claimed = this.readBackupCleanupOperationRow();
+            this.database.exec('COMMIT');
+            return backupCleanupOperationFromRow(claimed!);
+        }
+        catch (error) {
+            if (this.database.isTransaction) {
+                this.database.exec('ROLLBACK');
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Reads the one durable retention cleanup journal entry.
+     * @return {BackupCleanupOperation | null} Active cleanup when one exists.
+     */
+    public readBackupCleanupOperation(): BackupCleanupOperation | null {
+        this.requireOpen();
+        const row = this.readBackupCleanupOperationRow();
+        return row ? backupCleanupOperationFromRow(row) : null;
+    }
+
+    /**
+     * Releases a planned cleanup only after PROTECT proves no quarantine rename occurred.
+     * @param {string} operationId - Persisted cleanup operation UUID.
+     * @return {void}
+     */
+    public releasePlannedBackupCleanup(operationId: string): void {
+        this.requireBackupMutationAllowed();
+        if (!isCanonicalUuid(operationId)) {
+            throw new TypeError('Backup cleanup operation identity is invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const cleanup = this.readBackupCleanupOperationRow();
+            if (!cleanup) {
+                this.database.exec('COMMIT');
+                return;
+            }
+            if (cleanup.operation_id !== operationId || cleanup.phase !== 'planned') {
+                throw new Error('Backup cleanup operation cannot be released');
+            }
+            this.database.prepare(`
+                DELETE FROM backup_cleanup_operations
+                WHERE singleton = 1 AND operation_id = ? AND phase = 'planned'
+            `).run(operationId);
+            this.database.exec('COMMIT');
+        }
+        catch (error) {
+            if (this.database.isTransaction) {
+                this.database.exec('ROLLBACK');
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Records that same-parent quarantine rename has completed.
+     * @param {string} operationId - Persisted cleanup operation UUID.
+     * @return {BackupCleanupOperation} Idempotently quarantined cleanup facts.
+     */
+    public markBackupCleanupQuarantined(operationId: string): BackupCleanupOperation {
+        this.requireBackupMutationAllowed();
+        if (!isCanonicalUuid(operationId)) {
+            throw new TypeError('Backup cleanup operation identity is invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const cleanup = this.readBackupCleanupOperationRow();
+            if (!cleanup || cleanup.operation_id !== operationId) {
+                throw new Error('Backup cleanup operation does not exist');
+            }
+            if (cleanup.phase === 'planned') {
+                this.database.prepare(`
+                    UPDATE backup_cleanup_operations
+                    SET phase = 'quarantined', operation_version = 1
+                    WHERE singleton = 1
+                `).run();
+            }
+            const updated = this.readBackupCleanupOperationRow();
+            this.database.exec('COMMIT');
+            return backupCleanupOperationFromRow(updated!);
+        }
+        catch (error) {
+            if (this.database.isTransaction) {
+                this.database.exec('ROLLBACK');
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Records the fully revalidated checkpoint that authorizes exact physical deletion.
+     * @param {string} operationId - Persisted cleanup operation UUID.
+     * @return {BackupCleanupOperation} Idempotently deletion-authorized cleanup facts.
+     */
+    public markBackupCleanupDeleting(operationId: string): BackupCleanupOperation {
+        this.requireBackupMutationAllowed();
+        if (!isCanonicalUuid(operationId)) {
+            throw new TypeError('Backup cleanup operation identity is invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const cleanup = this.readBackupCleanupOperationRow();
+            if (!cleanup || cleanup.operation_id !== operationId || cleanup.phase === 'planned') {
+                throw new Error('Backup cleanup operation is not quarantined');
+            }
+            if (cleanup.phase === 'quarantined') {
+                this.database.prepare(`
+                    UPDATE backup_cleanup_operations
+                    SET phase = 'deleting', operation_version = 2
+                    WHERE singleton = 1
+                `).run();
+            }
+            const updated = this.readBackupCleanupOperationRow();
+            this.database.exec('COMMIT');
+            return backupCleanupOperationFromRow(updated!);
+        }
+        catch (error) {
+            if (this.database.isTransaction) {
+                this.database.exec('ROLLBACK');
+            }
+            throw error;
+        }
+    }
+
+    /**
+     * Forgets one physically deleted quarantined snapshot and its succeeded operation atomically.
+     * @param {string} operationId - Persisted cleanup operation UUID.
+     * @return {void}
+     */
+    public completeBackupCleanup(operationId: string): void {
+        this.requireBackupMutationAllowed();
+        if (!isCanonicalUuid(operationId)) {
+            throw new TypeError('Backup cleanup operation identity is invalid');
+        }
+        try {
+            this.database.exec('BEGIN IMMEDIATE');
+            const cleanup = this.readBackupCleanupOperationRow();
+            if (!cleanup) {
+                this.database.exec('COMMIT');
+                return;
+            }
+            if (cleanup.operation_id !== operationId || cleanup.phase !== 'deleting') {
+                throw new Error('Backup cleanup operation is not ready to complete');
+            }
+            const snapshotStatement = this.database.prepare(`
+                SELECT snapshot.operation_id, count(newer.snapshot_id) AS newer_snapshot_count
+                FROM backup_snapshots AS snapshot
+                LEFT JOIN backup_snapshots AS newer
+                    ON newer.backup_set_id = snapshot.backup_set_id
+                    AND newer.backup_sequence > snapshot.backup_sequence
+                WHERE snapshot.snapshot_id = ?
+                    AND snapshot.backup_set_id = ?
+                    AND snapshot.backup_sequence = ?
+                    AND snapshot.root_digest = ?
+                GROUP BY snapshot.operation_id
+            `);
+            snapshotStatement.setReadBigInts(true);
+            const snapshot = snapshotStatement.get(
+                cleanup.snapshot_id,
+                cleanup.backup_set_id,
+                cleanup.backup_sequence,
+                cleanup.root_digest,
+            ) as {operation_id: string; newer_snapshot_count: bigint} | undefined;
+            if (!snapshot || snapshot.newer_snapshot_count < 2n) {
+                throw new Error('Backup cleanup would violate retention');
+            }
+            this.database.prepare('DELETE FROM backup_snapshots WHERE snapshot_id = ?')
+                .run(cleanup.snapshot_id);
+            this.database.prepare('DELETE FROM backup_operations WHERE operation_id = ?')
+                .run(snapshot.operation_id);
+            this.database.prepare('DELETE FROM backup_cleanup_operations WHERE singleton = 1')
+                .run();
+            this.database.exec('COMMIT');
+        }
+        catch (error) {
+            if (this.database.isTransaction) {
+                this.database.exec('ROLLBACK');
+            }
+            throw error;
+        }
+    }
+
+    /**
      * Requires a writable, nonterminal DATA connection for protection bookkeeping.
      * @return {void}
      */
@@ -4604,6 +4919,29 @@ class SqliteDataStoreImplementation {
         `);
         statement.setReadBigInts(true);
         return statement.get(...parameters) as BackupOperationRow | undefined;
+    }
+
+    /**
+     * Reads the singleton cleanup journal row inside or outside a caller-owned transaction.
+     * @return {BackupCleanupOperationRow | undefined} Active cleanup storage row.
+     */
+    private readBackupCleanupOperationRow(): BackupCleanupOperationRow | undefined {
+        const statement = this.database.prepare(`
+            SELECT
+                operation_id,
+                backup_set_id,
+                snapshot_id,
+                backup_sequence,
+                root_digest,
+                snapshot_directory_name,
+                quarantine_directory_name,
+                phase,
+                operation_version
+            FROM backup_cleanup_operations
+            WHERE singleton = 1
+        `);
+        statement.setReadBigInts(true);
+        return statement.get() as BackupCleanupOperationRow | undefined;
     }
 
     /**
@@ -4696,10 +5034,22 @@ class SqliteDataStoreImplementation {
                 backup_configuration.configuration_version,
                 backup_configuration.backup_set_id,
                 backup_configuration.repository_schema,
-                backup_configuration.destination_display_name
+                backup_configuration.destination_display_name,
+                protection_watermarks.backup_needed_through,
+                protection_watermarks.backup_succeeded_through,
+                backup_cleanup_operations.operation_id AS cleanup_operation_id,
+                (
+                    SELECT count(*)
+                    FROM backup_snapshots
+                    WHERE backup_snapshots.backup_set_id = backup_configuration.backup_set_id
+                ) AS registered_snapshot_count
             FROM workspace_state
             JOIN backup_configuration
                 ON backup_configuration.singleton = workspace_state.singleton
+            JOIN protection_watermarks
+                ON protection_watermarks.singleton = workspace_state.singleton
+            LEFT JOIN backup_cleanup_operations
+                ON backup_cleanup_operations.singleton = workspace_state.singleton
             WHERE workspace_state.singleton = 1
         `);
         statement.setReadBigInts(true);
@@ -4709,19 +5059,58 @@ class SqliteDataStoreImplementation {
             backup_set_id: string | null;
             repository_schema: typeof BACKUP_REPOSITORY_SCHEMA | null;
             destination_display_name: string | null;
+            backup_needed_through: bigint;
+            backup_succeeded_through: bigint;
+            cleanup_operation_id: string | null;
+            registered_snapshot_count: bigint;
         };
-        const configuration: DataProtectionProjection['configuration'] = row.backup_set_id === null
-            ? Object.freeze({ kind: 'unconfigured' as const })
-            : Object.freeze({
+        if (row.backup_set_id === null) {
+            return Object.freeze({
+                workspaceRevision: row.revision.toString(),
+                protectionEntityVersion: row.configuration_version.toString(),
+                configuration: Object.freeze({kind: 'unconfigured' as const}),
+            });
+        }
+        const snapshots = this.readSuccessfulBackupSnapshots()
+            .slice(-2)
+            .reverse()
+            .map(snapshot => Object.freeze({
+                snapshotId: snapshot.snapshotId,
+                backupSequence: snapshot.backupSequence,
+                actualRevision: snapshot.actualRevision,
+                succeededAt: snapshot.succeededAt,
+                snapshotFormatVersion: '1' as const,
+                integrity: 'verified' as const,
+            }));
+        const latest = snapshots[0];
+        return Object.freeze({
+            workspaceRevision: row.revision.toString(),
+            protectionEntityVersion: row.configuration_version.toString(),
+            configuration: Object.freeze({
                 kind: 'configured' as const,
                 backupSetId: row.backup_set_id,
                 repositorySchema: row.repository_schema!,
                 destinationDisplayName: row.destination_display_name!,
-            });
-        return Object.freeze({
-            workspaceRevision: row.revision.toString(),
-            protectionEntityVersion: row.configuration_version.toString(),
-            configuration,
+            }),
+            backup: Object.freeze({
+                state: row.backup_needed_through === row.backup_succeeded_through
+                    ? 'current' as const
+                    : 'pending' as const,
+                neededThrough: row.backup_needed_through.toString(),
+                succeededThrough: row.backup_succeeded_through.toString(),
+                lastSuccess: latest
+                    ? Object.freeze({
+                        snapshotId: latest.snapshotId,
+                        protectedThrough: latest.actualRevision,
+                        succeededAt: latest.succeededAt,
+                    })
+                    : null,
+                recentVerifiedSnapshots: Object.freeze(snapshots),
+                cleanup: row.cleanup_operation_id === null
+                    && row.registered_snapshot_count <= 2n
+                    ? 'idle' as const
+                    : 'pending' as const,
+            }),
         });
     }
 
@@ -4803,9 +5192,13 @@ class SqliteDataStoreImplementation {
         const copied = openDatabase(copyPath, true);
         try {
             const identity = readDatabaseIdentity(copied);
-            const facts = validateSchemaLevel13(copied);
+            const facts = identity.schemaLevel === 13
+                ? validateSchemaLevel13(copied)
+                : identity.schemaLevel === 14
+                    ? validateSchemaLevel14(copied)
+                    : null;
             if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-                || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL
+                || facts === null
                 || facts.workspaceId !== this.workspaceId
                 || facts.revision < BigInt(targetRevision)) {
                 throw new Error('Backup database copy does not cover the target revision');
@@ -9254,7 +9647,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel13(stagingDatabase);
+        createSchemaLevel14(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -9303,7 +9696,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel13(validationDatabase);
+            validateSchemaLevel14(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -9312,7 +9705,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel13(activeDatabase);
+        const facts = validateSchemaLevel14(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -9385,7 +9778,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel13(validationDatabase);
+        const facts = validateSchemaLevel14(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -9435,7 +9828,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel13(activeDatabase);
+        const facts = validateSchemaLevel14(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -9482,7 +9875,8 @@ export async function openWorkspaceDataWithMigrations(
                 && identity.schemaLevel !== 9
                 && identity.schemaLevel !== 10
                 && identity.schemaLevel !== 11
-                && identity.schemaLevel !== 12)) {
+                && identity.schemaLevel !== 12
+                && identity.schemaLevel !== 13)) {
             closeBestEffort(source);
             return opened;
         }
@@ -9519,8 +9913,11 @@ export async function openWorkspaceDataWithMigrations(
         else if (identity.schemaLevel === 11) {
             validateSchemaLevel11(source);
         }
-        else {
+        else if (identity.schemaLevel === 12) {
             validateSchemaLevel12(source);
+        }
+        else {
+            validateSchemaLevel13(source);
         }
         if (options.readOnly) {
             closeBestEffort(source);
@@ -9568,8 +9965,11 @@ export async function openWorkspaceDataWithMigrations(
             else if (identity.schemaLevel === 11) {
                 validateSchemaLevel11(safetyDatabase);
             }
-            else {
+            else if (identity.schemaLevel === 12) {
                 validateSchemaLevel12(safetyDatabase);
+            }
+            else {
+                validateSchemaLevel13(safetyDatabase);
             }
         }
         finally {
@@ -9646,10 +10046,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel11To12(maintenance);
                         validateSchemaLevel12(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 12) {
                         validateSchemaLevel12(maintenance);
                         migrateLevel12To13(maintenance);
                         validateSchemaLevel13(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel13(maintenance);
+                        migrateLevel13To14(maintenance);
+                        validateSchemaLevel14(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -9673,7 +10078,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel13(maintenance);
+            validateSchemaLevel14(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

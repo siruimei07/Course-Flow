@@ -62,11 +62,11 @@ import {
 } from './shared/workspace-setup-contract';
 import {
     configureBackupDestination,
-    readDataProtectionProjection,
 } from './protect/backup-configuration';
 import { BackupDestinationPreparationError } from './protect/backup-repository';
 import {
     DurableBackupCoordinator,
+    readVerifiedDataProtectionProjection,
     type DurableBackupPassOptions,
 } from './protect/durable-backup';
 import {
@@ -579,9 +579,7 @@ export class WorkspaceApplication {
                     requestId,
                     workspaceEpoch: this.workspaceEpoch,
                     dataMode: this.dataState.status.kind === 'read-only' ? 'read-only' : 'ready',
-                    projection: readDataProtectionProjection({
-                        readProtection: () => this.dataState.store!.readDataProtectionProjection(),
-                    }),
+                    projection: readVerifiedDataProtectionProjection(this.dataState.store),
                 },
             };
         }

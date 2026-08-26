@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 13;
+export const CURRENT_SCHEMA_LEVEL = 14;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36
@@ -1390,6 +1390,35 @@ const LEVEL_13_DDL = LEVEL_12_DDL
     )
     + LEVEL_13_PROTECTION_DDL;
 
+const LEVEL_14_PROTECTION_DDL = `
+    CREATE TABLE backup_cleanup_operations (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        operation_id TEXT NOT NULL UNIQUE CHECK (${operationIdCheck}),
+        backup_set_id TEXT NOT NULL CHECK (${backupSetIdCheck}),
+        snapshot_id TEXT NOT NULL UNIQUE CHECK (${snapshotIdCheck}),
+        backup_sequence INTEGER NOT NULL CHECK (backup_sequence > 0),
+        root_digest TEXT NOT NULL CHECK (
+            length(root_digest) = 64
+            AND root_digest = lower(root_digest)
+            AND root_digest NOT GLOB '*[^0-9a-f]*'
+        ),
+        snapshot_directory_name TEXT NOT NULL CHECK (
+            snapshot_directory_name = 'snapshot-' || snapshot_id
+        ),
+        quarantine_directory_name TEXT NOT NULL CHECK (
+            quarantine_directory_name = '.quarantine-' || operation_id || '-' || snapshot_id
+        ),
+        phase TEXT NOT NULL CHECK (phase IN ('planned', 'quarantined', 'deleting')),
+        operation_version INTEGER NOT NULL CHECK (
+            (phase = 'planned' AND operation_version = 0)
+            OR (phase = 'quarantined' AND operation_version = 1)
+            OR (phase = 'deleting' AND operation_version = 2)
+        )
+    ) STRICT;
+`;
+
+const LEVEL_14_DDL = LEVEL_13_DDL + LEVEL_14_PROTECTION_DDL;
+
 const TABLE_COLUMNS = {
     workspace_state: [
         ['singleton', 'INTEGER', 0, 1],
@@ -1439,6 +1468,18 @@ const TABLE_COLUMNS = {
         ['actual_revision', 'INTEGER', 1, 0],
         ['root_digest', 'TEXT', 1, 0],
         ['succeeded_at', 'TEXT', 1, 0],
+    ],
+    backup_cleanup_operations: [
+        ['singleton', 'INTEGER', 0, 1],
+        ['operation_id', 'TEXT', 1, 0],
+        ['backup_set_id', 'TEXT', 1, 0],
+        ['snapshot_id', 'TEXT', 1, 0],
+        ['backup_sequence', 'INTEGER', 1, 0],
+        ['root_digest', 'TEXT', 1, 0],
+        ['snapshot_directory_name', 'TEXT', 1, 0],
+        ['quarantine_directory_name', 'TEXT', 1, 0],
+        ['phase', 'TEXT', 1, 0],
+        ['operation_version', 'INTEGER', 1, 0],
     ],
     command_receipts: [
         ['command_id', 'TEXT', 1, 1],
@@ -1709,6 +1750,7 @@ const FOREIGN_KEYS = {
     ],
     backup_operations: [],
     backup_snapshots: [['operation_id', 'backup_operations', 'operation_id']],
+    backup_cleanup_operations: [],
     command_receipts: [],
     receipt_effects: [['command_id', 'command_receipts', 'command_id']],
     durable_followups: [['originating_command_id', 'command_receipts', 'command_id']],
@@ -1796,6 +1838,11 @@ const LEVEL_13_TABLES = [
     'backup_snapshots',
 ] as const;
 
+const LEVEL_14_TABLES = [
+    ...LEVEL_13_TABLES,
+    'backup_cleanup_operations',
+] as const;
+
 type CurrentTable = keyof typeof TABLE_COLUMNS;
 
 export type SchemaFacts = Readonly<{
@@ -1816,7 +1863,7 @@ function rejectSchema(reason: SchemaValidationFailureReason = 'schema-mismatch')
     throw new SchemaValidationError(reason);
 }
 
-type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
+type SchemaLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14;
 
 function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 1) {
@@ -1846,7 +1893,10 @@ function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 11) {
         return LEVEL_11_TABLES;
     }
-    return level === 12 ? LEVEL_12_TABLES : LEVEL_13_TABLES;
+    if (level === 12) {
+        return LEVEL_12_TABLES;
+    }
+    return level === 13 ? LEVEL_13_TABLES : LEVEL_14_TABLES;
 }
 
 function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -1891,7 +1941,9 @@ function expectedTableSql(table: CurrentTable, level: SchemaLevel): string {
                                                 ? LEVEL_11_DDL
                                                 : level === 12
                                                     ? LEVEL_12_DDL
-                                                    : LEVEL_13_DDL;
+                                                    : level === 13
+                                                        ? LEVEL_13_DDL
+                                                        : LEVEL_14_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -2647,6 +2699,82 @@ function validateLevel13ProtectionFacts(database: DatabaseSync): void {
     }
 }
 
+/**
+ * Validates the one resumable retention cleanup against its registered snapshot.
+ * @param {DatabaseSync} database - Open CourseFlow database at schema level 14.
+ * @return {void}
+ */
+function validateLevel14ProtectionFacts(database: DatabaseSync): void {
+    const statement = database.prepare(`
+        SELECT
+            cleanup.operation_id,
+            cleanup.backup_set_id,
+            cleanup.snapshot_id,
+            cleanup.backup_sequence,
+            cleanup.root_digest,
+            cleanup.snapshot_directory_name,
+            cleanup.quarantine_directory_name,
+            cleanup.phase,
+            cleanup.operation_version,
+            snapshot.operation_id AS snapshot_operation_id,
+            snapshot.backup_set_id AS snapshot_backup_set_id,
+            snapshot.backup_sequence AS snapshot_backup_sequence,
+            snapshot.root_digest AS snapshot_root_digest,
+            operation.phase AS backup_operation_phase,
+            configuration.backup_set_id AS configured_backup_set_id,
+            (
+                SELECT count(*)
+                FROM backup_snapshots AS newer
+                WHERE newer.backup_set_id = cleanup.backup_set_id
+                    AND newer.backup_sequence > cleanup.backup_sequence
+            ) AS newer_snapshot_count
+        FROM backup_cleanup_operations AS cleanup
+        LEFT JOIN backup_snapshots AS snapshot
+            ON snapshot.snapshot_id = cleanup.snapshot_id
+        LEFT JOIN backup_operations AS operation
+            ON operation.operation_id = snapshot.operation_id
+        JOIN backup_configuration AS configuration ON configuration.singleton = 1
+        WHERE cleanup.singleton = 1
+    `);
+    statement.setReadBigInts(true);
+    const row = statement.get() as {
+        operation_id: string;
+        backup_set_id: string;
+        snapshot_id: string;
+        backup_sequence: bigint;
+        root_digest: string;
+        snapshot_directory_name: string;
+        quarantine_directory_name: string;
+        phase: 'planned' | 'quarantined' | 'deleting';
+        operation_version: bigint;
+        snapshot_operation_id: string | null;
+        snapshot_backup_set_id: string | null;
+        snapshot_backup_sequence: bigint | null;
+        snapshot_root_digest: string | null;
+        backup_operation_phase: string | null;
+        configured_backup_set_id: string | null;
+        newer_snapshot_count: bigint;
+    } | undefined;
+    if (!row) {
+        return;
+    }
+    if (row.backup_set_id !== row.configured_backup_set_id
+        || row.snapshot_backup_set_id !== row.backup_set_id
+        || row.snapshot_backup_sequence !== row.backup_sequence
+        || row.snapshot_root_digest !== row.root_digest
+        || row.snapshot_operation_id === null
+        || row.backup_operation_phase !== 'succeeded'
+        || row.newer_snapshot_count < 2n
+        || row.snapshot_directory_name !== `snapshot-${row.snapshot_id}`
+        || row.quarantine_directory_name
+            !== `.quarantine-${row.operation_id}-${row.snapshot_id}`
+        || (row.phase === 'planned' && row.operation_version !== 0n)
+        || (row.phase === 'quarantined' && row.operation_version !== 1n)
+        || (row.phase === 'deleting' && row.operation_version !== 2n)) {
+        rejectSchema('database-corrupt');
+    }
+}
+
 function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts {
     if (pragmaValue(database, 'application_id', 'application_id') !== COURSEFLOW_APPLICATION_ID
         || pragmaValue(database, 'user_version', 'user_version') !== level) {
@@ -2686,6 +2814,9 @@ function validateSchema(database: DatabaseSync, level: SchemaLevel): SchemaFacts
     }
     if (level >= 13) {
         validateLevel13ProtectionFacts(database);
+    }
+    if (level >= 14) {
+        validateLevel14ProtectionFacts(database);
     }
 
     return validateBootstrapFacts(database, level);
@@ -3733,6 +3864,25 @@ export function migrateLevel12To13(database: DatabaseSync): void {
     `);
 }
 
+/**
+ * Adds the resumable retention cleanup journal and marks the migration revision pending.
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel13To14(database: DatabaseSync): void {
+    database.exec(`
+        ${LEVEL_14_PROTECTION_DDL}
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 14;
+    `);
+}
+
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -3824,6 +3974,15 @@ export function createSchemaLevel12(database: DatabaseSync): void {
  */
 export function createSchemaLevel13(database: DatabaseSync): void {
     database.exec(LEVEL_13_DDL);
+}
+
+/**
+ * Creates the current level 14 schema with resumable retention cleanup storage.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel14(database: DatabaseSync): void {
+    database.exec(LEVEL_14_DDL);
 }
 
 export function validateSchemaLevel1(database: DatabaseSync): SchemaFacts {
@@ -3921,4 +4080,13 @@ export function validateSchemaLevel12(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel13(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 13);
+}
+
+/**
+ * Validates level 14 durable backup retention and all earlier formal facts.
+ * @param {DatabaseSync} database - Open database to validate without mutation.
+ * @return {SchemaFacts} Validated bootstrap identity and revision facts.
+ */
+export function validateSchemaLevel14(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 14);
 }

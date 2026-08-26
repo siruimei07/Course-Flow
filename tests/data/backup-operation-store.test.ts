@@ -32,6 +32,13 @@ const SNAPSHOT_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const CREATED_AT = '2026-08-25T12:00:00.000Z';
 const ROOT_DIGEST = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 const STAGING_DIRECTORY_NAME = `.staging-${OPERATION_ID}-0123456789abcdef`;
+const SECOND_OPERATION_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+const SECOND_SNAPSHOT_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+const THIRD_OPERATION_ID = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+const THIRD_SNAPSHOT_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+const CLEANUP_OPERATION_ID = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
+const FOURTH_COMMAND_ID = '12121212-1212-4212-8212-121212121212';
+const FOURTH_FOLLOW_UP_ID = '13131313-1313-4313-8313-131313131313';
 
 type BackupOperation = Readonly<{
     operationId: string;
@@ -50,6 +57,18 @@ type BackupOperation = Readonly<{
         | 'publishing'
         | 'published-pending-record'
         | 'succeeded';
+    version: string;
+}>;
+
+type BackupCleanupOperation = Readonly<{
+    operationId: string;
+    backupSetId: string;
+    snapshotId: string;
+    backupSequence: string;
+    rootDigest: string;
+    snapshotDirectoryName: string;
+    quarantineDirectoryName: string;
+    phase: 'planned' | 'quarantined' | 'deleting';
     version: string;
 }>;
 
@@ -85,6 +104,15 @@ type BackupOperationStore = SqliteDataStore & Readonly<{
         rootDigest: string;
         succeededAt: string;
     }>[];
+    claimBackupCleanupOperation(
+        operationId: string,
+        snapshotId: string,
+    ): BackupCleanupOperation | null;
+    releasePlannedBackupCleanup(operationId: string): void;
+    readBackupCleanupOperation(): BackupCleanupOperation | null;
+    markBackupCleanupQuarantined(operationId: string): BackupCleanupOperation;
+    markBackupCleanupDeleting(operationId: string): BackupCleanupOperation;
+    completeBackupCleanup(operationId: string): void;
 }>;
 
 /**
@@ -160,6 +188,47 @@ function claim(store: BackupOperationStore): BackupOperation {
     });
     assert.notEqual(operation, null);
     return operation!;
+}
+
+/**
+ * Completes one DATA-only snapshot record without exercising filesystem publication.
+ * @param {BackupOperationStore} store - Configured writable DATA store.
+ * @param {object} input - Unique operation facts and deterministic success metadata.
+ * @return {BackupOperation} Succeeded durable operation.
+ */
+function recordSuccessfulBackup(
+    store: BackupOperationStore,
+    input: Readonly<{
+        operationId: string;
+        snapshotId: string;
+        nonce: string;
+        createdAt: string;
+        rootDigest: string;
+        succeededAt: string;
+    }>,
+): BackupOperation {
+    let operation = store.claimBackupOperation({
+        operationId: input.operationId,
+        snapshotId: input.snapshotId,
+        stagingDirectoryName: `.staging-${input.operationId}-${input.nonce}`,
+        createdAt: input.createdAt,
+    });
+    assert.notEqual(operation, null);
+    operation = store.recordBackupCheckpoint(operation!.operationId, operation!.targetRevision);
+    for (const [expectedPhase, nextPhase] of [
+        ['database-checkpoint', 'library-copy'],
+        ['library-copy', 'staging-validation'],
+        ['staging-validation', 'publishing'],
+        ['publishing', 'published-pending-record'],
+    ] as const) {
+        operation = store.advanceBackupOperation(operation.operationId, expectedPhase, nextPhase);
+    }
+    return store.recordBackupSuccess({
+        operationId: operation.operationId,
+        actualRevision: operation.actualRevision!,
+        rootDigest: input.rootDigest,
+        succeededAt: input.succeededAt,
+    });
 }
 
 test('TEST-PROTECT-002: claim merges the durable watermark and survives restart', async t => {
@@ -284,5 +353,133 @@ test('TEST-PROTECT-002: actual revision succeeds once and preserves a higher pen
     assert.deepEqual(resumed.readPendingFollowUps().map(followUp => followUp.followUpId), [
         THIRD_FOLLOW_UP_ID,
     ]);
+    await resumed.close();
+});
+
+test('TEST-PROTECT-003: cleanup journal retains two newest successes and resumes after restart', async t => {
+    const {dataSlotsRoot, store} = await createConfiguredStore(t);
+    recordSuccessfulBackup(store, {
+        operationId: OPERATION_ID,
+        snapshotId: SNAPSHOT_ID,
+        nonce: '0123456789abcdef',
+        createdAt: '2026-08-25T12:00:00.000Z',
+        rootDigest: ROOT_DIGEST,
+        succeededAt: '2026-08-25T12:00:01.000Z',
+    });
+
+    const third = await store.commit(normalizeRecordSetupDecisionCommand({
+        commandId: THIRD_COMMAND_ID,
+        followUpId: THIRD_FOLLOW_UP_ID,
+        workspaceId: WORKSPACE_ID,
+        expectedRevision: '2',
+        expectedSetupVersion: '1',
+        intent: {
+            kind: 'workspace.record-setup-decision',
+            intentSchemaVersion: 1,
+            payload: {decision: 'skip'},
+        },
+    }));
+    assert.equal(third.ok, true);
+    recordSuccessfulBackup(store, {
+        operationId: SECOND_OPERATION_ID,
+        snapshotId: SECOND_SNAPSHOT_ID,
+        nonce: '1111111111111111',
+        createdAt: '2026-08-25T12:00:02.000Z',
+        rootDigest: '1'.repeat(64),
+        succeededAt: '2026-08-25T12:00:03.000Z',
+    });
+
+    const fourth = await store.commit(normalizeRecordSetupDecisionCommand({
+        commandId: FOURTH_COMMAND_ID,
+        followUpId: FOURTH_FOLLOW_UP_ID,
+        workspaceId: WORKSPACE_ID,
+        expectedRevision: '3',
+        expectedSetupVersion: '2',
+        intent: {
+            kind: 'workspace.record-setup-decision',
+            intentSchemaVersion: 1,
+            payload: {decision: 'later'},
+        },
+    }));
+    assert.equal(fourth.ok, true);
+    recordSuccessfulBackup(store, {
+        operationId: THIRD_OPERATION_ID,
+        snapshotId: THIRD_SNAPSHOT_ID,
+        nonce: '2222222222222222',
+        createdAt: '2026-08-25T12:00:04.000Z',
+        rootDigest: '2'.repeat(64),
+        succeededAt: '2026-08-25T12:00:05.000Z',
+    });
+
+    assert.equal(typeof store.claimBackupCleanupOperation, 'function');
+    assert.equal(store.claimBackupCleanupOperation(
+        CLEANUP_OPERATION_ID,
+        THIRD_SNAPSHOT_ID,
+    ), null);
+    const firstPlan = store.claimBackupCleanupOperation(CLEANUP_OPERATION_ID, SNAPSHOT_ID);
+    store.releasePlannedBackupCleanup(CLEANUP_OPERATION_ID);
+    assert.equal(store.readBackupCleanupOperation(), null);
+    const planned = store.claimBackupCleanupOperation(CLEANUP_OPERATION_ID, SNAPSHOT_ID);
+    assert.deepEqual(planned, firstPlan);
+    assert.deepEqual(planned, {
+        operationId: CLEANUP_OPERATION_ID,
+        backupSetId: BACKUP_SET_ID,
+        snapshotId: SNAPSHOT_ID,
+        backupSequence: '1',
+        rootDigest: ROOT_DIGEST,
+        snapshotDirectoryName: `snapshot-${SNAPSHOT_ID}`,
+        quarantineDirectoryName: `.quarantine-${CLEANUP_OPERATION_ID}-${SNAPSHOT_ID}`,
+        phase: 'planned',
+        version: '0',
+    });
+    const projection = store.readDataProtectionProjection();
+    assert.equal('backup' in projection, true);
+    if (!('backup' in projection)) {
+        throw new Error('Expected configured protection projection');
+    }
+    assert.equal(projection.backup.cleanup, 'pending');
+    assert.deepEqual(
+        projection.backup.recentVerifiedSnapshots.map(snapshot => snapshot.snapshotId),
+        [THIRD_SNAPSHOT_ID, SECOND_SNAPSHOT_ID],
+    );
+    await store.close();
+
+    const reopened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind !== 'ready') {
+        throw new Error('Expected ready Workspace DATA');
+    }
+    const resumed = reopened.store as BackupOperationStore;
+    assert.deepEqual(resumed.readBackupCleanupOperation(), planned);
+    assert.deepEqual(
+        resumed.claimBackupCleanupOperation(
+            '14141414-1414-4414-8414-141414141414',
+            SECOND_SNAPSHOT_ID,
+        ),
+        planned,
+    );
+    const quarantined = resumed.markBackupCleanupQuarantined(CLEANUP_OPERATION_ID);
+    assert.deepEqual(quarantined, {
+        ...planned,
+        phase: 'quarantined',
+        version: '1',
+    });
+    assert.deepEqual(resumed.markBackupCleanupDeleting(CLEANUP_OPERATION_ID), {
+        ...quarantined,
+        phase: 'deleting',
+        version: '2',
+    });
+    resumed.completeBackupCleanup(CLEANUP_OPERATION_ID);
+    assert.equal(resumed.readBackupCleanupOperation(), null);
+    assert.deepEqual(
+        resumed.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId),
+        [SECOND_SNAPSHOT_ID, THIRD_SNAPSHOT_ID],
+    );
+    const completedProjection = resumed.readDataProtectionProjection();
+    assert.equal('backup' in completedProjection, true);
+    if (!('backup' in completedProjection)) {
+        throw new Error('Expected configured protection projection');
+    }
+    assert.equal(completedProjection.backup.cleanup, 'idle');
     await resumed.close();
 });

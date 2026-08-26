@@ -145,6 +145,7 @@ test('A-DATA-002/TEST-PROTECT-001: unconfigured, configure, replay, and restart 
         repositorySchema: BACKUP_REPOSITORY_SCHEMA,
         destinationDisplayName: path.basename(destination),
     });
+    assert.equal('backup' in after.value.projection, true);
     assert.doesNotMatch(JSON.stringify(after), /workspace\.sqlite|[A-Za-z]:[\\/]|canonicalPath/);
 
     await application.close();
@@ -168,7 +169,19 @@ test('A-DATA-002/TEST-PROTECT-001: unconfigured, configure, replay, and restart 
         || restartedProjection.value.kind !== 'workspace.data-protection-projection') {
         throw new Error('Expected restarted protection projection');
     }
-    assert.deepEqual(restartedProjection.value.projection, after.value.projection);
+    assert.equal('backup' in restartedProjection.value.projection, true);
+    if (!('backup' in restartedProjection.value.projection)) {
+        throw new Error('Expected configured backup status after restart');
+    }
+    assert.equal(restartedProjection.value.projection.backup.state, 'current');
+    assert.equal(restartedProjection.value.projection.backup.neededThrough, '1');
+    assert.equal(restartedProjection.value.projection.backup.succeededThrough, '1');
+    assert.equal(restartedProjection.value.projection.backup.cleanup, 'idle');
+    assert.equal(restartedProjection.value.projection.backup.recentVerifiedSnapshots.length, 1);
+    assert.equal(
+        restartedProjection.value.projection.backup.lastSuccess?.snapshotId,
+        restartedProjection.value.projection.backup.recentVerifiedSnapshots[0]?.snapshotId,
+    );
     await restarted.close();
 });
 

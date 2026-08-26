@@ -14,6 +14,7 @@ import {
     readSync,
     readdirSync,
     renameSync,
+    rmdirSync,
     unlinkSync,
     writeFileSync,
 } from 'node:fs';
@@ -41,6 +42,15 @@ export type EnsureBackupSetTreeInput = Readonly<{
     repositoryTemporaryName: string;
     afterRepositoryMarkerWrite?: () => void;
     afterRepositoryPublish?: () => void;
+}>;
+
+export type ReadBackupSetTreeInput = Readonly<{
+    destinationPath: string;
+    repositoryDirectoryName: string;
+    repositoryMarkerName: string;
+    repositoryMarkerBytes: Buffer;
+    workspaceDirectoryName: string;
+    backupSetDirectoryName: string;
 }>;
 
 export type PlainFileDigest = Readonly<{
@@ -93,7 +103,7 @@ function assertPlainDirectory(directoryPath: string): void {
 function ensurePlainDirectory(parentPath: string, name: string): string {
     assertComponent(name);
     const directoryPath = path.join(parentPath, name);
-    if (!pathEntryExists(directoryPath)) {
+    if (!exactChildEntryExists(parentPath, name)) {
         mkdirSync(directoryPath);
     }
     assertPlainDirectory(directoryPath);
@@ -123,6 +133,25 @@ function assertExactPlainFile(filePath: string, expectedBytes: Buffer): void {
 }
 
 /**
+ * Checks one child name exactly, stopping on case- or normalization-insensitive aliases.
+ * @param {string} parentDirectoryPath - Existing trusted plain parent directory.
+ * @param {string} childName - Exact portable component.
+ * @return {boolean} Whether the exact child name exists.
+ */
+function exactChildEntryExists(parentDirectoryPath: string, childName: string): boolean {
+    assertPlainDirectory(parentDirectoryPath);
+    assertComponent(childName);
+    const childPath = path.join(parentDirectoryPath, childName);
+    if (readdirSync(parentDirectoryPath).includes(childName)) {
+        return true;
+    }
+    if (pathEntryExists(childPath)) {
+        throw new Error('Backup child identity conflicts');
+    }
+    return false;
+}
+
+/**
  * Creates or reopens the owned repository tree without claiming a pre-existing unmarked directory.
  * @param {EnsureBackupSetTreeInput} input - Exact repository identities and marker bytes.
  * @return {BackupSetTree} Revalidated BackupSet paths.
@@ -141,13 +170,13 @@ export function ensureBackupSetTree(input: EnsureBackupSetTreeInput): BackupSetT
         input.repositoryDirectoryName,
     );
     const markerPath = path.join(repositoryDirectoryPath, input.repositoryMarkerName);
-    if (!pathEntryExists(repositoryDirectoryPath)) {
+    if (!exactChildEntryExists(destination.canonicalPath, input.repositoryDirectoryName)) {
         const temporaryPath = ensurePlainDirectory(
             destination.canonicalPath,
             input.repositoryTemporaryName,
         );
         const temporaryMarkerPath = path.join(temporaryPath, input.repositoryMarkerName);
-        if (!pathEntryExists(temporaryMarkerPath)) {
+        if (!exactChildEntryExists(temporaryPath, input.repositoryMarkerName)) {
             writeFileSync(temporaryMarkerPath, input.repositoryMarkerBytes, {flag: 'wx'});
             input.afterRepositoryMarkerWrite?.();
         }
@@ -161,12 +190,64 @@ export function ensureBackupSetTree(input: EnsureBackupSetTreeInput): BackupSetT
         input.afterRepositoryPublish?.();
     }
     assertPlainDirectory(repositoryDirectoryPath);
+    if (!exactChildEntryExists(repositoryDirectoryPath, input.repositoryMarkerName)) {
+        throw new Error('Backup repository marker is missing');
+    }
     assertExactPlainFile(markerPath, input.repositoryMarkerBytes);
     const workspaceDirectoryPath = ensurePlainDirectory(
         repositoryDirectoryPath,
         input.workspaceDirectoryName,
     );
     const backupSetDirectoryPath = ensurePlainDirectory(
+        workspaceDirectoryPath,
+        input.backupSetDirectoryName,
+    );
+    verifyDirectoryCapability(destination);
+    return Object.freeze({
+        repositoryDirectoryPath,
+        workspaceDirectoryPath,
+        backupSetDirectoryPath,
+    });
+}
+
+/**
+ * Opens an existing repository tree read-only for a fresh snapshot-list validation.
+ * @param {ReadBackupSetTreeInput} input - Exact persisted repository identities and marker bytes.
+ * @return {BackupSetTree} Revalidated existing BackupSet paths.
+ */
+export function readBackupSetTree(input: ReadBackupSetTreeInput): BackupSetTree {
+    [
+        input.repositoryDirectoryName,
+        input.repositoryMarkerName,
+        input.workspaceDirectoryName,
+        input.backupSetDirectoryName,
+    ].forEach(assertComponent);
+    const destination = resolveDirectoryCapability(input.destinationPath);
+    if (!plainChildDirectoryExists(destination.canonicalPath, input.repositoryDirectoryName)) {
+        throw new Error('Backup repository is missing');
+    }
+    const repositoryDirectoryPath = path.join(
+        destination.canonicalPath,
+        input.repositoryDirectoryName,
+    );
+    if (!exactChildEntryExists(repositoryDirectoryPath, input.repositoryMarkerName)) {
+        throw new Error('Backup repository marker is missing');
+    }
+    assertExactPlainFile(
+        path.join(repositoryDirectoryPath, input.repositoryMarkerName),
+        input.repositoryMarkerBytes,
+    );
+    if (!plainChildDirectoryExists(repositoryDirectoryPath, input.workspaceDirectoryName)) {
+        throw new Error('Backup Workspace directory is missing');
+    }
+    const workspaceDirectoryPath = path.join(
+        repositoryDirectoryPath,
+        input.workspaceDirectoryName,
+    );
+    if (!plainChildDirectoryExists(workspaceDirectoryPath, input.backupSetDirectoryName)) {
+        throw new Error('BackupSet directory is missing');
+    }
+    const backupSetDirectoryPath = path.join(
         workspaceDirectoryPath,
         input.backupSetDirectoryName,
     );
@@ -205,6 +286,24 @@ export function plainFileExists(filePath: string): boolean {
     if (!stats.isFile() || stats.isSymbolicLink()) {
         throw new Error('Backup member identity is invalid');
     }
+    return true;
+}
+
+/**
+ * Returns whether one child exists under its exact case- and normalization-preserving name.
+ * @param {string} parentDirectoryPath - Existing trusted plain parent directory.
+ * @param {string} childDirectoryName - Exact child component owned by a durable operation.
+ * @return {boolean} Whether the exact plain child directory exists.
+ */
+export function plainChildDirectoryExists(
+    parentDirectoryPath: string,
+    childDirectoryName: string,
+): boolean {
+    const childDirectoryPath = path.join(parentDirectoryPath, childDirectoryName);
+    if (!exactChildEntryExists(parentDirectoryPath, childDirectoryName)) {
+        return false;
+    }
+    assertPlainDirectory(childDirectoryPath);
     return true;
 }
 
@@ -309,6 +408,28 @@ export function readBoundedPlainFile(filePath: string, maximumBytes: number): Bu
 }
 
 /**
+ * Reads one member only after proving its named parent is a plain child directory.
+ * @param {string} parentDirectoryPath - Existing trusted plain parent directory.
+ * @param {string} childDirectoryName - Untrusted child component to inspect without following links.
+ * @param {string} memberName - Exact plain member component.
+ * @param {number} maximumBytes - Inclusive raw byte ceiling.
+ * @return {Buffer} Fresh bounded member bytes.
+ */
+export function readBoundedPlainChildFile(
+    parentDirectoryPath: string,
+    childDirectoryName: string,
+    memberName: string,
+    maximumBytes: number,
+): Buffer {
+    assertPlainDirectory(parentDirectoryPath);
+    assertComponent(childDirectoryName);
+    assertComponent(memberName);
+    const childDirectoryPath = path.join(parentDirectoryPath, childDirectoryName);
+    assertPlainDirectory(childDirectoryPath);
+    return readBoundedPlainFile(path.join(childDirectoryPath, memberName), maximumBytes);
+}
+
+/**
  * Computes a fresh SHA-256 and byte length from one stable plain file handle.
  * @param {string} filePath - Exact snapshot member path.
  * @param {bigint} maximumBytes - Inclusive raw byte ceiling.
@@ -378,23 +499,129 @@ export function publishSnapshotDirectory(
     stagingDirectoryPath: string,
     finalDirectoryPath: string,
 ): 'published' | 'already-published' {
-    if (path.dirname(stagingDirectoryPath) !== path.dirname(finalDirectoryPath)) {
+    const parentDirectoryPath = path.dirname(stagingDirectoryPath);
+    if (parentDirectoryPath !== path.dirname(finalDirectoryPath)) {
         throw new Error('Snapshot publication must stay within one parent directory');
     }
-    const stagingExists = pathEntryExists(stagingDirectoryPath);
-    const finalExists = pathEntryExists(finalDirectoryPath);
+    const stagingDirectoryName = path.basename(stagingDirectoryPath);
+    const finalDirectoryName = path.basename(finalDirectoryPath);
+    const stagingExists = plainChildDirectoryExists(
+        parentDirectoryPath,
+        stagingDirectoryName,
+    );
+    const finalExists = plainChildDirectoryExists(
+        parentDirectoryPath,
+        finalDirectoryName,
+    );
     if (stagingExists && finalExists) {
         throw new Error('Snapshot staging and final directories both exist');
     }
     if (finalExists) {
-        assertPlainDirectory(finalDirectoryPath);
         return 'already-published';
     }
     if (!stagingExists) {
         throw new Error('Snapshot staging directory is missing');
     }
-    assertPlainDirectory(stagingDirectoryPath);
     renameSync(stagingDirectoryPath, finalDirectoryPath);
-    assertPlainDirectory(finalDirectoryPath);
+    if (!plainChildDirectoryExists(parentDirectoryPath, finalDirectoryName)) {
+        throw new Error('Snapshot final directory is missing after publication');
+    }
     return 'published';
+}
+
+/**
+ * Atomically moves one exact final snapshot to its persisted same-parent quarantine name.
+ * @param {string} backupSetDirectoryPath - Existing BackupSet directory.
+ * @param {string} snapshotDirectoryName - Registered final snapshot component.
+ * @param {string} quarantineDirectoryName - Persisted cleanup quarantine component.
+ * @return {'quarantined' | 'already-quarantined'} Idempotent rename outcome.
+ */
+export function quarantineSnapshotDirectory(
+    backupSetDirectoryPath: string,
+    snapshotDirectoryName: string,
+    quarantineDirectoryName: string,
+): 'quarantined' | 'already-quarantined' {
+    assertPlainDirectory(backupSetDirectoryPath);
+    assertComponent(snapshotDirectoryName);
+    assertComponent(quarantineDirectoryName);
+    const snapshotDirectoryPath = path.join(backupSetDirectoryPath, snapshotDirectoryName);
+    const quarantineDirectoryPath = path.join(backupSetDirectoryPath, quarantineDirectoryName);
+    const snapshotExists = plainChildDirectoryExists(
+        backupSetDirectoryPath,
+        snapshotDirectoryName,
+    );
+    const quarantineExists = plainChildDirectoryExists(
+        backupSetDirectoryPath,
+        quarantineDirectoryName,
+    );
+    if (snapshotExists && quarantineExists) {
+        throw new Error('Snapshot final and quarantine directories both exist');
+    }
+    if (quarantineExists) {
+        assertPlainDirectory(quarantineDirectoryPath);
+        return 'already-quarantined';
+    }
+    if (!snapshotExists) {
+        throw new Error('Snapshot cleanup source is missing');
+    }
+    assertPlainDirectory(snapshotDirectoryPath);
+    renameSync(snapshotDirectoryPath, quarantineDirectoryPath);
+    assertPlainDirectory(quarantineDirectoryPath);
+    return 'quarantined';
+}
+
+/**
+ * Deletes only an exact, fully enumerated quarantine directory without recursive removal.
+ * @param {string} backupSetDirectoryPath - Existing BackupSet directory.
+ * @param {string} quarantineDirectoryName - Persisted cleanup quarantine component.
+ * @param {readonly string[]} expectedMemberNames - Complete expected plain-file closure.
+ * @return {'member-deleted' | 'deleted' | 'already-deleted'} One bounded deletion outcome.
+ */
+export function deleteQuarantinedSnapshotDirectory(
+    backupSetDirectoryPath: string,
+    quarantineDirectoryName: string,
+    expectedMemberNames: readonly string[],
+): 'member-deleted' | 'deleted' | 'already-deleted' {
+    assertPlainDirectory(backupSetDirectoryPath);
+    assertComponent(quarantineDirectoryName);
+    expectedMemberNames.forEach(assertComponent);
+    if (new Set(expectedMemberNames).size !== expectedMemberNames.length) {
+        throw new TypeError('Quarantine members must be unique');
+    }
+    const quarantineDirectoryPath = path.join(backupSetDirectoryPath, quarantineDirectoryName);
+    if (!plainChildDirectoryExists(backupSetDirectoryPath, quarantineDirectoryName)) {
+        return 'already-deleted';
+    }
+    assertPlainDirectory(quarantineDirectoryPath);
+    const expectedMembers = new Set(expectedMemberNames);
+    const observedMemberNames = readdirSync(quarantineDirectoryPath);
+    if (observedMemberNames.some(memberName => !expectedMembers.has(memberName))) {
+        throw new Error('Quarantine directory closure changed');
+    }
+    const observedMembers = new Set(observedMemberNames);
+    const nextMemberName = expectedMemberNames.find(memberName => (
+        observedMembers.has(memberName)
+    ));
+    if (nextMemberName !== undefined) {
+        const directoryIdentity = lstatSync(quarantineDirectoryPath, {bigint: true});
+        const memberPath = path.join(quarantineDirectoryPath, nextMemberName);
+        const member = lstatSync(memberPath);
+        if (!member.isFile() || member.isSymbolicLink()) {
+            throw new Error('Quarantine member identity is invalid');
+        }
+        unlinkSync(memberPath);
+        const currentDirectory = lstatSync(quarantineDirectoryPath, {bigint: true});
+        if (!currentDirectory.isDirectory()
+            || currentDirectory.isSymbolicLink()
+            || currentDirectory.dev !== directoryIdentity.dev
+            || currentDirectory.ino !== directoryIdentity.ino) {
+            throw new Error('Quarantine directory identity changed during cleanup');
+        }
+        return 'member-deleted';
+    }
+    if (readdirSync(quarantineDirectoryPath).length !== 0) {
+        throw new Error('Quarantine directory closure changed');
+    }
+    rmdirSync(quarantineDirectoryPath);
+    return 'deleted';
 }

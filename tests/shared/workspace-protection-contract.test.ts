@@ -64,7 +64,7 @@ test('unconfigured is a valid protection projection without a persistent problem
     }), true);
 });
 
-test('configured projections expose identity and display data but not a real path', () => {
+test('TEST-PROTECT-003: configured projections expose persistent pending and last-success facts', () => {
     const projection = {
         workspaceRevision: '1',
         protectionEntityVersion: '1',
@@ -73,6 +73,25 @@ test('configured projections expose identity and display data but not a real pat
             backupSetId: '44444444-4444-4444-8444-444444444444',
             repositorySchema: BACKUP_REPOSITORY_SCHEMA,
             destinationDisplayName: 'Backups',
+        },
+        backup: {
+            state: 'pending',
+            neededThrough: '3',
+            succeededThrough: '2',
+            lastSuccess: {
+                snapshotId: '55555555-5555-4555-8555-555555555555',
+                protectedThrough: '2',
+                succeededAt: '2026-08-26T12:00:00.000Z',
+            },
+            recentVerifiedSnapshots: [{
+                snapshotId: '55555555-5555-4555-8555-555555555555',
+                backupSequence: '2',
+                actualRevision: '2',
+                succeededAt: '2026-08-26T12:00:00.000Z',
+                snapshotFormatVersion: '1',
+                integrity: 'verified',
+            }],
+            cleanup: 'idle',
         },
     } as const;
 
@@ -85,4 +104,19 @@ test('configured projections expose identity and display data but not a real pat
             canonicalPath: 'C:\\Backups',
         },
     }), false);
+    assert.equal(isDataProtectionProjection({
+        ...projection,
+        backup: {...projection.backup, state: 'unknown'},
+    }), false);
+    assert.equal(isDataProtectionProjection({
+        ...projection,
+        backup: {...projection.backup, succeededThrough: '1'},
+    }), false);
+    assert.equal(isDataProtectionProjection({
+        ...projection,
+        backup: {
+            ...projection.backup,
+            recentVerifiedSnapshots: [],
+        },
+    }), true);
 });

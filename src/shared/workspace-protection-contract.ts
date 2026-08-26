@@ -6,6 +6,7 @@ import {
     isCanonicalUnsignedSqliteInteger,
     isCanonicalUuid,
 } from './workspace-data-contract';
+import {isCanonicalInstant} from './meeting-time';
 
 export const BACKUP_REPOSITORY_SCHEMA = 'courseflow-backup-repository-v1' as const;
 
@@ -31,18 +32,45 @@ export type AcceptedConfigureBackupDestinationCommand = ConfigureBackupDestinati
     }>;
 }>;
 
-export type DataProtectionProjection = Readonly<{
+export type VerifiedBackupSnapshotProjection = Readonly<{
+    snapshotId: string;
+    backupSequence: string;
+    actualRevision: string;
+    succeededAt: string;
+    snapshotFormatVersion: '1';
+    integrity: 'verified';
+}>;
+
+export type ConfiguredBackupProjection = Readonly<{
+    state: 'pending' | 'current';
+    neededThrough: string;
+    succeededThrough: string;
+    lastSuccess: Readonly<{
+        snapshotId: string;
+        protectedThrough: string;
+        succeededAt: string;
+    }> | null;
+    recentVerifiedSnapshots: readonly VerifiedBackupSnapshotProjection[];
+    cleanup: 'idle' | 'pending';
+}>;
+
+type DataProtectionProjectionBase = Readonly<{
     workspaceRevision: string;
     protectionEntityVersion: string;
-    configuration:
-        | Readonly<{ kind: 'unconfigured' }>
-        | Readonly<{
+}>;
+
+export type DataProtectionProjection = DataProtectionProjectionBase & (
+    | Readonly<{configuration: Readonly<{kind: 'unconfigured'}>}>
+    | Readonly<{
+        configuration: Readonly<{
             kind: 'configured';
             backupSetId: string;
             repositorySchema: typeof BACKUP_REPOSITORY_SCHEMA;
             destinationDisplayName: string;
         }>;
-}>;
+        backup: ConfiguredBackupProjection;
+    }>
+);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
@@ -64,6 +92,78 @@ function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]): valu
             const descriptor = descriptors[key];
             return descriptor !== undefined && 'value' in descriptor && descriptor.enumerable;
         });
+}
+
+function isVerifiedBackupSnapshotProjection(
+    value: unknown,
+): value is VerifiedBackupSnapshotProjection {
+    return hasExactDataKeys(value, [
+        'snapshotId',
+        'backupSequence',
+        'actualRevision',
+        'succeededAt',
+        'snapshotFormatVersion',
+        'integrity',
+    ])
+        && isCanonicalUuid(value.snapshotId)
+        && isCanonicalUnsignedSqliteInteger(value.backupSequence)
+        && value.backupSequence !== '0'
+        && isCanonicalUnsignedSqliteInteger(value.actualRevision)
+        && value.actualRevision !== '0'
+        && isCanonicalInstant(value.succeededAt)
+        && value.snapshotFormatVersion === '1'
+        && value.integrity === 'verified';
+}
+
+function isConfiguredBackupProjection(value: unknown): value is ConfiguredBackupProjection {
+    if (!hasExactDataKeys(value, [
+        'state',
+        'neededThrough',
+        'succeededThrough',
+        'lastSuccess',
+        'recentVerifiedSnapshots',
+        'cleanup',
+    ])
+        || (value.state !== 'pending' && value.state !== 'current')
+        || !isCanonicalUnsignedSqliteInteger(value.neededThrough)
+        || !isCanonicalUnsignedSqliteInteger(value.succeededThrough)
+        || BigInt(value.succeededThrough) > BigInt(value.neededThrough)
+        || (value.state === 'pending') !== (value.neededThrough !== value.succeededThrough)
+        || (value.cleanup !== 'idle' && value.cleanup !== 'pending')
+        || !Array.isArray(value.recentVerifiedSnapshots)
+        || value.recentVerifiedSnapshots.length > 2
+        || !value.recentVerifiedSnapshots.every(isVerifiedBackupSnapshotProjection)) {
+        return false;
+    }
+    const snapshots = value.recentVerifiedSnapshots;
+    if (snapshots.some((snapshot, index) => index > 0
+        && BigInt(snapshot.backupSequence) >= BigInt(snapshots[index - 1]!.backupSequence))) {
+        return false;
+    }
+    const lastSuccess = value.lastSuccess;
+    if (lastSuccess === null) {
+        return snapshots.length === 0 && value.succeededThrough === '0';
+    }
+    if (!hasExactDataKeys(lastSuccess, [
+        'snapshotId',
+        'protectedThrough',
+        'succeededAt',
+    ])
+        || !isCanonicalUuid(lastSuccess.snapshotId)
+        || !isCanonicalUnsignedSqliteInteger(lastSuccess.protectedThrough)
+        || lastSuccess.protectedThrough === '0'
+        || !isCanonicalInstant(lastSuccess.succeededAt)) {
+        return false;
+    }
+    if (lastSuccess.protectedThrough !== value.succeededThrough) {
+        return false;
+    }
+    const listedLastSuccess = snapshots.find(
+        snapshot => snapshot.snapshotId === lastSuccess.snapshotId,
+    );
+    return !listedLastSuccess
+        || (lastSuccess.protectedThrough === listedLastSuccess.actualRevision
+            && lastSuccess.succeededAt === listedLastSuccess.succeededAt);
 }
 
 function normalizedBase(value: unknown): ConfigureBackupDestinationCommand {
@@ -185,20 +285,25 @@ export function configureBackupDestinationDigestProjection(
  * @return {boolean} Whether the projection has the exact supported shape.
  */
 export function isDataProtectionProjection(value: unknown): value is DataProtectionProjection {
-    if (!hasExactDataKeys(value, [
-        'workspaceRevision',
-        'protectionEntityVersion',
-        'configuration',
-    ])
+    if (!isPlainObject(value)
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.protectionEntityVersion)) {
         return false;
     }
     const configuration = value.configuration;
     if (hasExactDataKeys(configuration, ['kind'])) {
-        return configuration.kind === 'unconfigured';
+        return hasExactDataKeys(value, [
+            'workspaceRevision',
+            'protectionEntityVersion',
+            'configuration',
+        ]) && configuration.kind === 'unconfigured';
     }
-    return hasExactDataKeys(configuration, [
+    return hasExactDataKeys(value, [
+        'workspaceRevision',
+        'protectionEntityVersion',
+        'configuration',
+        'backup',
+    ]) && hasExactDataKeys(configuration, [
         'kind',
         'backupSetId',
         'repositorySchema',
@@ -210,5 +315,6 @@ export function isDataProtectionProjection(value: unknown): value is DataProtect
         && typeof configuration.destinationDisplayName === 'string'
         && configuration.destinationDisplayName.length > 0
         && configuration.destinationDisplayName.length <= 255
-        && configuration.destinationDisplayName === configuration.destinationDisplayName.trim();
+        && configuration.destinationDisplayName === configuration.destinationDisplayName.trim()
+        && isConfiguredBackupProjection(value.backup);
 }
