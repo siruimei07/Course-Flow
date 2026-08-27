@@ -128,7 +128,10 @@ export type ConsumeMigrationSafetyCopyOptions = Readonly<{
 }>;
 
 export type DeleteMigrationSafetyCopyOptions = Readonly<{
-    failpoint?: (point: 'migration-safety-delete.before-quarantine') => void;
+    failpoint?: (point:
+        | 'migration-safety-delete.before-quarantine'
+        | 'migration-safety-delete.after-quarantine'
+        | 'migration-safety-delete.after-member-delete') => void;
 }>;
 
 /**
@@ -955,12 +958,12 @@ export function inspectMigrationSafetyCopy(
 
 /**
  * Deletes the one still-registered copy only after its identity is freshly revalidated.
- * A failure before destructive cleanup restores the registered directory and never returns success.
+ * The same-parent quarantine rename is the logical delete commit; exact replay resumes bounded cleanup.
  * @param {string} dataSlotsRoot Trusted DATA owner root.
  * @param {string} migrationSafetyCopyId Exact copy identity observed by the caller.
  * @param {string} expectedMetadataDigest Exact copy version observed by the caller.
  * @param {string} confirmationToken Exact impact-confirmation token.
- * @param {DeleteMigrationSafetyCopyOptions} options Stable pre-delete failpoint.
+ * @param {DeleteMigrationSafetyCopyOptions} options Stable commit and cleanup failpoints.
  * @return {void}
  */
 export function deleteMigrationSafetyCopy(
@@ -975,10 +978,15 @@ export function deleteMigrationSafetyCopy(
         || !DIGEST_PATTERN.test(confirmationToken)) {
         throw new TypeError('Migration safety delete identity is invalid');
     }
+    const finalName = `${FINAL_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
+    const discardName = `${DISCARD_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
     const copies = readFinalCopies(dataSlotsRoot);
-    if (copies.length !== 1
-        || copies[0]!.metadata.migrationSafetyCopyId !== migrationSafetyCopyId
-        || copies[0]!.metadata.metadataDigest !== expectedMetadataDigest) {
+    const discardExists = plainChildDirectoryExists(dataSlotsRoot, discardName);
+    let committedNow = false;
+    if (copies.length > 0
+        && (copies.length !== 1
+            || copies[0]!.metadata.migrationSafetyCopyId !== migrationSafetyCopyId
+            || copies[0]!.metadata.metadataDigest !== expectedMetadataDigest)) {
         throw new Error('Migration safety copy identity changed');
     }
     if (migrationSafetyCopyDeleteConfirmationToken(
@@ -987,30 +995,34 @@ export function deleteMigrationSafetyCopy(
     ) !== confirmationToken) {
         throw new Error('Migration safety delete confirmation changed');
     }
-    const finalName = `${FINAL_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
-    const discardName = `${DISCARD_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
-    if (plainChildDirectoryExists(dataSlotsRoot, discardName)) {
-        throw new Error('Migration safety delete evidence is ambiguous');
+    if (copies.length > 0) {
+        if (discardExists) {
+            throw new Error('Migration safety delete evidence is ambiguous');
+        }
+        options.failpoint?.('migration-safety-delete.before-quarantine');
+        quarantineSnapshotDirectory(dataSlotsRoot, finalName, discardName);
+        committedNow = true;
     }
-    options.failpoint?.('migration-safety-delete.before-quarantine');
-    quarantineSnapshotDirectory(dataSlotsRoot, finalName, discardName);
+    else if (!discardExists) {
+        return;
+    }
+
     try {
+        if (committedNow) {
+            options.failpoint?.('migration-safety-delete.after-quarantine');
+        }
         while (plainChildDirectoryExists(dataSlotsRoot, discardName)) {
-            deleteQuarantinedSnapshotDirectory(
+            const outcome = deleteQuarantinedSnapshotDirectory(
                 dataSlotsRoot,
                 discardName,
                 [DATABASE_FILE_NAME, METADATA_FILE_NAME],
             );
+            if (outcome === 'member-deleted') {
+                options.failpoint?.('migration-safety-delete.after-member-delete');
+            }
         }
     }
-    catch (error) {
-        try {
-            verifyCopyDirectory(dataSlotsRoot, discardName, migrationSafetyCopyId);
-            quarantineSnapshotDirectory(dataSlotsRoot, discardName, finalName);
-        }
-        catch {
-            // The operation remains failed and inspect will stop if cleanup evidence is incomplete.
-        }
-        throw error;
+    catch {
+        // The durable rename already removed rollback capability; exact replay resumes cleanup.
     }
 }

@@ -102,13 +102,22 @@ test('compact setup footer releases the desktop checkpoint flex basis', () => {
 });
 
 test('forced colors lets the elevated setup card use system surface colors', () => {
+    const setupForcedColorsStart = forcedColorStyles.lastIndexOf(
+        '@media (forced-colors: active)',
+    );
+    assert.ok(setupForcedColorsStart >= 0);
+    const setupSurfaceStart = forcedColorStyles.indexOf(
+        '.workspace-frame',
+        setupForcedColorsStart,
+    );
+    assert.ok(setupSurfaceStart >= 0);
     const systemSurfaceRule = forcedColorStyles.slice(
-        0,
-        forcedColorStyles.indexOf('}'),
+        setupSurfaceStart,
+        forcedColorStyles.indexOf('}', setupSurfaceStart),
     );
     const highlightedControlRule = forcedColorStyles.slice(
-        forcedColorStyles.indexOf('.navigation-button'),
-        forcedColorStyles.indexOf(':focus-visible'),
+        forcedColorStyles.indexOf('.navigation-button', setupSurfaceStart),
+        forcedColorStyles.indexOf(':focus-visible', setupSurfaceStart),
     );
 
     assert.match(systemSurfaceRule, /\.setup-current-layer/);

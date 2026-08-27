@@ -146,9 +146,14 @@ test('the title region exposes three independent window controls outside its dra
     assert.match(styles, /--titlebar-border:/);
     assert.match(styles, /--titlebar-safe-inset:/);
 
-    const reducedTransparency = styles.slice(
+    const closeRuleIndex = styles.indexOf(
+        '.window-control-button--close',
         styles.indexOf('@media (prefers-reduced-transparency: reduce)'),
-        styles.indexOf('@media (prefers-contrast: more)'),
+    );
+    assert.ok(closeRuleIndex >= 0);
+    const reducedTransparency = styles.slice(
+        styles.lastIndexOf('@media (prefers-reduced-transparency: reduce)', closeRuleIndex),
+        styles.indexOf('@media (prefers-contrast: more)', closeRuleIndex),
     );
     assert.match(
         reducedTransparency,

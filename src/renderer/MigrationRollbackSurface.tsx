@@ -46,6 +46,16 @@ export type MigrationMaintenanceSurfaceProps = Readonly<{
     onRetry(): void;
 }>;
 
+type RollbackBuildDetailsProps = Readonly<{
+    buildStatus: ApplicationBuildStatus | null;
+    session: MigrationRollbackSessionView;
+}>;
+
+/**
+ * Formats the bounded canonical copy size for display.
+ * @param {string} byteSize Canonical byte count.
+ * @return {string} Human-readable exact size.
+ */
 function formattedBytes(byteSize: string): string {
     const bytes = BigInt(byteSize);
     if (bytes >= 1_048_576n && bytes % 1_048_576n === 0n) {
@@ -57,6 +67,12 @@ function formattedBytes(byteSize: string): string {
     return `${byteSize} bytes`;
 }
 
+/**
+ * Selects the exact target artifact for the running platform.
+ * @param {ApplicationBuildStatus | null} buildStatus Current application build.
+ * @param {MigrationRollbackSessionView} session Current rollback session.
+ * @return {MigrationRollbackArtifactProjection | null} Matching artifact when known.
+ */
 function currentPlatformArtifact(
     buildStatus: ApplicationBuildStatus | null,
     session: MigrationRollbackSessionView,
@@ -71,6 +87,11 @@ function currentPlatformArtifact(
     return target.artifacts.find(artifact => artifact.platform === platform) ?? null;
 }
 
+/**
+ * Returns external manual-install instructions for the current platform.
+ * @param {ApplicationBuildStatus | null} buildStatus Current application build.
+ * @return {string} Platform-specific instructions.
+ */
 function platformInstructions(buildStatus: ApplicationBuildStatus | null): string {
     if (!buildStatus) {
         return 'Windows：在应用外卸载当前 MSI 后安装指定 MSI。macOS：用指定 DMG 替换 /Applications 中的应用。';
@@ -80,10 +101,12 @@ function platformInstructions(buildStatus: ApplicationBuildStatus | null): strin
         : '退出 CourseFlow，在应用外卸载当前 MSI 后安装指定 MSI。卸载不会删除本地工作区数据。';
 }
 
-function RollbackBuildDetails(props: Readonly<{
-    buildStatus: ApplicationBuildStatus | null;
-    session: MigrationRollbackSessionView;
-}>): ReactElement | null {
+/**
+ * Renders the exact source, target, artifact, and manual-install facts.
+ * @param {RollbackBuildDetailsProps} props Build and session projections.
+ * @return {ReactElement | null} Exact-build details when binding exists.
+ */
+function RollbackBuildDetails(props: RollbackBuildDetailsProps): ReactElement | null {
     const binding = props.session.binding;
     if (!binding) {
         return null;
@@ -137,6 +160,11 @@ function RollbackBuildDetails(props: Readonly<{
     );
 }
 
+/**
+ * Renders the current DATA-owned safety-copy state.
+ * @param {MigrationProtectionDialogProps} props Dialog state and actions.
+ * @return {ReactElement} Safety-copy overview.
+ */
 function SafetyCopyOverview(props: MigrationProtectionDialogProps): ReactElement {
     const safetyCopy = props.safetyCopy;
     if (safetyCopy.kind === 'absent') {
@@ -212,6 +240,11 @@ function SafetyCopyOverview(props: MigrationProtectionDialogProps): ReactElement
     );
 }
 
+/**
+ * Renders the explicit destructive deletion confirmation.
+ * @param {MigrationProtectionDialogProps} props Dialog state and actions.
+ * @return {ReactElement} Safe-focus confirmation surface.
+ */
 function DeleteConfirmation(props: MigrationProtectionDialogProps): ReactElement {
     return (
         <section
@@ -241,6 +274,11 @@ function DeleteConfirmation(props: MigrationProtectionDialogProps): ReactElement
     );
 }
 
+/**
+ * Renders the preview-bound complete replacement impact.
+ * @param {MigrationProtectionDialogProps} props Dialog state and actions.
+ * @return {ReactElement} Exact rollback impact surface.
+ */
 function RollbackPreview(props: MigrationProtectionDialogProps): ReactElement {
     const preview = props.rollbackPreview;
     const binding = preview?.binding;
@@ -324,6 +362,11 @@ export function MigrationProtectionDialog(
         }
     }, [props.open]);
 
+    /**
+     * Keeps native Escape cancellation inside the busy-state boundary.
+     * @param {SyntheticEvent<HTMLDialogElement>} event Native dialog cancel event.
+     * @return {void}
+     */
     const cancel = (event: SyntheticEvent<HTMLDialogElement>): void => {
         event.preventDefault();
         if (!props.busy) {
@@ -367,6 +410,11 @@ export function MigrationProtectionDialog(
     );
 }
 
+/**
+ * Selects an accessible maintenance heading from exact session state.
+ * @param {MigrationRollbackSessionView} session Current rollback session.
+ * @return {string} Visible page heading.
+ */
 function maintenanceHeading(session: MigrationRollbackSessionView): string {
     if (session.phase === 'recovery-required') {
         return '迁移回退需要恢复';
@@ -388,6 +436,11 @@ function maintenanceHeading(session: MigrationRollbackSessionView): string {
         : '等待目标版本';
 }
 
+/**
+ * Selects the complete textual announcement for one rollback phase.
+ * @param {MigrationRollbackSessionView} session Current rollback session.
+ * @return {string} Phase status text.
+ */
 function maintenancePhaseText(session: MigrationRollbackSessionView): string {
     const labels: Readonly<Record<MigrationRollbackSessionView['phase'], string>> = {
         previewed: '影响预览等待确认',

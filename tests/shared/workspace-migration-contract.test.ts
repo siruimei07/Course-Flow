@@ -91,11 +91,6 @@ const BUILD_STATUS = Object.freeze({
             node: '24.19.0',
             sqlite: '3.50.4',
         }),
-        packaging: Object.freeze({
-            electronForge: '7.11.2',
-            vite: '8.2.2',
-            typescript: '7.0.2',
-        }),
         rollbackTargets: Object.freeze([TARGET]),
     }),
     processMatch: Object.freeze({
@@ -146,6 +141,13 @@ const PREVIEW = Object.freeze({
 
 test('ApplicationBuildStatus is exact, local, and rejects mixed process claims', () => {
     assert.equal(isApplicationBuildStatus(BUILD_STATUS), true);
+    assert.equal(isApplicationBuildStatus({
+        ...BUILD_STATUS,
+        descriptor: {
+            ...BUILD_STATUS.descriptor,
+            packaging: {electronForge: '7.11.2'},
+        },
+    }), false);
     assert.equal(isApplicationBuildStatus({
         ...BUILD_STATUS,
         processMatch: {...BUILD_STATUS.processMatch, workspace: 'mixed'},

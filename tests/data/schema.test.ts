@@ -891,6 +891,30 @@ test('TEST-DATA-007: explicit safety-copy delete is identity-bound and never rep
     ), /migration-safety-delete\.before-quarantine/);
     assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), safety);
 
+    let interruptedCleanup = false;
+    deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        safety.metadata.metadataDigest,
+        confirmationToken,
+        {
+            failpoint(point) {
+                if (!interruptedCleanup
+                    && point === 'migration-safety-delete.after-member-delete') {
+                    interruptedCleanup = true;
+                    throw new Error(point);
+                }
+            },
+        },
+    );
+
+    assert.equal(interruptedCleanup, true);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
+    assert.equal(
+        readdirSync(dataSlotsRoot).some(name => name.includes(safety.metadata.migrationSafetyCopyId)),
+        true,
+    );
+
     deleteMigrationSafetyCopy(
         dataSlotsRoot,
         safety.metadata.migrationSafetyCopyId,
@@ -898,7 +922,6 @@ test('TEST-DATA-007: explicit safety-copy delete is identity-bound and never rep
         confirmationToken,
     );
 
-    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
     assert.equal(
         readdirSync(dataSlotsRoot).some(name => name.includes(safety.metadata.migrationSafetyCopyId)),
         false,

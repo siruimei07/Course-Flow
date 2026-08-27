@@ -57,10 +57,20 @@ export type PreparedMigrationRollbackPreview = Readonly<{
     factsDigest: string;
 }>;
 
+/**
+ * Tests one canonical unsigned integer string.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the value is canonical.
+ */
 function isCanonicalUnsigned(value: unknown): value is string {
     return typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value);
 }
 
+/**
+ * Tests one bounded build or release identity.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the identity is bounded and canonical.
+ */
 function isBoundedIdentity(value: unknown): value is string {
     return typeof value === 'string'
         && value.length > 0
@@ -69,10 +79,20 @@ function isBoundedIdentity(value: unknown): value is string {
         && !value.includes('\0');
 }
 
+/**
+ * Tests one lowercase SHA-256 digest.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the value is a digest.
+ */
 function isDigest(value: unknown): value is string {
     return typeof value === 'string' && DIGEST_PATTERN.test(value);
 }
 
+/**
+ * Closes one path-free Library binding at the PROTECT boundary.
+ * @param {RestoreLibraryRootBinding} value Candidate binding.
+ * @return {RestoreLibraryRootBinding} Immutable validated binding.
+ */
 function requireLibraryBinding(value: RestoreLibraryRootBinding): RestoreLibraryRootBinding {
     if (value.kind === 'absent') {
         return Object.freeze({kind: 'absent' as const});
@@ -87,6 +107,11 @@ function requireLibraryBinding(value: RestoreLibraryRootBinding): RestoreLibrary
     });
 }
 
+/**
+ * Validates and freezes every private preview fact.
+ * @param {MigrationRollbackPreviewFacts} facts Candidate preview facts.
+ * @return {MigrationRollbackPreviewFacts} Immutable normalized facts.
+ */
 function normalizePreviewFacts(
     facts: MigrationRollbackPreviewFacts,
 ): MigrationRollbackPreviewFacts {
@@ -119,10 +144,20 @@ function normalizePreviewFacts(
     });
 }
 
+/**
+ * Computes one canonical SHA-256 digest.
+ * @param {unknown} value Canonicalizable value.
+ * @return {string} Lowercase digest.
+ */
 function digest(value: unknown): string {
     return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
 }
 
+/**
+ * Binds all preview facts to one versioned digest.
+ * @param {MigrationRollbackPreviewFacts} facts Normalized preview facts.
+ * @return {string} Versioned facts digest.
+ */
 function previewFactsDigest(facts: MigrationRollbackPreviewFacts): string {
     return digest(Object.freeze({
         schema: 'courseflow-migration-rollback-preview-facts-v1',

@@ -326,6 +326,11 @@ function migrationRollbackProblem(boot: MigrationRollbackBootState): DataOpenPro
     });
 }
 
+/**
+ * Projects one physical rollback target without exposing paths.
+ * @param {MigrationRollbackTargetV1} target Exact persisted target.
+ * @return {MigrationRollbackBindingProjection['targetBuild']} Path-free target projection.
+ */
 function migrationRollbackTargetProjection(
     target: MigrationRollbackTargetV1,
 ): MigrationRollbackBindingProjection['targetBuild'] {
@@ -341,6 +346,11 @@ function migrationRollbackTargetProjection(
     });
 }
 
+/**
+ * Projects DATA-owned safety status into the Workspace contract.
+ * @param {MigrationSafetyCopyStatus} status Fresh DATA status.
+ * @return {MigrationSafetyCopyProjection} Path-free safety projection.
+ */
 function migrationSafetyCopyProjection(
     status: MigrationSafetyCopyStatus,
 ): MigrationSafetyCopyProjection {
@@ -365,6 +375,10 @@ function migrationSafetyCopyProjection(
     });
 }
 
+/**
+ * Returns the fail-closed view used when physical evidence cannot prove an action.
+ * @return {MigrationRollbackSessionView} Recovery view with no allowed action.
+ */
 function migrationRollbackRecoveryView(): MigrationRollbackSessionView {
     return Object.freeze({
         migrationRollbackSessionId: null,
@@ -381,6 +395,12 @@ function migrationRollbackRecoveryView(): MigrationRollbackSessionView {
     });
 }
 
+/**
+ * Projects the running source release into one rollback binding.
+ * @param {string} appBuildId Exact source application build.
+ * @param {WorkspaceApplicationOptions} options Workspace release options.
+ * @return {MigrationRollbackBindingProjection['sourceBuild']} Path-free source build.
+ */
 function sourceBuildProjection(
     appBuildId: string,
     options: WorkspaceApplicationOptions,
@@ -788,15 +808,10 @@ export class WorkspaceApplication {
                         migrationRollbackHandoff: '1' as const,
                     }),
                     runtimes: Object.freeze({
-                        electron: process.versions.electron ?? '43.4.1',
+                        electron: process.versions.electron ?? 'not-running-in-electron',
                         chromium: process.versions.chrome ?? 'not-running-in-electron',
                         node: process.versions.node,
                         sqlite: workspaceDataRuntimeVersion(),
-                    }),
-                    packaging: Object.freeze({
-                        electronForge: '7.11.2' as const,
-                        vite: '8.2.2' as const,
-                        typescript: '7.0.2' as const,
                     }),
                     rollbackTargets: this.options.migrationRollbackTarget
                         ? Object.freeze([
@@ -848,7 +863,7 @@ export class WorkspaceApplication {
      * Explicitly deletes one freshly matched migration safety copy.
      * @param {string} requestId Request correlation identity.
      * @param {DeleteMigrationSafetyCopyCommand} command Exact observed copy identity.
-     * @return {WorkspaceSetupOutcome} Absent copy projection only after cleanup completes.
+     * @return {WorkspaceSetupOutcome} Absent projection after logical deletion commits.
      */
     private deleteMigrationSafetyCopy(
         requestId: string,
@@ -871,13 +886,6 @@ export class WorkspaceApplication {
                     'operation-in-progress',
                     '恢复或迁移回退正在进行，迁移安全副本未删除。',
                     requestId,
-                );
-            }
-            const currentSafetyCopy = inspectMigrationSafetyCopy(this.dataSlotsRoot);
-            if (currentSafetyCopy.kind === 'absent') {
-                return this.migrationSafetyOutcome(
-                    requestId,
-                    Object.freeze({kind: 'absent'}),
                 );
             }
             deleteMigrationSafetyCopy(

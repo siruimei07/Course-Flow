@@ -78,11 +78,6 @@ const BUILD_STATUS = Object.freeze({
             node: '24.19.0',
             sqlite: '3.53.1',
         }),
-        packaging: Object.freeze({
-            electronForge: '7.11.2' as const,
-            vite: '8.2.2' as const,
-            typescript: '7.0.2' as const,
-        }),
         rollbackTargets: Object.freeze([TARGET]),
     }),
     processMatch: Object.freeze({

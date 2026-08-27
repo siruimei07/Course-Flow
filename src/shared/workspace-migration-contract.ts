@@ -56,11 +56,6 @@ export type ApplicationReleaseDescriptor = Readonly<{
         node: string;
         sqlite: string;
     }>;
-    packaging: Readonly<{
-        electronForge: '7.11.2';
-        vite: '8.2.2';
-        typescript: '7.0.2';
-    }>;
     rollbackTargets: readonly MigrationRollbackTargetProjection[];
 }>;
 
@@ -266,6 +261,11 @@ export type WorkspaceMigrationSuccessValue =
         session: MigrationRollbackSessionView;
     }>;
 
+/**
+ * Tests whether a value is a plain data object.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the value has a plain prototype.
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return false;
@@ -274,6 +274,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     return prototype === Object.prototype || prototype === null;
 }
 
+/**
+ * Tests the complete enumerable own-key closure of one DTO object.
+ * @param {unknown} value Candidate value.
+ * @param {readonly string[]} expectedKeys Complete allowed key set.
+ * @return {boolean} Whether the object has exactly those data keys.
+ */
 function hasExactDataKeys(
     value: unknown,
     expectedKeys: readonly string[],
@@ -291,6 +297,11 @@ function hasExactDataKeys(
         });
 }
 
+/**
+ * Tests one bounded protocol identity.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the value is canonical and bounded.
+ */
 function isBoundedIdentity(value: unknown): value is string {
     return typeof value === 'string'
         && value.length > 0
@@ -299,10 +310,20 @@ function isBoundedIdentity(value: unknown): value is string {
         && !value.includes('\0');
 }
 
+/**
+ * Tests one lowercase SHA-256 digest.
+ * @param {unknown} value Candidate value.
+ * @return {boolean} Whether the value is a digest.
+ */
 function isDigest(value: unknown): value is string {
     return typeof value === 'string' && DIGEST_PATTERN.test(value);
 }
 
+/**
+ * Validates one exact, path-free rollback release target.
+ * @param {unknown} value Candidate target.
+ * @return {boolean} Whether both platform artifacts form a closed target.
+ */
 function isRollbackTarget(value: unknown): value is MigrationRollbackTargetProjection {
     if (!hasExactDataKeys(value, ['releaseVersion', 'tag', 'appBuildId', 'artifacts'])
         || !isBoundedIdentity(value.releaseVersion)
@@ -345,7 +366,6 @@ export function isApplicationBuildStatus(value: unknown): value is ApplicationBu
             'currentSchemaLevel',
             'formats',
             'runtimes',
-            'packaging',
             'rollbackTargets',
         ])
         || value.descriptor.descriptorVersion !== '1'
@@ -379,14 +399,6 @@ export function isApplicationBuildStatus(value: unknown): value is ApplicationBu
             'sqlite',
         ])
         || Object.values(value.descriptor.runtimes).some(version => !isBoundedIdentity(version))
-        || !hasExactDataKeys(value.descriptor.packaging, [
-            'electronForge',
-            'vite',
-            'typescript',
-        ])
-        || value.descriptor.packaging.electronForge !== '7.11.2'
-        || value.descriptor.packaging.vite !== '8.2.2'
-        || value.descriptor.packaging.typescript !== '7.0.2'
         || !Array.isArray(value.descriptor.rollbackTargets)
         || !value.descriptor.rollbackTargets.every(isRollbackTarget)
         || !hasExactDataKeys(value.processMatch, [
@@ -460,6 +472,11 @@ export function isMigrationSafetyCopyProjection(
         && isRollbackTarget(value.target);
 }
 
+/**
+ * Validates one path-free Library root binding.
+ * @param {unknown} value Candidate binding.
+ * @return {boolean} Whether the binding is exact.
+ */
 function isLibraryRootBinding(value: unknown): value is RestoreLibraryRootBinding {
     if (hasExactDataKeys(value, ['kind'])) {
         return value.kind === 'absent';
@@ -470,6 +487,11 @@ function isLibraryRootBinding(value: unknown): value is RestoreLibraryRootBindin
         && isCanonicalUuid(value.rootGeneration);
 }
 
+/**
+ * Validates the complete copy, DATA, Library, build, and impact binding.
+ * @param {unknown} value Candidate binding.
+ * @return {boolean} Whether every bound fact agrees.
+ */
 function isMigrationRollbackBinding(
     value: unknown,
 ): value is MigrationRollbackBindingProjection {
@@ -631,6 +653,13 @@ export function isMigrationRollbackSessionView(
             : retryCommand === null);
 }
 
+/**
+ * Creates the common exact-build and Workspace-lease request fields.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @return {WorkspaceMigrationRequestBase} Common request fields.
+ */
 function requestBase(
     requestId: string,
     appBuildId: string,
@@ -644,6 +673,13 @@ function requestBase(
     };
 }
 
+/**
+ * Creates an ApplicationBuildStatus query.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @return {ApplicationBuildStatusRequest} Closed request.
+ */
 export function makeApplicationBuildStatusRequest(
     requestId: string,
     appBuildId: string,
@@ -655,6 +691,13 @@ export function makeApplicationBuildStatusRequest(
     };
 }
 
+/**
+ * Creates a MigrationSafetyCopy status query.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @return {MigrationSafetyCopyQueryRequest} Closed request.
+ */
 export function makeMigrationSafetyCopyQueryRequest(
     requestId: string,
     appBuildId: string,
@@ -666,6 +709,11 @@ export function makeMigrationSafetyCopyQueryRequest(
     };
 }
 
+/**
+ * Validates and freezes an exact safety-copy deletion command.
+ * @param {unknown} value Candidate command.
+ * @return {DeleteMigrationSafetyCopyCommand} Closed command.
+ */
 export function normalizeDeleteMigrationSafetyCopyCommand(
     value: unknown,
 ): DeleteMigrationSafetyCopyCommand {
@@ -689,6 +737,14 @@ export function normalizeDeleteMigrationSafetyCopyCommand(
     });
 }
 
+/**
+ * Creates a preview-bound safety-copy deletion request.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {DeleteMigrationSafetyCopyCommand} command Exact deletion command.
+ * @return {DeleteMigrationSafetyCopyRequest} Closed request.
+ */
 export function makeDeleteMigrationSafetyCopyRequest(
     requestId: string,
     appBuildId: string,
@@ -702,6 +758,13 @@ export function makeDeleteMigrationSafetyCopyRequest(
     };
 }
 
+/**
+ * Creates a fresh migration rollback preview query.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @return {MigrationRollbackPreviewRequest} Closed request.
+ */
 export function makeMigrationRollbackPreviewRequest(
     requestId: string,
     appBuildId: string,
@@ -713,6 +776,14 @@ export function makeMigrationRollbackPreviewRequest(
     };
 }
 
+/**
+ * Creates a migration rollback status query.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {string | null} migrationRollbackSessionId Expected session or startup query.
+ * @return {MigrationRollbackStatusRequest} Closed request.
+ */
 export function makeMigrationRollbackStatusRequest(
     requestId: string,
     appBuildId: string,
@@ -730,6 +801,11 @@ export function makeMigrationRollbackStatusRequest(
     };
 }
 
+/**
+ * Validates and freezes one preview confirmation command.
+ * @param {unknown} value Candidate command.
+ * @return {ConfirmMigrationRollbackCommand} Closed command.
+ */
 export function normalizeConfirmMigrationRollbackCommand(
     value: unknown,
 ): ConfirmMigrationRollbackCommand {
@@ -753,6 +829,14 @@ export function normalizeConfirmMigrationRollbackCommand(
     });
 }
 
+/**
+ * Creates a preview-bound rollback confirmation request.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {ConfirmMigrationRollbackCommand} command Exact confirmation command.
+ * @return {ConfirmMigrationRollbackRequest} Closed request.
+ */
 export function makeConfirmMigrationRollbackRequest(
     requestId: string,
     appBuildId: string,
@@ -766,6 +850,11 @@ export function makeConfirmMigrationRollbackRequest(
     };
 }
 
+/**
+ * Validates and freezes one source-cancel or target-continue command.
+ * @param {unknown} value Candidate command.
+ * @return {MigrationRollbackActionCommand} Closed command.
+ */
 export function normalizeMigrationRollbackActionCommand(
     value: unknown,
 ): MigrationRollbackActionCommand {
@@ -786,6 +875,15 @@ export function normalizeMigrationRollbackActionCommand(
     });
 }
 
+/**
+ * Creates one exact-build rollback action request.
+ * @param {'workspace.migration-rollback.cancel' | 'workspace.migration-rollback.continue'} kind Action request kind.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {MigrationRollbackActionCommand} command Exact action command.
+ * @return {CancelMigrationRollbackRequest | ContinueMigrationRollbackRequest} Closed request.
+ */
 function makeMigrationRollbackActionRequest(
     kind: 'workspace.migration-rollback.cancel' | 'workspace.migration-rollback.continue',
     requestId: string,
@@ -800,6 +898,14 @@ function makeMigrationRollbackActionRequest(
     };
 }
 
+/**
+ * Creates an exact source-build cancel request.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {MigrationRollbackActionCommand} command Exact action command.
+ * @return {CancelMigrationRollbackRequest} Closed request.
+ */
 export function makeCancelMigrationRollbackRequest(
     requestId: string,
     appBuildId: string,
@@ -815,6 +921,14 @@ export function makeCancelMigrationRollbackRequest(
     ) as CancelMigrationRollbackRequest;
 }
 
+/**
+ * Creates an exact target-build continue request.
+ * @param {string} requestId Correlation identity.
+ * @param {string} appBuildId Exact application build.
+ * @param {string} workspaceEpoch Exact Workspace lease.
+ * @param {MigrationRollbackActionCommand} command Exact action command.
+ * @return {ContinueMigrationRollbackRequest} Closed request.
+ */
 export function makeContinueMigrationRollbackRequest(
     requestId: string,
     appBuildId: string,

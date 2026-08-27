@@ -577,6 +577,10 @@ type MigrationProtectionLoad = Readonly<{
     migrationProblem: string | null;
 }>;
 
+/**
+ * Creates the fail-closed Renderer fallback when Workspace status is unavailable.
+ * @return {MigrationRollbackSessionView} Recovery view with no allowed action.
+ */
 function rollbackRecoveryView(): MigrationRollbackSessionView {
     return {
         migrationRollbackSessionId: null,
@@ -635,6 +639,11 @@ async function loadMigrationProtection(
     };
 }
 
+/**
+ * Extracts the rollback startup route from one Workspace DATA recovery status.
+ * @param {WorkspaceDataStatus} problem Bootstrap DATA status.
+ * @return {string | null | undefined} Session, evidence-only recovery, or non-rollback state.
+ */
 function migrationRollbackSessionIdFrom(
     problem: WorkspaceDataStatus,
 ): string | null | undefined {
