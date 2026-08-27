@@ -1,0 +1,113 @@
+{
+  "fixtureVersion": "courseflow-compatible-build-fixture-v1",
+  "rollbackTargetBuild": {
+    "fullCommit": "5b18515eae0f9f80e1f7a2fcafbf008bb3326979",
+    "appBuildId": "development:5b18515eae0f9f80e1f7a2fcafbf008bb3326979",
+    "workspaceProtocol": {
+      "current": 2,
+      "accepted": [
+        2
+      ]
+    },
+    "dataSchema": {
+      "current": 15,
+      "migrationSources": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "future": "stop"
+    },
+    "formats": {
+      "snapshotManifest": [
+        "courseflow-snapshot-manifest-v1"
+      ],
+      "backupRepository": [
+        "courseflow-backup-repository-v1"
+      ],
+      "restoreSafetySet": [
+        "courseflow-restore-safety-set-v1"
+      ],
+      "restoreActivation": [
+        "courseflow-activation-plan-v1",
+        "courseflow-activation-journal-record-v1",
+        "courseflow-restore-session-control-v1"
+      ],
+      "migrationSafetyCopy": [
+        "courseflow-migration-safety-copy-v1"
+      ],
+      "migrationRollbackHandoff": [
+        "courseflow-migration-rollback-handoff-v1"
+      ]
+    }
+  },
+  "sourceBuild": {
+    "fullCommit": "9822ab770d295d086bd6db85ca1ed227abdea9e6",
+    "appBuildId": "development:9822ab770d295d086bd6db85ca1ed227abdea9e6",
+    "workspaceProtocol": {
+      "current": 2,
+      "accepted": [
+        2
+      ]
+    },
+    "dataSchema": {
+      "current": 16,
+      "migrationSources": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
+      ],
+      "future": "stop"
+    },
+    "formats": {
+      "snapshotManifest": [
+        "courseflow-snapshot-manifest-v1"
+      ],
+      "backupRepository": [
+        "courseflow-backup-repository-v1"
+      ],
+      "restoreSafetySet": [
+        "courseflow-restore-safety-set-v1"
+      ],
+      "restoreActivation": [
+        "courseflow-activation-plan-v1",
+        "courseflow-activation-journal-record-v1",
+        "courseflow-restore-session-control-v1"
+      ],
+      "migrationSafetyCopy": [
+        "courseflow-migration-safety-copy-v1"
+      ],
+      "migrationRollbackHandoff": [
+        "courseflow-migration-rollback-handoff-v1"
+      ]
+    }
+  },
+  "dataRoot": {
+    "kind": "os-temporary",
+    "disposable": true,
+    "realDataAllowed": false
+  }
+}
