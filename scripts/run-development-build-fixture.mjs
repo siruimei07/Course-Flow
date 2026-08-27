@@ -280,11 +280,16 @@ function runGit(repositoryRoot, args) {
  * @return {string} Captured stdout.
  */
 function runPnpm(sourceRoot, args, env = process.env) {
-    return runVisible('pnpm', args, {
+    const command = process.platform === 'win32'
+        ? process.env.ComSpec ?? process.env.COMSPEC ?? 'cmd.exe'
+        : 'pnpm';
+    const commandArguments = process.platform === 'win32'
+        ? ['/d', '/s', '/c', 'pnpm.cmd', ...args]
+        : args;
+    return runVisible(command, commandArguments, {
         cwd: sourceRoot,
         description: `pnpm ${args.join(' ')}`,
         env,
-        shell: process.platform === 'win32',
     });
 }
 
