@@ -7,18 +7,26 @@ import { randomUUID } from 'node:crypto';
 import {
     CommittedCommandOutcomeUnknownError,
     SetupDraftCheckpointOutcomeUnknownError,
+    consumeMigrationSafetyCopyAfterRollback,
+    deleteMigrationSafetyCopy,
     initializeWorkspaceData,
+    inspectMigrationSafetyCopy,
+    migrationSafetyCopyDeleteConfirmationToken,
     openWorkspaceDataWithMigrations,
+    stageMigrationSafetyCopyForRollback,
     workspaceDataRuntimeVersion,
     type CommandReceiptOutcome,
     type CommitOptions,
     type DataCommitResult,
     type DataOpenResult,
     type MigrationRollbackTargetV1,
+    type MigrationSafetyCopyStatus,
     type OpenWorkspaceDataOptions,
     type ReadSnapshotOptions,
     type SqliteDataStore,
 } from './data/sqlite-data-store';
+import {CURRENT_SCHEMA_LEVEL} from './data/schema';
+import {observeRestoreDataSlot} from './platform/restore-activation-files';
 import {
     BOOTSTRAP_PROTOCOL_VERSION,
     isWorkspaceProbeRequest,
@@ -70,6 +78,17 @@ import {
     type WorkspaceProcessRequest,
 } from './shared/workspace-setup-contract';
 import {
+    isMigrationRollbackSessionView,
+    type ApplicationBuildStatus,
+    type ConfirmMigrationRollbackCommand,
+    type DeleteMigrationSafetyCopyCommand,
+    type MigrationRollbackBindingProjection,
+    type MigrationRollbackActionCommand,
+    type MigrationRollbackSessionView,
+    type MigrationSafetyCopyProjection,
+    type WorkspaceMigrationSuccessValue,
+} from './shared/workspace-migration-contract';
+import {
     configureBackupDestination,
 } from './protect/backup-configuration';
 import { BackupDestinationPreparationError } from './protect/backup-repository';
@@ -84,9 +103,25 @@ import {
     RestoreSessionError,
 } from './protect/restore-session';
 import {
+    armMigrationRollbackHandoff,
+    cancelMigrationRollbackHandoff,
+    continueMigrationRollbackHandoff,
+    createMigrationRollbackHandoff,
+    inspectMigrationRollbackHandoffFacts,
     inspectMigrationRollbackBeforeWorkspaceOpen,
+    inspectNonterminalMigrationRollback,
+    MigrationRollbackHandoffError,
+    prepareMigrationRollbackHandoff,
     type MigrationRollbackBootState,
+    type MigrationRollbackDataIdentity,
 } from './protect/migration-rollback-handoff';
+import {
+    bindMigrationRollbackConfirmation,
+    createMigrationRollbackPreview,
+    migrationRollbackConfirmationDigest,
+    type MigrationRollbackPreviewFacts,
+    type PreparedMigrationRollbackPreview,
+} from './protect/migration-rollback-session';
 import {
     buildPlanProjection,
     createPlanEvaluationContext,
@@ -117,6 +152,10 @@ export type WorkspaceApplicationOptions = Omit<OpenWorkspaceDataOptions, 'migrat
     restoreFailpoint?: (point: string) => void;
     libraryRootPath?: string | null;
     migrationRollbackTarget?: MigrationRollbackTargetV1;
+    applicationRelease?: Readonly<{
+        releaseVersion: string;
+        tag: string;
+    }>;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
 
@@ -287,10 +326,80 @@ function migrationRollbackProblem(boot: MigrationRollbackBootState): DataOpenPro
     });
 }
 
+function migrationRollbackTargetProjection(
+    target: MigrationRollbackTargetV1,
+): MigrationRollbackBindingProjection['targetBuild'] {
+    return Object.freeze({
+        releaseVersion: target.releaseVersion,
+        tag: target.tag,
+        appBuildId: target.appBuildId,
+        artifacts: Object.freeze(target.artifacts.map(artifact => Object.freeze({
+            platform: artifact.platform,
+            name: artifact.name,
+            sha256: artifact.sha256,
+        }))) as MigrationRollbackBindingProjection['targetBuild']['artifacts'],
+    });
+}
+
+function migrationSafetyCopyProjection(
+    status: MigrationSafetyCopyStatus,
+): MigrationSafetyCopyProjection {
+    if (status.kind !== 'verified') {
+        return Object.freeze({kind: status.kind});
+    }
+    return Object.freeze({
+        kind: 'verified' as const,
+        integrity: 'verified' as const,
+        migrationSafetyCopyId: status.metadata.migrationSafetyCopyId,
+        copyVersion: status.metadata.metadataDigest,
+        deleteConfirmationToken: migrationSafetyCopyDeleteConfirmationToken(
+            status.metadata.migrationSafetyCopyId,
+            status.metadata.metadataDigest,
+        ),
+        workspaceId: status.metadata.workspaceId,
+        sourceRevision: status.metadata.sourceRevision,
+        sourceSchemaLevel: status.metadata.sourceSchemaLevel,
+        createdAt: status.metadata.createdAt,
+        byteSize: status.metadata.byteSize,
+        target: migrationRollbackTargetProjection(status.metadata.rollbackTarget),
+    });
+}
+
+function migrationRollbackRecoveryView(): MigrationRollbackSessionView {
+    return Object.freeze({
+        migrationRollbackSessionId: null,
+        operationId: null,
+        sessionVersion: null,
+        phase: 'recovery-required' as const,
+        currentBuild: 'recovery-required' as const,
+        binding: null,
+        previewToken: null,
+        retryCommand: null,
+        allowedActions: Object.freeze([] as const),
+        outcome: null,
+        problem: Object.freeze({code: 'recovery-required' as const}),
+    });
+}
+
+function sourceBuildProjection(
+    appBuildId: string,
+    options: WorkspaceApplicationOptions,
+): MigrationRollbackBindingProjection['sourceBuild'] {
+    return Object.freeze({
+        releaseVersion: options.applicationRelease?.releaseVersion ?? '0.0.0-development',
+        tag: options.applicationRelease?.tag ?? appBuildId,
+        appBuildId,
+    });
+}
+
 export class WorkspaceApplication {
     private backupCoordinator: DurableBackupCoordinator | undefined;
     private restoreCoordinator: RestoreCoordinator | undefined;
     private migrationMaintenance = false;
+    private migrationRequestInFlight = false;
+    private migrationRollbackBoot: MigrationRollbackBootState | null = null;
+    private migrationRollbackBinding: MigrationRollbackBindingProjection | null = null;
+    private preparedMigrationRollback: PreparedMigrationRollbackPreview | null = null;
     private restoreMaintenance = false;
     private workspaceEpoch = randomUUID();
 
@@ -339,6 +448,8 @@ export class WorkspaceApplication {
                     options,
                 );
                 application.migrationMaintenance = true;
+                application.migrationRollbackBoot = migrationRollbackBoot;
+                application.tryRestoreMigrationRollbackBinding(migrationRollbackBoot);
                 return application;
             }
             if (restoreBoot.kind === 'recovery-required') {
@@ -378,6 +489,7 @@ export class WorkspaceApplication {
             dataStateFrom(opened),
             options,
         );
+        application.migrationRollbackBoot = migrationRollbackBoot;
         if ((restoreBoot?.kind === 'committed' || restoreBoot?.kind === 'pre-checkpoint-session')
             && restoreBoot.session
             && application.dataState.store
@@ -447,13 +559,36 @@ export class WorkspaceApplication {
                         || requestKind === 'workspace.meeting-series.query'
                         || requestKind === 'workspace.meeting-occurrence.preview'
                         || requestKind === 'workspace.meeting-occurrence.change'
-                        || requestKind === 'workspace.meeting-occurrence.cancel')
+                        || requestKind === 'workspace.meeting-occurrence.cancel'
+                        || requestKind === 'workspace.application-build.query'
+                        || requestKind === 'workspace.migration-safety.query'
+                        || requestKind === 'workspace.migration-safety.delete'
+                        || requestKind === 'workspace.migration-rollback.preview'
+                        || requestKind === 'workspace.migration-rollback.query'
+                        || requestKind === 'workspace.migration-rollback.confirm'
+                        || requestKind === 'workspace.migration-rollback.cancel'
+                        || requestKind === 'workspace.migration-rollback.continue')
                         ? 'validation'
                         : 'invalid-request';
             return this.problem(code, 'Workspace 请求无效。', requestIdFrom(request));
         }
 
-        if (this.migrationMaintenance) {
+        const migrationQuery = request.kind === 'workspace.application-build.query'
+            || request.kind === 'workspace.migration-safety.query'
+            || request.kind === 'workspace.migration-rollback.query';
+        if (this.migrationRequestInFlight && !migrationQuery) {
+            return this.problem(
+                'operation-in-progress',
+                '另一个迁移维护操作正在完成。',
+                request.requestId,
+            );
+        }
+
+        const migrationMaintenanceRequest = migrationQuery
+            || request.kind === 'workspace.migration-rollback.confirm'
+            || request.kind === 'workspace.migration-rollback.cancel'
+            || request.kind === 'workspace.migration-rollback.continue';
+        if (this.migrationMaintenance && !migrationMaintenanceRequest) {
             return this.problem(
                 'operation-in-progress',
                 '迁移回退维护期间不能执行工作区请求。',
@@ -462,6 +597,7 @@ export class WorkspaceApplication {
         }
 
         if (this.restoreMaintenance
+            && request.kind !== 'workspace.application-build.query'
             && request.kind !== 'workspace.restore.query'
             && request.kind !== 'workspace.restore.cancel'
             && request.kind !== 'workspace.restore.resume'
@@ -474,6 +610,25 @@ export class WorkspaceApplication {
         }
 
         switch (request.kind) {
+            case 'workspace.application-build.query':
+                return this.queryApplicationBuildStatus(request.requestId);
+            case 'workspace.migration-safety.query':
+                return this.queryMigrationSafetyCopy(request.requestId);
+            case 'workspace.migration-safety.delete':
+                return this.deleteMigrationSafetyCopy(request.requestId, request.command);
+            case 'workspace.migration-rollback.preview':
+                return this.previewMigrationRollback(request.requestId);
+            case 'workspace.migration-rollback.query':
+                return this.queryMigrationRollback(
+                    request.requestId,
+                    request.migrationRollbackSessionId,
+                );
+            case 'workspace.migration-rollback.confirm':
+                return this.confirmMigrationRollback(request.requestId, request.command);
+            case 'workspace.migration-rollback.cancel':
+                return this.cancelMigrationRollback(request.requestId, request.command);
+            case 'workspace.migration-rollback.continue':
+                return this.continueMigrationRollback(request.requestId, request.command);
             case 'workspace.initialize':
                 return this.initialize(request.requestId);
             case 'workspace.setup.query':
@@ -580,6 +735,913 @@ export class WorkspaceApplication {
      */
     public async waitForDurableBackups(): Promise<void> {
         await this.backupCoordinator?.waitForIdle();
+    }
+
+    /**
+     * Returns the exact local development build descriptor and rollback classification.
+     * @param {string} requestId Request correlation identity.
+     * @return {WorkspaceSetupOutcome} Path-free ApplicationBuildStatus outcome.
+     */
+    private queryApplicationBuildStatus(requestId: string): WorkspaceSetupOutcome {
+        try {
+            const match = /^development:([0-9a-f]{40})$/.exec(this.appBuildId);
+            if (!match
+                || (process.platform !== 'darwin' && process.platform !== 'win32')
+                || (process.arch !== 'arm64' && process.arch !== 'x64')
+                || (process.platform === 'darwin') !== (process.arch === 'arm64')) {
+                throw new Error('Application build identity is unsupported');
+            }
+            const boot = this.currentMigrationRollbackBoot();
+            let rollback: ApplicationBuildStatus['rollback'] = Object.freeze({kind: 'clear'});
+            if (boot.kind === 'recovery-required') {
+                rollback = Object.freeze({kind: 'recovery-required'});
+            }
+            else if (boot.kind === 'maintenance'
+                && boot.currentBuild
+                && boot.requiredBuilds) {
+                rollback = Object.freeze({
+                    kind: 'classified' as const,
+                    currentBuild: boot.currentBuild,
+                    sourceAppBuildId: boot.requiredBuilds.sourceAppBuildId,
+                    targetAppBuildId: boot.requiredBuilds.targetAppBuildId,
+                });
+            }
+            const status: ApplicationBuildStatus = Object.freeze({
+                descriptor: Object.freeze({
+                    descriptorVersion: '1' as const,
+                    applicationId: 'io.github.siruimei07.courseflow.dev' as const,
+                    releaseVersion: this.options.applicationRelease?.releaseVersion
+                        ?? '0.0.0-development',
+                    tag: this.options.applicationRelease?.tag ?? this.appBuildId,
+                    appBuildId: this.appBuildId,
+                    fullCommit: match[1]!,
+                    platform: process.platform,
+                    architecture: process.arch,
+                    variant: 'development' as const,
+                    workspaceProtocolVersion: '2' as const,
+                    currentSchemaLevel: CURRENT_SCHEMA_LEVEL.toString(),
+                    formats: Object.freeze({
+                        snapshot: '1' as const,
+                        backupRepository: '1' as const,
+                        restoreActivation: '1' as const,
+                        migrationSafetyCopy: '1' as const,
+                        migrationRollbackHandoff: '1' as const,
+                    }),
+                    runtimes: Object.freeze({
+                        electron: process.versions.electron ?? '43.4.1',
+                        chromium: process.versions.chrome ?? 'not-running-in-electron',
+                        node: process.versions.node,
+                        sqlite: workspaceDataRuntimeVersion(),
+                    }),
+                    packaging: Object.freeze({
+                        electronForge: '7.11.2' as const,
+                        vite: '8.2.2' as const,
+                        typescript: '7.0.2' as const,
+                    }),
+                    rollbackTargets: this.options.migrationRollbackTarget
+                        ? Object.freeze([
+                            migrationRollbackTargetProjection(
+                                this.options.migrationRollbackTarget,
+                            ),
+                        ])
+                        : Object.freeze([]),
+                }),
+                processMatch: Object.freeze({
+                    main: 'exact' as const,
+                    renderer: 'exact' as const,
+                    workspace: 'exact' as const,
+                    allExact: true as const,
+                }),
+                rollback,
+            });
+            return this.migrationValue({
+                kind: 'workspace.application-build-status',
+                protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                appBuildId: this.appBuildId,
+                requestId,
+                workspaceEpoch: this.workspaceEpoch,
+                status,
+            });
+        }
+        catch {
+            return this.problem(
+                'recovery-required',
+                '无法确认当前应用构建身份。',
+                requestId,
+            );
+        }
+    }
+
+    /**
+     * Returns the only registered migration safety copy without exposing a path.
+     * @param {string} requestId Request correlation identity.
+     * @return {WorkspaceSetupOutcome} Current MigrationSafetyCopy projection.
+     */
+    private queryMigrationSafetyCopy(requestId: string): WorkspaceSetupOutcome {
+        return this.migrationSafetyOutcome(
+            requestId,
+            migrationSafetyCopyProjection(inspectMigrationSafetyCopy(this.dataSlotsRoot)),
+        );
+    }
+
+    /**
+     * Explicitly deletes one freshly matched migration safety copy.
+     * @param {string} requestId Request correlation identity.
+     * @param {DeleteMigrationSafetyCopyCommand} command Exact observed copy identity.
+     * @return {WorkspaceSetupOutcome} Absent copy projection only after cleanup completes.
+     */
+    private deleteMigrationSafetyCopy(
+        requestId: string,
+        command: DeleteMigrationSafetyCopyCommand,
+    ): WorkspaceSetupOutcome {
+        if (this.migrationRequestInFlight) {
+            return this.problem(
+                'operation-in-progress',
+                '另一个迁移维护操作正在完成。',
+                requestId,
+            );
+        }
+        this.migrationRequestInFlight = true;
+        try {
+            if (this.options.readOnly || this.dataState.status.kind === 'read-only') {
+                return this.problem('permission', '迁移安全副本未删除。', requestId);
+            }
+            if (this.preparedMigrationRollback || !this.migrationOperationsAreClear()) {
+                return this.problem(
+                    'operation-in-progress',
+                    '恢复或迁移回退正在进行，迁移安全副本未删除。',
+                    requestId,
+                );
+            }
+            const currentSafetyCopy = inspectMigrationSafetyCopy(this.dataSlotsRoot);
+            if (currentSafetyCopy.kind === 'absent') {
+                return this.migrationSafetyOutcome(
+                    requestId,
+                    Object.freeze({kind: 'absent'}),
+                );
+            }
+            deleteMigrationSafetyCopy(
+                this.dataSlotsRoot,
+                command.migrationSafetyCopyId,
+                command.expectedCopyVersion,
+                command.confirmationToken,
+            );
+            return this.migrationSafetyOutcome(
+                requestId,
+                migrationSafetyCopyProjection(inspectMigrationSafetyCopy(this.dataSlotsRoot)),
+            );
+        }
+        catch (error) {
+            const code = error instanceof TypeError ? 'validation' : 'conflict';
+            return this.problem(code, '迁移安全副本未删除。', requestId);
+        }
+        finally {
+            this.migrationRequestInFlight = false;
+        }
+    }
+
+    /**
+     * Creates a fresh rollback preview bound to closed DATA and the current build.
+     * @param {string} requestId Request correlation identity.
+     * @return {Promise<WorkspaceSetupOutcome>} Preview session or unchanged problem.
+     */
+    private async previewMigrationRollback(requestId: string): Promise<WorkspaceSetupOutcome> {
+        if (this.migrationRequestInFlight) {
+            return this.problem(
+                'operation-in-progress',
+                '另一个迁移维护操作正在完成。',
+                requestId,
+            );
+        }
+        this.migrationRequestInFlight = true;
+        try {
+            if (this.options.readOnly || this.dataState.status.kind !== 'ready') {
+                return this.problem('permission', '当前工作区不能预览迁移回退。', requestId);
+            }
+            if (!this.options.activityControlRoot || !this.migrationOperationsAreClear()) {
+                return this.problem(
+                    'operation-in-progress',
+                    '恢复或迁移回退正在进行。',
+                    requestId,
+                );
+            }
+            const facts = await this.captureMigrationRollbackPreviewFacts(true);
+            const prepared = createMigrationRollbackPreview(facts, Object.freeze({
+                migrationRollbackSessionId: randomUUID(),
+                operationId: randomUUID(),
+            }));
+            this.preparedMigrationRollback = prepared;
+            this.migrationRollbackBinding = prepared.view.binding;
+            return this.migrationSessionOutcome(requestId, prepared.view);
+        }
+        catch {
+            return this.problem(
+                'recovery-required',
+                '无法形成一致的迁移回退预览。',
+                requestId,
+            );
+        }
+        finally {
+            this.migrationRequestInFlight = false;
+        }
+    }
+
+    /**
+     * Queries the current preview, durable maintenance, or recovery session.
+     * @param {string} requestId Request correlation identity.
+     * @param {string | null} migrationRollbackSessionId Exact session or current session.
+     * @return {WorkspaceSetupOutcome} Current rollback session projection.
+     */
+    private queryMigrationRollback(
+        requestId: string,
+        migrationRollbackSessionId: string | null,
+    ): WorkspaceSetupOutcome {
+        const preview = this.preparedMigrationRollback?.view;
+        if (preview
+            && (migrationRollbackSessionId === null
+                || preview.migrationRollbackSessionId === migrationRollbackSessionId)) {
+            return this.migrationSessionOutcome(requestId, preview);
+        }
+        const boot = this.currentMigrationRollbackBoot();
+        if (boot.kind === 'clear') {
+            return this.problem('validation', '当前没有迁移回退会话。', requestId);
+        }
+        if (boot.kind === 'recovery-required') {
+            return this.migrationSessionOutcome(requestId, migrationRollbackRecoveryView());
+        }
+        if (migrationRollbackSessionId !== null
+            && boot.migrationRollbackSessionId !== migrationRollbackSessionId) {
+            return this.problem('validation', '迁移回退会话身份不匹配。', requestId);
+        }
+        return this.migrationSessionOutcome(requestId, this.migrationViewFrom(boot));
+    }
+
+    /**
+     * Converts a preview confirmation into the durable R6-03 handoff.
+     * @param {string} requestId Request correlation identity.
+     * @param {ConfirmMigrationRollbackCommand} command Preview-bound confirmation.
+     * @return {Promise<WorkspaceSetupOutcome>} Maintenance status after durable progress.
+     */
+    private async confirmMigrationRollback(
+        requestId: string,
+        command: ConfirmMigrationRollbackCommand,
+    ): Promise<WorkspaceSetupOutcome> {
+        if (this.migrationRequestInFlight) {
+            return this.problem(
+                'operation-in-progress',
+                '另一个迁移维护操作正在完成。',
+                requestId,
+            );
+        }
+        this.migrationRequestInFlight = true;
+        let refreshedFacts: MigrationRollbackPreviewFacts | null = null;
+        try {
+            const activityControlRoot = this.options.activityControlRoot;
+            if (!activityControlRoot) {
+                return this.problem('validation', '当前构建没有迁移回退控制根。', requestId);
+            }
+            let handoffFacts;
+            const prepared = this.preparedMigrationRollback;
+            if (prepared) {
+                this.migrationMaintenance = true;
+                refreshedFacts = await this.captureMigrationRollbackPreviewFacts(false);
+                try {
+                    handoffFacts = bindMigrationRollbackConfirmation(
+                        prepared,
+                        command,
+                        refreshedFacts,
+                    );
+                }
+                catch {
+                    this.migrationMaintenance = false;
+                    await this.reopenMigrationData(refreshedFacts.currentData);
+                    this.startDurableBackup();
+                    this.preparedMigrationRollback = null;
+                    this.migrationRollbackBinding = null;
+                    return this.problem(
+                        'conflict',
+                        '迁移回退影响已变化，请重新预览。',
+                        requestId,
+                    );
+                }
+                this.migrationRollbackBinding = prepared.view.binding;
+                createMigrationRollbackHandoff(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    handoffFacts,
+                );
+            }
+            else {
+                handoffFacts = inspectMigrationRollbackHandoffFacts(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    command.migrationRollbackSessionId,
+                );
+                if (handoffFacts.previewDigest !== command.previewToken
+                    || handoffFacts.confirmationDigest
+                        !== migrationRollbackConfirmationDigest(command)) {
+                    return this.problem('conflict', '迁移回退确认与原预览不匹配。', requestId);
+                }
+                this.migrationMaintenance = true;
+                this.tryRestoreMigrationRollbackBinding(this.currentMigrationRollbackBoot());
+            }
+            let status = inspectMigrationRollbackBeforeWorkspaceOpen(
+                activityControlRoot,
+                this.dataSlotsRoot,
+                this.appBuildId,
+            );
+            if (status.kind === 'maintenance' && status.phase === 'planned') {
+                status = prepareMigrationRollbackHandoff(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    command.migrationRollbackSessionId,
+                    input => stageMigrationSafetyCopyForRollback(
+                        this.dataSlotsRoot,
+                        input.migrationSafetyCopyId,
+                        input.candidateSlotName,
+                    ),
+                );
+            }
+            if (status.kind === 'maintenance'
+                && (status.phase === 'prepared'
+                    || status.phase === 'armed'
+                    || status.phase === 'awaiting-target-build')) {
+                status = armMigrationRollbackHandoff(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    Object.freeze({
+                        action: 'confirm' as const,
+                        commandId: command.commandId,
+                        migrationRollbackSessionId: command.migrationRollbackSessionId,
+                        expectedSessionVersion: '2',
+                        currentAppBuildId: this.appBuildId,
+                    }),
+                );
+            }
+            this.preparedMigrationRollback = null;
+            this.migrationRollbackBoot = status;
+            const outcome = this.migrationSessionOutcome(
+                requestId,
+                this.migrationViewFrom(status),
+            );
+            this.workspaceEpoch = randomUUID();
+            return outcome;
+        }
+        catch (error) {
+            if (error instanceof MigrationRollbackHandoffError
+                && error.code === 'build-mismatch') {
+                return this.problem(
+                    'build-mismatch',
+                    '当前应用构建不能执行这项迁移回退动作。',
+                    requestId,
+                );
+            }
+            if (error instanceof MigrationRollbackHandoffError
+                && error.code === 'command-conflict') {
+                return this.problem(
+                    'conflict',
+                    '迁移回退命令身份已被不同动作使用。',
+                    requestId,
+                );
+            }
+            const activityControlRoot = this.options.activityControlRoot;
+            if (activityControlRoot) {
+                const boot = inspectMigrationRollbackBeforeWorkspaceOpen(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    this.appBuildId,
+                );
+                this.migrationRollbackBoot = boot;
+                if (boot.kind === 'maintenance') {
+                    this.migrationMaintenance = true;
+                    this.preparedMigrationRollback = null;
+                    this.tryRestoreMigrationRollbackBinding(boot);
+                    const outcome = this.migrationSessionOutcome(
+                        requestId,
+                        this.migrationViewFrom(boot),
+                    );
+                    this.workspaceEpoch = randomUUID();
+                    return outcome;
+                }
+                if (boot.kind === 'clear') {
+                    if (refreshedFacts && !this.dataState.store) {
+                        await this.reopenMigrationData(refreshedFacts.currentData);
+                    }
+                    if (this.dataState.store) {
+                        this.migrationMaintenance = false;
+                        this.preparedMigrationRollback = null;
+                        this.migrationRollbackBinding = null;
+                        this.startDurableBackup();
+                        return this.problem(
+                            'conflict',
+                            '迁移回退影响已变化，请重新预览。',
+                            requestId,
+                        );
+                    }
+                }
+            }
+            if (refreshedFacts && !this.dataState.store) {
+                try {
+                    await this.reopenMigrationData(refreshedFacts.currentData);
+                    this.migrationMaintenance = false;
+                    this.startDurableBackup();
+                }
+                catch {
+                    this.migrationMaintenance = true;
+                }
+            }
+            const code = error instanceof MigrationRollbackHandoffError
+                && error.code === 'build-mismatch'
+                ? 'build-mismatch'
+                : 'recovery-required';
+            return this.problem(code, '迁移回退确认未能安全完成。', requestId);
+        }
+        finally {
+            this.migrationRequestInFlight = false;
+        }
+    }
+
+    /**
+     * Cancels as the exact source build and restores the retained migrated DATA.
+     * @param {string} requestId Request correlation identity.
+     * @param {MigrationRollbackActionCommand} command Exact session action.
+     * @return {Promise<WorkspaceSetupOutcome>} Terminal or retryable maintenance state.
+     */
+    private async cancelMigrationRollback(
+        requestId: string,
+        command: MigrationRollbackActionCommand,
+    ): Promise<WorkspaceSetupOutcome> {
+        return this.completeMigrationRollback(requestId, command, 'cancel-as-source');
+    }
+
+    /**
+     * Continues as the exact rollback target and consumes the installed safety copy.
+     * @param {string} requestId Request correlation identity.
+     * @param {MigrationRollbackActionCommand} command Exact session action.
+     * @return {Promise<WorkspaceSetupOutcome>} Terminal or retryable maintenance state.
+     */
+    private async continueMigrationRollback(
+        requestId: string,
+        command: MigrationRollbackActionCommand,
+    ): Promise<WorkspaceSetupOutcome> {
+        return this.completeMigrationRollback(requestId, command, 'continue-as-target');
+    }
+
+    /**
+     * Runs one exact-build terminal branch through reopen, Library, and FLOW-00 gates.
+     * @param {string} requestId Request correlation identity.
+     * @param {MigrationRollbackActionCommand} command Exact action command.
+     * @param {'cancel-as-source' | 'continue-as-target'} action Exact build branch.
+     * @return {Promise<WorkspaceSetupOutcome>} Terminal or pending state.
+     */
+    private async completeMigrationRollback(
+        requestId: string,
+        command: MigrationRollbackActionCommand,
+        action: 'cancel-as-source' | 'continue-as-target',
+    ): Promise<WorkspaceSetupOutcome> {
+        if (this.migrationRequestInFlight) {
+            return this.problem(
+                'operation-in-progress',
+                '另一个迁移维护操作正在完成。',
+                requestId,
+            );
+        }
+        this.migrationRequestInFlight = true;
+        try {
+            const activityControlRoot = this.options.activityControlRoot;
+            if (!activityControlRoot) {
+                return this.problem('validation', '当前构建没有迁移回退控制根。', requestId);
+            }
+            const kernelCommand = Object.freeze({
+                action,
+                commandId: command.commandId,
+                migrationRollbackSessionId: command.migrationRollbackSessionId,
+                expectedSessionVersion: command.expectedSessionVersion,
+                currentAppBuildId: this.appBuildId,
+            });
+            const callbacks = Object.freeze({
+                reopen: (expected: MigrationRollbackDataIdentity) => (
+                    this.reopenMigrationData(expected)
+                ),
+                libraryReconcile: async () => {
+                    // MOD-LIBRARY is absent in R6; the explicit empty binding is already reconciled.
+                },
+                flow00: () => this.runMigrationRollbackFlow00(),
+            });
+            const status = action === 'cancel-as-source'
+                ? await cancelMigrationRollbackHandoff(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    kernelCommand,
+                    callbacks,
+                )
+                : await continueMigrationRollbackHandoff(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    kernelCommand,
+                    Object.freeze({
+                        ...callbacks,
+                        consumeSafetyCopy: async input => {
+                            consumeMigrationSafetyCopyAfterRollback(
+                                this.dataSlotsRoot,
+                                input.migrationSafetyCopyId,
+                                input.operationId,
+                            );
+                        },
+                    }),
+                );
+            this.migrationRollbackBoot = status;
+            const outcome = this.migrationSessionOutcome(
+                requestId,
+                this.migrationViewFrom(status),
+            );
+            if (status.kind === 'succeeded' || status.kind === 'cancelled') {
+                this.migrationMaintenance = false;
+                this.preparedMigrationRollback = null;
+                this.startDurableBackup();
+                this.workspaceEpoch = randomUUID();
+            }
+            return outcome;
+        }
+        catch (error) {
+            if (error instanceof MigrationRollbackHandoffError
+                && error.code === 'build-mismatch') {
+                return this.problem(
+                    'build-mismatch',
+                    '当前应用构建不能执行这项迁移回退动作。',
+                    requestId,
+                );
+            }
+            if (error instanceof MigrationRollbackHandoffError
+                && error.code === 'command-conflict') {
+                return this.problem(
+                    'conflict',
+                    '迁移回退命令身份已被不同动作使用。',
+                    requestId,
+                );
+            }
+            const activityControlRoot = this.options.activityControlRoot;
+            if (activityControlRoot) {
+                const boot = inspectMigrationRollbackBeforeWorkspaceOpen(
+                    activityControlRoot,
+                    this.dataSlotsRoot,
+                    this.appBuildId,
+                );
+                this.migrationRollbackBoot = boot;
+                if (boot.kind === 'maintenance') {
+                    this.migrationMaintenance = true;
+                    this.tryRestoreMigrationRollbackBinding(boot);
+                    return this.migrationSessionOutcome(requestId, this.migrationViewFrom(boot));
+                }
+            }
+            return this.problem(
+                'recovery-required',
+                '迁移回退仍需维护，未报告完成。',
+                requestId,
+                'unknown',
+            );
+        }
+        finally {
+            this.migrationRequestInFlight = false;
+        }
+    }
+
+    /**
+     * Captures the current closed DATA identity and reopens it when requested.
+     * @param {boolean} reopenAfterCapture Whether normal operation resumes after capture.
+     * @return {Promise<MigrationRollbackPreviewFacts>} Fresh owner-private facts.
+     */
+    private async captureMigrationRollbackPreviewFacts(
+        reopenAfterCapture: boolean,
+    ): Promise<MigrationRollbackPreviewFacts> {
+        const status = this.dataState.status;
+        if (status.kind !== 'ready' || !this.dataState.store) {
+            throw new Error('Migration rollback requires writable DATA');
+        }
+        const expected: MigrationRollbackDataIdentity = Object.freeze({
+            workspaceId: status.workspaceId,
+            schemaLevel: status.schemaLevel.toString(),
+            revision: status.revision,
+        });
+        await this.closeDataForMigration();
+        try {
+            const safetyStatus = inspectMigrationSafetyCopy(this.dataSlotsRoot);
+            if (safetyStatus.kind !== 'verified') {
+                throw new Error('Migration safety copy is unavailable');
+            }
+            const active = observeRestoreDataSlot(this.dataSlotsRoot, 'active');
+            const member = active.kind === 'present' ? active.fingerprint.members[0] : undefined;
+            if (active.kind !== 'present'
+                || active.fingerprint.members.length !== 1
+                || member?.path !== 'workspace.sqlite') {
+                throw new Error('Active DATA closure changed');
+            }
+            return Object.freeze({
+                safetyCopy: Object.freeze({
+                    projection: migrationSafetyCopyProjection(safetyStatus) as Extract<
+                        MigrationSafetyCopyProjection,
+                        Readonly<{kind: 'verified'}>
+                    >,
+                    closedDataSlotDigest: safetyStatus.metadata.closedDataSlotDigest,
+                }),
+                currentData: Object.freeze({
+                    ...expected,
+                    byteLength: member.byteLength,
+                    digest: member.sha256,
+                    slotFingerprint: active.fingerprint.slotFingerprint,
+                }),
+                currentLibrary: Object.freeze({kind: 'absent' as const}),
+                sourceBuild: sourceBuildProjection(this.appBuildId, this.options),
+            });
+        }
+        catch (error) {
+            if (!reopenAfterCapture) {
+                await this.reopenMigrationData(expected);
+                this.startDurableBackup();
+            }
+            throw error;
+        }
+        finally {
+            if (reopenAfterCapture) {
+                await this.reopenMigrationData(expected);
+                this.startDurableBackup();
+            }
+        }
+    }
+
+    /**
+     * Closes background owners and DATA before physical rollback evidence is observed.
+     * @return {Promise<void>} Completion after the active connection is closed.
+     */
+    private async closeDataForMigration(): Promise<void> {
+        const store = this.dataState.store;
+        if (!store) {
+            throw new Error('Workspace DATA is not open');
+        }
+        try {
+            store.setPostCommitHint(null);
+        }
+        catch {
+            // A terminal connection may already have detached its hint.
+        }
+        await this.backupCoordinator?.close();
+        this.backupCoordinator = undefined;
+        if (this.restoreCoordinator?.requiresMaintenance()) {
+            throw new Error('Restore maintenance blocks MigrationRollback');
+        }
+        this.restoreCoordinator = undefined;
+        await store.close();
+        this.dataState = Object.freeze({
+            sqliteVersion: this.dataState.sqliteVersion,
+            status: Object.freeze({
+                kind: 'recovery' as const,
+                problem: migrationRollbackEvidenceProblem(),
+            }),
+        });
+    }
+
+    /**
+     * Opens the exact DATA chosen by the handoff and rejects any identity drift.
+     * @param {MigrationRollbackDataIdentity} expected Exact durable identity.
+     * @return {Promise<void>} Completion after the validated store is adopted.
+     */
+    private async reopenMigrationData(expected: MigrationRollbackDataIdentity): Promise<void> {
+        if (this.dataState.store) {
+            const status = this.dataState.store.status();
+            if (status.workspaceId === expected.workspaceId
+                && status.schemaLevel.toString() === expected.schemaLevel
+                && status.revision === expected.revision) {
+                return;
+            }
+            await this.dataState.store.close();
+        }
+        const opened = await openWorkspaceDataWithMigrations(
+            this.dataSlotsRoot,
+            migrationOpenOptions(this.appBuildId, this.options),
+        );
+        this.dataState = dataStateFrom(opened);
+        const status = this.dataState.status;
+        if (opened.kind !== 'ready'
+            || status.kind !== 'ready'
+            || status.workspaceId !== expected.workspaceId
+            || status.schemaLevel.toString() !== expected.schemaLevel
+            || status.revision !== expected.revision) {
+            if (opened.kind === 'ready' || opened.kind === 'read-only') {
+                await opened.store.close();
+            }
+            this.dataState = Object.freeze({
+                sqliteVersion: workspaceDataRuntimeVersion(),
+                status: Object.freeze({
+                    kind: 'recovery' as const,
+                    problem: migrationRollbackEvidenceProblem(),
+                }),
+            });
+            throw new Error('Migration rollback reopened DATA identity changed');
+        }
+    }
+
+    /**
+     * Runs FLOW-00 after the selected DATA is open and before a terminal receipt.
+     * @return {Promise<void>} Completion after lifecycle reconciliation succeeds.
+     */
+    private async runMigrationRollbackFlow00(): Promise<void> {
+        if (!this.dataState.store) {
+            throw new Error('Migration rollback DATA is not open');
+        }
+        const projection = this.dataState.store.readSetupProjection();
+        const problem = await this.reconcileWorkspaceLifecycle(randomUUID(), projection);
+        if (problem !== null) {
+            throw new Error('FLOW-00 reconciliation did not complete');
+        }
+    }
+
+    /**
+     * Reads live restore and rollback mutex state before an ordinary mutation.
+     * @return {boolean} Whether no global destructive operation is pending.
+     */
+    private migrationOperationsAreClear(): boolean {
+        const activityControlRoot = this.options.activityControlRoot;
+        if (!activityControlRoot) {
+            return false;
+        }
+        const restore = inspectRestoreBeforeWorkspaceOpen(
+            activityControlRoot,
+            this.dataSlotsRoot,
+        );
+        const rollback = inspectNonterminalMigrationRollback(
+            activityControlRoot,
+            this.dataSlotsRoot,
+        );
+        return (restore.kind === 'clear' || restore.kind === 'committed')
+            && rollback.kind === 'clear';
+    }
+
+    /**
+     * Reads the current rollback kernel state without opening ordinary DATA.
+     * @return {MigrationRollbackBootState} Fresh boot classification.
+     */
+    private currentMigrationRollbackBoot(): MigrationRollbackBootState {
+        if (!this.options.activityControlRoot) {
+            return Object.freeze({
+                kind: 'clear' as const,
+                migrationRollbackSessionId: null,
+                operationId: null,
+                sessionVersion: null,
+                phase: null,
+                currentBuild: null,
+                requiredBuilds: null,
+                allowedActions: Object.freeze([] as const),
+                retryCommand: null,
+                outcome: null,
+            });
+        }
+        const boot = inspectMigrationRollbackBeforeWorkspaceOpen(
+            this.options.activityControlRoot,
+            this.dataSlotsRoot,
+            this.appBuildId,
+        );
+        this.migrationRollbackBoot = boot;
+        return boot;
+    }
+
+    /**
+     * Reconstructs the path-free binding from immutable handoff and DATA metadata.
+     * @param {MigrationRollbackBootState} boot Fresh exact-build classification.
+     * @return {void}
+     */
+    private tryRestoreMigrationRollbackBinding(boot: MigrationRollbackBootState): void {
+        if (!this.options.activityControlRoot
+            || !boot.migrationRollbackSessionId
+            || boot.kind === 'recovery-required') {
+            return;
+        }
+        try {
+            const facts = inspectMigrationRollbackHandoffFacts(
+                this.options.activityControlRoot,
+                this.dataSlotsRoot,
+                boot.migrationRollbackSessionId,
+            );
+            const safety = inspectMigrationSafetyCopy(this.dataSlotsRoot);
+            if (safety.kind !== 'verified'
+                || safety.metadata.migrationSafetyCopyId
+                    !== facts.safetyCopy.migrationSafetyCopyId
+                || safety.metadata.closedDataSlotDigest !== facts.safetyCopy.digest) {
+                return;
+            }
+            const safetyCopy = migrationSafetyCopyProjection(safety);
+            if (safetyCopy.kind !== 'verified') {
+                return;
+            }
+            this.migrationRollbackBinding = Object.freeze({
+                safetyCopy,
+                currentData: Object.freeze({
+                    workspaceId: facts.currentData.workspaceId,
+                    schemaLevel: facts.currentData.schemaLevel,
+                    revision: facts.currentData.revision,
+                }),
+                currentLibrary: Object.freeze({kind: 'absent' as const}),
+                sourceBuild: Object.freeze({
+                    releaseVersion: facts.currentReleaseVersion,
+                    tag: facts.currentAppBuildId,
+                    appBuildId: facts.currentAppBuildId,
+                }),
+                targetBuild: safetyCopy.target,
+                impact: Object.freeze({
+                    replacement: 'complete' as const,
+                    automaticMerge: false as const,
+                    currentRevision: facts.currentData.revision,
+                    targetRevision: facts.safetyCopy.revision,
+                    structuredDataChanges: 'discarded-after-target-revision' as const,
+                    libraryFiles: 'remain-in-place' as const,
+                    libraryReconciliation: 'full' as const,
+                }),
+            });
+        }
+        catch {
+            this.migrationRollbackBinding = null;
+        }
+    }
+
+    /**
+     * Maps a kernel status to the complete Shell projection.
+     * @param {MigrationRollbackBootState} status Fresh path-free kernel status.
+     * @return {MigrationRollbackSessionView} Validated Shell projection.
+     */
+    private migrationViewFrom(status: MigrationRollbackBootState): MigrationRollbackSessionView {
+        if (status.kind === 'clear'
+            || status.kind === 'recovery-required'
+            || !status.migrationRollbackSessionId
+            || !status.operationId
+            || !status.sessionVersion
+            || !status.phase
+            || !status.currentBuild) {
+            return migrationRollbackRecoveryView();
+        }
+        if (!this.migrationRollbackBinding) {
+            this.tryRestoreMigrationRollbackBinding(status);
+        }
+        const binding = this.migrationRollbackBinding;
+        if (!binding
+            || (status.kind === 'succeeded' || status.kind === 'cancelled')
+                && status.currentBuild === 'other') {
+            return migrationRollbackRecoveryView();
+        }
+        const view: MigrationRollbackSessionView = Object.freeze({
+            migrationRollbackSessionId: status.migrationRollbackSessionId,
+            operationId: status.operationId,
+            sessionVersion: status.sessionVersion,
+            phase: status.phase,
+            currentBuild: status.currentBuild,
+            binding,
+            previewToken: null,
+            retryCommand: status.retryCommand
+                && status.allowedActions.includes(status.retryCommand.action)
+                ? Object.freeze({...status.retryCommand})
+                : null,
+            allowedActions: status.allowedActions,
+            outcome: status.outcome,
+            problem: null,
+        });
+        return isMigrationRollbackSessionView(view)
+            ? view
+            : migrationRollbackRecoveryView();
+    }
+
+    /**
+     * Wraps one migration success value in the common Workspace outcome.
+     * @param {WorkspaceMigrationSuccessValue} value Exact success value.
+     * @return {WorkspaceSetupOutcome} Common success envelope.
+     */
+    private migrationValue(value: WorkspaceMigrationSuccessValue): WorkspaceSetupOutcome {
+        return Object.freeze({ok: true as const, value});
+    }
+
+    private migrationSafetyOutcome(
+        requestId: string,
+        safetyCopy: MigrationSafetyCopyProjection,
+    ): WorkspaceSetupOutcome {
+        return this.migrationValue(Object.freeze({
+            kind: 'workspace.migration-safety-copy' as const,
+            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+            appBuildId: this.appBuildId,
+            requestId,
+            workspaceEpoch: this.workspaceEpoch,
+            safetyCopy,
+        }));
+    }
+
+    private migrationSessionOutcome(
+        requestId: string,
+        session: MigrationRollbackSessionView,
+    ): WorkspaceSetupOutcome {
+        return this.migrationValue(Object.freeze({
+            kind: 'workspace.migration-rollback-session' as const,
+            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+            appBuildId: this.appBuildId,
+            requestId,
+            workspaceEpoch: this.workspaceEpoch,
+            session,
+        }));
     }
 
     /**

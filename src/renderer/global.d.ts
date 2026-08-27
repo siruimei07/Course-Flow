@@ -41,6 +41,11 @@ import type {
 } from '../shared/workspace-course-contract';
 import type { WindowControlAction } from '../shared/window-control-contract';
 import type {
+  ConfirmMigrationRollbackCommand,
+  DeleteMigrationSafetyCopyCommand,
+  MigrationRollbackActionCommand,
+} from '../shared/workspace-migration-contract';
+import type {
   ConfigureBackupDestinationCommand,
   ConfirmRestoreSessionCommand,
   RestoreSessionActionCommand,
@@ -53,6 +58,16 @@ declare global {
       query(): Promise<BootstrapOutcome>;
       initialize(): Promise<WorkspaceSetupOutcome>;
       querySetup(): Promise<WorkspaceSetupOutcome>;
+      queryApplicationBuildStatus(): Promise<WorkspaceSetupOutcome>;
+      queryMigrationSafetyCopy(): Promise<WorkspaceSetupOutcome>;
+      deleteMigrationSafetyCopy(command: DeleteMigrationSafetyCopyCommand): Promise<WorkspaceSetupOutcome>;
+      previewMigrationRollback(): Promise<WorkspaceSetupOutcome>;
+      queryMigrationRollbackStatus(
+        migrationRollbackSessionId: string | null,
+      ): Promise<WorkspaceSetupOutcome>;
+      confirmMigrationRollback(command: ConfirmMigrationRollbackCommand): Promise<WorkspaceSetupOutcome>;
+      cancelMigrationRollback(command: MigrationRollbackActionCommand): Promise<WorkspaceSetupOutcome>;
+      continueMigrationRollback(command: MigrationRollbackActionCommand): Promise<WorkspaceSetupOutcome>;
       queryDataProtection(): Promise<WorkspaceSetupOutcome>;
       configureBackupDestination(command: ConfigureBackupDestinationCommand): Promise<WorkspaceSetupOutcome>;
       startRestoreSession(command: StartRestoreSessionCommand): Promise<WorkspaceSetupOutcome>;

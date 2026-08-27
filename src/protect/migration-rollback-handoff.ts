@@ -162,6 +162,11 @@ export type MigrationRollbackStatus = Readonly<{
         targetReleaseVersion: string;
     }> | null;
     allowedActions: readonly AllowedAction[];
+    retryCommand: Readonly<{
+        action: 'continue-as-target' | 'cancel-as-source';
+        commandId: string;
+        expectedSessionVersion: string;
+    }> | null;
     outcome: TerminalPhase | null;
 }>;
 
@@ -174,6 +179,7 @@ export type MigrationRollbackBootState = MigrationRollbackStatus | Readonly<{
     currentBuild: null;
     requiredBuilds: null;
     allowedActions: readonly [];
+    retryCommand: null;
     outcome: null;
 }>;
 
@@ -1282,6 +1288,19 @@ function statusFrom(
             allowedActions = Object.freeze(['cancel-as-source'] as const);
         }
     }
+    const durableCompletionCommand = terminal
+        ? undefined
+        : records.find(record => (
+            record.kind === 'command-continue' || record.kind === 'command-cancel'
+        ));
+    const retryCommand = durableCompletionCommand?.command
+        ? Object.freeze({
+            action: durableCompletionCommand.command.action as
+                'continue-as-target' | 'cancel-as-source',
+            commandId: durableCompletionCommand.command.commandId,
+            expectedSessionVersion: durableCompletionCommand.command.expectedSessionVersion,
+        })
+        : null;
     return Object.freeze({
         kind: terminal ? phase : 'maintenance',
         migrationRollbackSessionId: handoff.migrationRollbackSessionId,
@@ -1296,6 +1315,7 @@ function statusFrom(
             targetReleaseVersion: handoff.targetReleaseVersion,
         }),
         allowedActions,
+        retryCommand,
         outcome: terminal ? phase : null,
     });
 }
@@ -2145,6 +2165,7 @@ export function inspectMigrationRollbackBeforeWorkspaceOpen(
                 currentBuild: null,
                 requiredBuilds: null,
                 allowedActions: Object.freeze([] as const),
+                retryCommand: null,
                 outcome: null,
             });
         }
@@ -2192,9 +2213,30 @@ export function inspectMigrationRollbackBeforeWorkspaceOpen(
             currentBuild: null,
             requiredBuilds: null,
             allowedActions: Object.freeze([]),
+            retryCommand: null,
             outcome: null,
         });
     }
+}
+
+/**
+ * Reads the immutable path-free handoff facts for one exact session.
+ * @param {string} activityControlRoot Stable activity control root.
+ * @param {string} dataSlotsRoot Trusted DataSlots parent.
+ * @param {string} migrationRollbackSessionId Exact session identity.
+ * @return {MigrationRollbackHandoffFacts} Validated immutable handoff facts.
+ */
+export function inspectMigrationRollbackHandoffFacts(
+    activityControlRoot: string,
+    dataSlotsRoot: string,
+    migrationRollbackSessionId: string,
+): MigrationRollbackHandoffFacts {
+    if (!isCanonicalUuid(migrationRollbackSessionId)) {
+        throw new TypeError('MigrationRollback session identity is invalid');
+    }
+    requireRestoreSameVolume(activityControlRoot, dataSlotsRoot);
+    const records = findRecordsForSession(activityControlRoot, migrationRollbackSessionId);
+    return records[0]!.handoff;
 }
 
 /**

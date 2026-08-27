@@ -651,6 +651,14 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
       'query',
       'initialize',
       'querySetup',
+      'queryApplicationBuildStatus',
+      'queryMigrationSafetyCopy',
+      'deleteMigrationSafetyCopy',
+      'previewMigrationRollback',
+      'queryMigrationRollbackStatus',
+      'confirmMigrationRollback',
+      'cancelMigrationRollback',
+      'continueMigrationRollback',
       'queryDataProtection',
       'configureBackupDestination',
       'startRestoreSession',
@@ -689,7 +697,7 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
     ],
   );
   const expectedParameterCounts = [
-    0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
     1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
   ];
@@ -761,6 +769,23 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
   );
 });
 
+test('Main exits only after rollback confirmation reaches the external build handoff', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath);
+  const handlers = identifierMethodCalls(state, main, 'ipcMain', 'handle').filter(
+    call => state.is.isIdentifier(call.arguments[0]) && call.arguments[0].text === 'WORKSPACE_SETUP_CHANNEL',
+  );
+
+  assert.equal(handlers.length, 1);
+  const handler = handlers[0]!.arguments[1];
+  assert.ok(handler && state.is.isFunctionLikeDeclaration(handler) && handler.body);
+  const body = handler.body.getText(main);
+
+  assert.match(body, /value\.kind\s*===\s*'workspace\.migration-rollback\.confirm'/);
+  assert.match(body, /outcome\.value\.session\.phase\s*===\s*'awaiting-target-build'/);
+  assert.match(body, /setImmediate\(\(\)\s*=>\s*app\.quit\(\)\)/);
+});
+
 test('Main classifies every known Task occurrence request as a setup validation failure', async () => {
   const state = await compilerState();
   const main = sourceFor(state, mainPath).getText();
@@ -775,6 +800,28 @@ test('Main classifies every known Task occurrence request as a setup validation 
     'workspace.task.delete-occurrence-or-series',
     'workspace.task.undo-occurrence-state',
     'workspace.task-occurrence.preview',
+  ]) {
+    assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
+    assert.ok(main.indexOf(`kind === '${kind}'`) < validationMarker, `${kind} must be validation`);
+  }
+});
+
+test('Main classifies every known migration request as a setup validation failure', async () => {
+  const state = await compilerState();
+  const main = sourceFor(state, mainPath).getText();
+  const validationMarker = /\)\r?\n          \? 'validation'/.exec(main)?.index ?? -1;
+
+  assert.ok(validationMarker >= 0, 'validation branch must remain explicit');
+
+  for (const kind of [
+    'workspace.application-build.query',
+    'workspace.migration-safety.query',
+    'workspace.migration-safety.delete',
+    'workspace.migration-rollback.preview',
+    'workspace.migration-rollback.query',
+    'workspace.migration-rollback.confirm',
+    'workspace.migration-rollback.cancel',
+    'workspace.migration-rollback.continue',
   ]) {
     assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
     assert.ok(main.indexOf(`kind === '${kind}'`) < validationMarker, `${kind} must be validation`);

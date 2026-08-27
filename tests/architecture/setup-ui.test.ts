@@ -82,7 +82,7 @@ test('UI-SETUP-01 exposes Current Term, standalone Course, then a Meeting or Tas
     assert.match(renderer, /跟随教学周/);
     assert.match(renderer, /生效开始日期/);
     assert.doesNotMatch(setupDialog, /courseFlow\.createCourseWithMeeting/);
-    assert.doesNotMatch(renderer, /课节教师|新增课节|拆分规则|成绩|保护数据|备份/);
+    assert.doesNotMatch(setupDialog, /课节教师|新增课节|拆分规则|成绩|保护数据|备份/);
 });
 
 test('UI-SETUP-01 keeps the confirmed light surface and keyboard/reduced-motion affordances', () => {
@@ -136,8 +136,8 @@ test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', 
     assert.match(styles, /@media \(forced-colors:\s*active\)/);
 });
 
-test('custom title chrome remains reachable during startup and native setup modality', () => {
-    assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 2);
+test('custom title chrome remains reachable during startup, rollback, and setup modality', () => {
+    assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 3);
     assert.match(
         setupDialog,
         /<header className="setup-modal-header">[\s\S]*<WindowControls \/>[\s\S]*<\/header>/,

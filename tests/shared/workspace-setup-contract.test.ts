@@ -7,6 +7,7 @@ import test from 'node:test';
 
 import {
     isWorkspaceSetupOutcome,
+    isWorkspaceProcessRequest,
     isWorkspaceSetupRequest,
     makeChangeTaskOccurrenceRequest,
     makeCreateCourseWithMeetingRequest,
@@ -15,6 +16,10 @@ import {
     makeSaveSetupDraftCheckpointRequest,
     makeTaskSeriesQueryRequest,
 } from '../../src/shared/workspace-setup-contract';
+import {
+    makeApplicationBuildStatusRequest,
+    makeMigrationSafetyCopyQueryRequest,
+} from '../../src/shared/workspace-migration-contract';
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../../src/shared/workspace-term-contract';
 import {
     buildPlanProjection,
@@ -643,4 +648,32 @@ test('TEST-DATA-002/006: Workspace boundary retains schema-1 Course receipt repl
         },
     );
     assert.equal(isWorkspaceSetupRequest(request, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+});
+
+test('TEST-WORKSPACE-007: build and migration requests use the existing bounded Workspace channel', () => {
+    const buildRequest = makeApplicationBuildStatusRequest(
+        REQUEST_ID,
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+    );
+    const safetyRequest = makeMigrationSafetyCopyQueryRequest(
+        REQUEST_ID,
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+    );
+
+    assert.equal(isWorkspaceSetupRequest(buildRequest, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceProcessRequest(buildRequest, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupRequest(safetyRequest, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+    assert.equal(isWorkspaceSetupOutcome({
+        ok: true,
+        value: {
+            kind: 'workspace.migration-safety-copy',
+            protocolVersion: 2,
+            appBuildId: APP_BUILD_ID,
+            requestId: REQUEST_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            safetyCopy: {kind: 'absent'},
+        },
+    }, APP_BUILD_ID, REQUEST_ID, WORKSPACE_EPOCH), true);
 });

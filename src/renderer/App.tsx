@@ -11,10 +11,16 @@ import {
     type ReactElement,
 } from 'react';
 
+import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
 import type {
     PlanProjection,
     PlanTaskProjection,
 } from '../shared/workspace-plan-contract';
+import type {
+    ApplicationBuildStatus,
+    MigrationRollbackSessionView,
+    MigrationSafetyCopyProjection,
+} from '../shared/workspace-migration-contract';
 import {
     isTaskOccurrenceWindow,
     type TaskOccurrenceId,
@@ -30,6 +36,11 @@ import {
     type WorkspaceNavigationId,
 } from './navigation';
 import { SetupDialog } from './SetupDialog';
+import {
+    MigrationMaintenanceSurface,
+    MigrationProtectionDialog,
+    type MigrationProtectionDialogMode,
+} from './MigrationRollbackSurface';
 import { setupStateFrom, type SetupState } from './setup-state';
 import {
     advanceTaskOccurrenceActionsState,
@@ -62,10 +73,19 @@ export type WorkspaceLoadResult =
         message: string;
     }>
     | Readonly<{
+        kind: 'migration-maintenance';
+        buildStatus: ApplicationBuildStatus | null;
+        session: MigrationRollbackSessionView;
+        problem: string | null;
+    }>
+    | Readonly<{
         kind: 'ready';
         setup: ResolvedSetupState;
         plan: PlanProjection | null;
         planProblem: string | null;
+        buildStatus: ApplicationBuildStatus | null;
+        migrationSafetyCopy: MigrationSafetyCopyProjection;
+        migrationProblem: string | null;
     }>;
 
 type AppState = Readonly<{ kind: 'loading' }> | WorkspaceLoadResult;
@@ -79,6 +99,7 @@ export type WorkspaceShellProps = Readonly<{
     taskActions: TaskActionPresentation;
     onNavigate(page: WorkspaceNavigationId): void;
     onCreateTask(): void;
+    onOpenDataProtection(): void;
     onOpenSetup(): void;
     onRetryPlan(): void;
 }>;
@@ -550,6 +571,134 @@ async function loadPlan(
     }
 }
 
+type MigrationProtectionLoad = Readonly<{
+    buildStatus: ApplicationBuildStatus | null;
+    migrationSafetyCopy: MigrationSafetyCopyProjection;
+    migrationProblem: string | null;
+}>;
+
+function rollbackRecoveryView(): MigrationRollbackSessionView {
+    return {
+        migrationRollbackSessionId: null,
+        operationId: null,
+        sessionVersion: null,
+        phase: 'recovery-required',
+        currentBuild: 'recovery-required',
+        binding: null,
+        previewToken: null,
+        retryCommand: null,
+        allowedActions: [],
+        outcome: null,
+        problem: {code: 'recovery-required'},
+    };
+}
+
+/**
+ * Loads build and migration-safety projections without blocking the PLAN core.
+ * @param {Window['courseFlow']} bridge Bounded preload bridge.
+ * @return {Promise<MigrationProtectionLoad>} Available projections and scoped problem.
+ */
+async function loadMigrationProtection(
+    bridge: Window['courseFlow'],
+): Promise<MigrationProtectionLoad> {
+    let buildStatus: ApplicationBuildStatus | null = null;
+    let migrationSafetyCopy: MigrationSafetyCopyProjection = {kind: 'unavailable'};
+    const problems: string[] = [];
+    try {
+        const outcome = await bridge.queryApplicationBuildStatus();
+        if (outcome.ok && outcome.value.kind === 'workspace.application-build-status') {
+            buildStatus = outcome.value.status;
+        }
+        else {
+            problems.push(outcome.ok ? '当前构建状态不可用。' : outcome.problem.message);
+        }
+    }
+    catch {
+        problems.push('无法读取当前构建状态。');
+    }
+    try {
+        const outcome = await bridge.queryMigrationSafetyCopy();
+        if (outcome.ok && outcome.value.kind === 'workspace.migration-safety-copy') {
+            migrationSafetyCopy = outcome.value.safetyCopy;
+        }
+        else {
+            problems.push(outcome.ok ? '迁移安全副本状态不可用。' : outcome.problem.message);
+        }
+    }
+    catch {
+        problems.push('无法读取迁移安全副本状态。');
+    }
+    return {
+        buildStatus,
+        migrationSafetyCopy,
+        migrationProblem: problems.length === 0 ? null : problems.join(' '),
+    };
+}
+
+function migrationRollbackSessionIdFrom(
+    problem: WorkspaceDataStatus,
+): string | null | undefined {
+    if (problem.kind !== 'recovery') {
+        return undefined;
+    }
+    const details = problem.problem.details;
+    const reason = 'reason' in details ? details.reason : null;
+    if (reason === 'migration-rollback-evidence') {
+        return null;
+    }
+    if (reason !== 'migration-rollback-pending') {
+        return undefined;
+    }
+    return 'migrationRollbackSessionId' in problem.problem.context
+        ? problem.problem.context.migrationRollbackSessionId
+        : null;
+}
+
+/**
+ * Loads the exclusive rollback route before any ordinary Workspace query.
+ * @param {Window['courseFlow']} bridge Bounded preload bridge.
+ * @param {string | null} migrationRollbackSessionId Exact session or recovery evidence.
+ * @return {Promise<Extract<WorkspaceLoadResult, {kind: 'migration-maintenance'}>>} Dedicated route.
+ */
+async function loadMigrationMaintenance(
+    bridge: Window['courseFlow'],
+    migrationRollbackSessionId: string | null,
+): Promise<Extract<WorkspaceLoadResult, Readonly<{kind: 'migration-maintenance'}>>> {
+    let buildStatus: ApplicationBuildStatus | null = null;
+    let session = rollbackRecoveryView();
+    const problems: string[] = [];
+    try {
+        const outcome = await bridge.queryApplicationBuildStatus();
+        if (outcome.ok && outcome.value.kind === 'workspace.application-build-status') {
+            buildStatus = outcome.value.status;
+        }
+        else {
+            problems.push(outcome.ok ? '当前构建状态不可用。' : outcome.problem.message);
+        }
+    }
+    catch {
+        problems.push('无法读取当前构建状态。');
+    }
+    try {
+        const outcome = await bridge.queryMigrationRollbackStatus(migrationRollbackSessionId);
+        if (outcome.ok && outcome.value.kind === 'workspace.migration-rollback-session') {
+            session = outcome.value.session;
+        }
+        else {
+            problems.push(outcome.ok ? '回退状态不可用。' : outcome.problem.message);
+        }
+    }
+    catch {
+        problems.push('无法读取迁移回退状态。');
+    }
+    return {
+        kind: 'migration-maintenance',
+        buildStatus,
+        session,
+        problem: problems.length === 0 ? null : problems.join(' '),
+    };
+}
+
 /**
  * Resolves startup through Bootstrap, SetupProjection, and the existing PLAN projection.
  *
@@ -565,6 +714,12 @@ export async function loadWorkspace(
             return { kind: 'problem', message: bootstrap.problem.message };
         }
         if (bootstrap.value.workspaceData.kind === 'recovery') {
+            const migrationRollbackSessionId = migrationRollbackSessionIdFrom(
+                bootstrap.value.workspaceData,
+            );
+            if (migrationRollbackSessionId !== undefined) {
+                return loadMigrationMaintenance(bridge, migrationRollbackSessionId);
+            }
             return {
                 kind: 'problem',
                 message: '本地数据需要恢复，当前无法打开工作区。',
@@ -577,7 +732,11 @@ export async function loadWorkspace(
             }
         }
 
-        const setupState = setupStateFrom(await bridge.querySetup());
+        const [setupOutcome, migrationProtection] = await Promise.all([
+            bridge.querySetup(),
+            loadMigrationProtection(bridge),
+        ]);
+        const setupState = setupStateFrom(setupOutcome);
         if (setupState.kind === 'problem') {
             return { kind: 'problem', message: setupState.message };
         }
@@ -589,6 +748,7 @@ export async function loadWorkspace(
             kind: 'ready',
             setup: setupState,
             ...await loadPlan(bridge, setupState.projection),
+            ...migrationProtection,
         };
     }
     catch {
@@ -609,10 +769,20 @@ export function App(): ReactElement {
     const [activePage, setActivePage] = useState<WorkspaceNavigationId>('today');
     const [setupOpen, setSetupOpen] = useState(false);
     const [setupEntryIntent, setSetupEntryIntent] = useState<'default' | 'task'>('default');
+    const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
+    const [migrationDialogMode, setMigrationDialogMode] = useState<MigrationProtectionDialogMode>(
+        'overview',
+    );
+    const [migrationRollbackPreview, setMigrationRollbackPreview] = useState<
+        MigrationRollbackSessionView | null
+    >(null);
+    const [migrationBusy, setMigrationBusy] = useState(false);
+    const [migrationActionProblem, setMigrationActionProblem] = useState<string | null>(null);
     const [taskActionState, setTaskActionState] = useState<TaskOccurrenceActionsState | null>(null);
     const [taskActionBusyItemId, setTaskActionBusyItemId] = useState<string | null>(null);
     const [taskActionProblem, setTaskActionProblem] = useState<string | null>(null);
     const returnFocusRef = useRef<HTMLElement | null>(null);
+    const migrationReturnFocusRef = useRef<HTMLElement | null>(null);
     const taskActionInFlightRef = useRef(false);
     const taskActionFocusRef = useRef<Readonly<{
         itemId: string;
@@ -626,6 +796,11 @@ export function App(): ReactElement {
         setTaskActionState(null);
         setTaskActionBusyItemId(null);
         setTaskActionProblem(null);
+        setMigrationDialogOpen(false);
+        setMigrationDialogMode('overview');
+        setMigrationRollbackPreview(null);
+        setMigrationBusy(false);
+        setMigrationActionProblem(null);
         setState({ kind: 'loading' });
         void loadWorkspace(window.courseFlow).then(result => {
             setState(result);
@@ -689,6 +864,185 @@ export function App(): ReactElement {
                 document.getElementById(PAGE_HEADING_IDS[activePage])?.focus();
             }
         });
+    };
+
+    const openDataProtection = (): void => {
+        if (state.kind !== 'ready') {
+            return;
+        }
+        migrationReturnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        setMigrationDialogMode('overview');
+        setMigrationRollbackPreview(null);
+        setMigrationActionProblem(state.migrationProblem);
+        setMigrationDialogOpen(true);
+    };
+
+    const closeDataProtection = (): void => {
+        if (migrationBusy) {
+            return;
+        }
+        setMigrationDialogOpen(false);
+        setMigrationDialogMode('overview');
+        setMigrationRollbackPreview(null);
+        const returnTarget = migrationReturnFocusRef.current;
+        globalThis.requestAnimationFrame(() => {
+            if (returnTarget?.isConnected) {
+                returnTarget.focus();
+            }
+        });
+    };
+
+    const previewMigrationRollback = (): void => {
+        if (migrationBusy || state.kind !== 'ready') {
+            return;
+        }
+        setMigrationBusy(true);
+        setMigrationActionProblem(null);
+        void window.courseFlow.previewMigrationRollback().then(outcome => {
+            if (!outcome.ok) {
+                setMigrationActionProblem(outcome.problem.message);
+                if (outcome.problem.dataEffect === 'unknown') {
+                    reload();
+                }
+                return;
+            }
+            if (outcome.value.kind !== 'workspace.migration-rollback-session'
+                || outcome.value.session.phase !== 'previewed') {
+                setMigrationActionProblem('Workspace 返回了意外的迁移回退预览。');
+                return;
+            }
+            setMigrationRollbackPreview(outcome.value.session);
+            setMigrationDialogMode('rollback-preview');
+        }).catch(() => {
+            setMigrationActionProblem('无法连接本地 Workspace；当前数据没有改变。');
+        }).finally(() => setMigrationBusy(false));
+    };
+
+    const deleteMigrationSafety = (): void => {
+        if (migrationBusy
+            || state.kind !== 'ready'
+            || state.migrationSafetyCopy.kind !== 'verified') {
+            return;
+        }
+        const safetyCopy = state.migrationSafetyCopy;
+        setMigrationBusy(true);
+        setMigrationActionProblem(null);
+        void window.courseFlow.deleteMigrationSafetyCopy({
+            commandId: globalThis.crypto.randomUUID(),
+            migrationSafetyCopyId: safetyCopy.migrationSafetyCopyId,
+            expectedCopyVersion: safetyCopy.copyVersion,
+            confirmationToken: safetyCopy.deleteConfirmationToken,
+        }).then(outcome => {
+            if (!outcome.ok) {
+                setMigrationActionProblem(outcome.problem.message);
+                if (outcome.problem.dataEffect === 'unknown') {
+                    reload();
+                }
+                return;
+            }
+            if (outcome.value.kind !== 'workspace.migration-safety-copy') {
+                setMigrationActionProblem('Workspace 返回了意外的迁移安全副本状态。');
+                return;
+            }
+            const nextSafetyCopy = outcome.value.safetyCopy;
+            setState(current => current.kind === 'ready'
+                ? {...current, migrationSafetyCopy: nextSafetyCopy}
+                : current);
+            setMigrationDialogMode('overview');
+            setMigrationActionProblem('迁移安全副本已删除。');
+        }).catch(() => {
+            setMigrationActionProblem('删除结果尚无法确认；请重新读取副本状态。');
+            reload();
+        }).finally(() => setMigrationBusy(false));
+    };
+
+    const confirmMigrationRollback = (): void => {
+        const preview = migrationRollbackPreview;
+        if (migrationBusy
+            || state.kind !== 'ready'
+            || preview?.phase !== 'previewed'
+            || !preview.migrationRollbackSessionId
+            || !preview.sessionVersion
+            || !preview.previewToken) {
+            return;
+        }
+        setMigrationBusy(true);
+        setMigrationActionProblem(null);
+        void window.courseFlow.confirmMigrationRollback({
+            commandId: globalThis.crypto.randomUUID(),
+            migrationRollbackSessionId: preview.migrationRollbackSessionId,
+            expectedSessionVersion: preview.sessionVersion,
+            previewToken: preview.previewToken,
+        }).then(outcome => {
+            if (!outcome.ok) {
+                setMigrationActionProblem(outcome.problem.message);
+                if (outcome.problem.dataEffect === 'unknown') {
+                    reload();
+                }
+                return;
+            }
+            if (outcome.value.kind !== 'workspace.migration-rollback-session') {
+                setMigrationActionProblem('Workspace 返回了意外的迁移回退状态。');
+                return;
+            }
+            setMigrationDialogOpen(false);
+            reload();
+        }).catch(() => {
+            setMigrationActionProblem('确认结果尚无法确认；CourseFlow 将重新检查回退状态。');
+            reload();
+        }).finally(() => setMigrationBusy(false));
+    };
+
+    const runMigrationMaintenanceAction = (
+        action: 'cancel-as-source' | 'continue-as-target',
+    ): void => {
+        if (migrationBusy
+            || state.kind !== 'migration-maintenance'
+            || !state.session.migrationRollbackSessionId
+            || !state.session.sessionVersion) {
+            return;
+        }
+        const retryCommand = state.session.retryCommand?.action === action
+            ? state.session.retryCommand
+            : null;
+        const command = {
+            commandId: retryCommand?.commandId ?? globalThis.crypto.randomUUID(),
+            migrationRollbackSessionId: state.session.migrationRollbackSessionId,
+            expectedSessionVersion: retryCommand?.expectedSessionVersion
+                ?? state.session.sessionVersion,
+        };
+        setMigrationBusy(true);
+        setMigrationActionProblem(null);
+        const request = action === 'cancel-as-source'
+            ? window.courseFlow.cancelMigrationRollback(command)
+            : window.courseFlow.continueMigrationRollback(command);
+        void request.then(outcome => {
+            if (!outcome.ok) {
+                setMigrationActionProblem(outcome.problem.message);
+                if (outcome.problem.dataEffect === 'unknown') {
+                    reload();
+                }
+                return;
+            }
+            if (outcome.value.kind !== 'workspace.migration-rollback-session') {
+                setMigrationActionProblem('Workspace 返回了意外的迁移回退状态。');
+                return;
+            }
+            if (outcome.value.session.phase === 'succeeded'
+                || outcome.value.session.phase === 'cancelled') {
+                reload();
+                return;
+            }
+            const nextSession = outcome.value.session;
+            setState(current => current.kind === 'migration-maintenance'
+                ? {...current, session: nextSession}
+                : current);
+        }).catch(() => {
+            setMigrationActionProblem('操作结果尚无法确认；请重新检查迁移回退状态。');
+            reload();
+        }).finally(() => setMigrationBusy(false));
     };
 
     const refreshPlan = useCallback((setup: SetupProjection): void => {
@@ -878,6 +1232,23 @@ export function App(): ReactElement {
         );
     }
 
+    if (state.kind === 'migration-maintenance') {
+        return (
+            <div className="startup-frame">
+                <WindowTitlebar />
+                <MigrationMaintenanceSurface
+                    buildStatus={state.buildStatus}
+                    busy={migrationBusy}
+                    onCancel={() => runMigrationMaintenanceAction('cancel-as-source')}
+                    onContinue={() => runMigrationMaintenanceAction('continue-as-target')}
+                    onRetry={reload}
+                    problem={migrationActionProblem ?? state.problem}
+                    session={state.session}
+                />
+            </div>
+        );
+    }
+
     if (state.kind === 'problem') {
         return (
             <div className="startup-frame">
@@ -935,6 +1306,7 @@ export function App(): ReactElement {
                 dataMode={state.setup.dataMode}
                 onNavigate={setActivePage}
                 onCreateTask={openTaskSetup}
+                onOpenDataProtection={openDataProtection}
                 onOpenSetup={openSetup}
                 onRetryPlan={() => refreshPlan(state.setup.projection)}
                 plan={state.plan}
@@ -948,6 +1320,23 @@ export function App(): ReactElement {
                 onProjection={acceptSetupProjection}
                 open={setupOpen}
                 state={state.setup}
+            />
+            <MigrationProtectionDialog
+                buildStatus={state.buildStatus}
+                busy={migrationBusy}
+                mode={migrationDialogMode}
+                onClose={closeDataProtection}
+                onConfirmDelete={deleteMigrationSafety}
+                onConfirmRollback={confirmMigrationRollback}
+                onModeChange={mode => {
+                    setMigrationDialogMode(mode);
+                    setMigrationActionProblem(null);
+                }}
+                onPreviewRollback={previewMigrationRollback}
+                open={migrationDialogOpen}
+                problem={migrationActionProblem}
+                rollbackPreview={migrationRollbackPreview}
+                safetyCopy={state.migrationSafetyCopy}
             />
         </>
     );
@@ -1034,6 +1423,12 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
                     {setupIncomplete ? (
                         <span className="setup-status-text">设置未完成</span>
                     ) : null}
+                    <button
+                        aria-label="打开数据与备份"
+                        className="settings-button"
+                        onClick={props.onOpenDataProtection}
+                        type="button"
+                    >数据与备份</button>
                     <button
                         aria-label="打开设置"
                         className="settings-button"

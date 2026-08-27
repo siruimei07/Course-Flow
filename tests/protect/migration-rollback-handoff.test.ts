@@ -816,6 +816,12 @@ test('durable continue or cancel command locks recovery to its exact actor after
             assert.equal(target.phase, isContinue ? 'completing' : 'cancelling');
             assert.deepEqual(source.allowedActions, isContinue ? [] : ['cancel-as-source']);
             assert.deepEqual(target.allowedActions, isContinue ? ['continue-as-target'] : []);
+            assert.deepEqual(source.retryCommand, {
+                action,
+                commandId: SECOND_COMMAND_ID,
+                expectedSessionVersion: '4',
+            });
+            assert.deepEqual(target.retryCommand, source.retryCommand);
 
             const opposite = isContinue
                 ? cancelMigrationRollbackHandoff(

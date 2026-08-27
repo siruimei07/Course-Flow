@@ -68,7 +68,7 @@ function setupOutcome(projection: SetupProjection = setup): WorkspaceSetupOutcom
     };
 }
 
-test('the shell exposes five ordered destinations and a separate Settings action', () => {
+test('the shell exposes five destinations plus separate data-protection and Settings actions', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'calendar',
         dataMode: 'ready',
@@ -77,6 +77,7 @@ test('the shell exposes five ordered destinations and a separate Settings action
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenDataProtection: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions,
@@ -89,6 +90,8 @@ test('the shell exposes five ordered destinations and a separate Settings action
     assert.match(html, /aria-label="主导航"/);
     assert.match(html, /aria-current="page"[^>]*>Calendar/);
     assert.match(html, /aria-label="打开设置"/);
+    assert.match(html, /aria-label="打开数据与备份"/);
+    assert.ok(html.indexOf('打开数据与备份') < html.indexOf('打开设置'));
     assert.match(html, /设置未完成/);
     assert.doesNotMatch(html, /Grade|Attendance|Protect|即将推出/);
 
@@ -100,6 +103,7 @@ test('the shell exposes five ordered destinations and a separate Settings action
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenDataProtection: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions: { ...taskActions, writable: false },
@@ -116,6 +120,7 @@ test('the title region exposes three independent window controls outside its dra
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenDataProtection: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions,
@@ -165,6 +170,7 @@ test('Task feedback reserves scroll space while keeping the restored control cen
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenDataProtection: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions: {
@@ -282,4 +288,93 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
         assert.equal(result.plan, null);
         assert.match(result.planProblem ?? '', /无法读取统一计划投影/);
     }
+});
+
+test('TEST-SHELL-005 routes rollback evidence to the dedicated recovery surface', async () => {
+    const calls: string[] = [];
+    const bridge = {
+        async query() {
+            calls.push('query');
+            return {
+                ok: true,
+                value: {
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    requestId: 'bootstrap-query',
+                    workspaceProcess: 'ready',
+                    sqliteVersion: '3.53.1',
+                    dataRootClass: 'verified-local',
+                    workspaceEpoch: '11111111-1111-4111-8111-111111111111',
+                    workspaceData: {
+                        kind: 'recovery',
+                        problem: {
+                            code: 'recovery-required',
+                            scope: 'workspace',
+                            dataEffect: 'unchanged',
+                            affectedCapabilities: ['workspace.read', 'workspace.write'],
+                            allowedActions: [],
+                            context: {},
+                            details: {reason: 'migration-rollback-evidence'},
+                        },
+                    },
+                },
+            };
+        },
+        async queryApplicationBuildStatus() {
+            calls.push('queryApplicationBuildStatus');
+            return {
+                ok: false,
+                problem: {
+                    code: 'recovery-required',
+                    message: 'Build status unavailable.',
+                    requestId: 'build-status',
+                    appBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    workspaceEpoch: '11111111-1111-4111-8111-111111111111',
+                    dataEffect: 'unchanged',
+                },
+            };
+        },
+        async queryMigrationRollbackStatus(sessionId: string | null) {
+            calls.push(`queryMigrationRollbackStatus:${String(sessionId)}`);
+            return {
+                ok: true,
+                value: {
+                    kind: 'workspace.migration-rollback-session',
+                    protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                    appBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                    requestId: 'rollback-status',
+                    workspaceEpoch: '11111111-1111-4111-8111-111111111111',
+                    session: {
+                        migrationRollbackSessionId: null,
+                        operationId: null,
+                        sessionVersion: null,
+                        phase: 'recovery-required',
+                        currentBuild: 'recovery-required',
+                        binding: null,
+                        previewToken: null,
+                        allowedActions: [],
+                        outcome: null,
+                        problem: {code: 'recovery-required'},
+                    },
+                },
+            };
+        },
+        async querySetup() {
+            calls.push('querySetup');
+            return setupOutcome();
+        },
+    } as unknown as Window['courseFlow'];
+
+    const result = await loadWorkspace(bridge);
+    assert.equal(result.kind as string, 'migration-maintenance');
+    const maintenance = result as unknown as Readonly<{
+        kind: string;
+        session: Readonly<{phase: string}>;
+    }>;
+    assert.equal(maintenance.session.phase, 'recovery-required');
+    assert.deepEqual(calls, [
+        'query',
+        'queryApplicationBuildStatus',
+        'queryMigrationRollbackStatus:null',
+    ]);
 });

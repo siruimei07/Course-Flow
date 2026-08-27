@@ -127,6 +127,31 @@ export type ConsumeMigrationSafetyCopyOptions = Readonly<{
         | 'migration-safety-consume.after-database-delete') => void;
 }>;
 
+export type DeleteMigrationSafetyCopyOptions = Readonly<{
+    failpoint?: (point: 'migration-safety-delete.before-quarantine') => void;
+}>;
+
+/**
+ * Binds an explicit delete confirmation to one exact registered copy version.
+ * @param {string} migrationSafetyCopyId Exact copy identity shown to the user.
+ * @param {string} metadataVersion Exact freshly verified metadata digest.
+ * @return {string} Versioned confirmation token for DeleteMigrationSafetyCopy.
+ */
+export function migrationSafetyCopyDeleteConfirmationToken(
+    migrationSafetyCopyId: string,
+    metadataVersion: string,
+): string {
+    if (!isCanonicalUuid(migrationSafetyCopyId) || !DIGEST_PATTERN.test(metadataVersion)) {
+        throw new TypeError('Migration safety delete preview identity is invalid');
+    }
+    return createHash('sha256').update(canonicalJson(Object.freeze({
+        schema: 'courseflow-migration-safety-delete-preview-v1',
+        migrationSafetyCopyId,
+        metadataVersion,
+        impact: 'exact-rollback-capability-will-be-lost',
+    })), 'utf8').digest('hex');
+}
+
 export type EnsureMigrationSafetyCopyInput = Readonly<{
     dataSlotsRoot: string;
     sourceDatabase: DatabaseSync;
@@ -925,5 +950,67 @@ export function inspectMigrationSafetyCopy(
     }
     catch {
         return Object.freeze({kind: 'unavailable' as const});
+    }
+}
+
+/**
+ * Deletes the one still-registered copy only after its identity is freshly revalidated.
+ * A failure before destructive cleanup restores the registered directory and never returns success.
+ * @param {string} dataSlotsRoot Trusted DATA owner root.
+ * @param {string} migrationSafetyCopyId Exact copy identity observed by the caller.
+ * @param {string} expectedMetadataDigest Exact copy version observed by the caller.
+ * @param {string} confirmationToken Exact impact-confirmation token.
+ * @param {DeleteMigrationSafetyCopyOptions} options Stable pre-delete failpoint.
+ * @return {void}
+ */
+export function deleteMigrationSafetyCopy(
+    dataSlotsRoot: string,
+    migrationSafetyCopyId: string,
+    expectedMetadataDigest: string,
+    confirmationToken: string,
+    options: DeleteMigrationSafetyCopyOptions = {},
+): void {
+    if (!isCanonicalUuid(migrationSafetyCopyId)
+        || !DIGEST_PATTERN.test(expectedMetadataDigest)
+        || !DIGEST_PATTERN.test(confirmationToken)) {
+        throw new TypeError('Migration safety delete identity is invalid');
+    }
+    const copies = readFinalCopies(dataSlotsRoot);
+    if (copies.length !== 1
+        || copies[0]!.metadata.migrationSafetyCopyId !== migrationSafetyCopyId
+        || copies[0]!.metadata.metadataDigest !== expectedMetadataDigest) {
+        throw new Error('Migration safety copy identity changed');
+    }
+    if (migrationSafetyCopyDeleteConfirmationToken(
+        migrationSafetyCopyId,
+        expectedMetadataDigest,
+    ) !== confirmationToken) {
+        throw new Error('Migration safety delete confirmation changed');
+    }
+    const finalName = `${FINAL_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
+    const discardName = `${DISCARD_DIRECTORY_PREFIX}${migrationSafetyCopyId}`;
+    if (plainChildDirectoryExists(dataSlotsRoot, discardName)) {
+        throw new Error('Migration safety delete evidence is ambiguous');
+    }
+    options.failpoint?.('migration-safety-delete.before-quarantine');
+    quarantineSnapshotDirectory(dataSlotsRoot, finalName, discardName);
+    try {
+        while (plainChildDirectoryExists(dataSlotsRoot, discardName)) {
+            deleteQuarantinedSnapshotDirectory(
+                dataSlotsRoot,
+                discardName,
+                [DATABASE_FILE_NAME, METADATA_FILE_NAME],
+            );
+        }
+    }
+    catch (error) {
+        try {
+            verifyCopyDirectory(dataSlotsRoot, discardName, migrationSafetyCopyId);
+            quarantineSnapshotDirectory(dataSlotsRoot, discardName, finalName);
+        }
+        catch {
+            // The operation remains failed and inspect will stop if cleanup evidence is incomplete.
+        }
+        throw error;
     }
 }

@@ -59,6 +59,19 @@ import type {
   CreateTermCommand,
   UpdateTermEndDateCommand,
 } from './shared/workspace-term-contract';
+import {
+  makeApplicationBuildStatusRequest,
+  makeCancelMigrationRollbackRequest,
+  makeConfirmMigrationRollbackRequest,
+  makeContinueMigrationRollbackRequest,
+  makeDeleteMigrationSafetyCopyRequest,
+  makeMigrationRollbackPreviewRequest,
+  makeMigrationRollbackStatusRequest,
+  makeMigrationSafetyCopyQueryRequest,
+  type ConfirmMigrationRollbackCommand,
+  type DeleteMigrationSafetyCopyCommand,
+  type MigrationRollbackActionCommand,
+} from './shared/workspace-migration-contract';
 import type {
   CreateHolidayRangeCommand,
   DeleteHolidayRangeCommand,
@@ -146,6 +159,10 @@ async function invokeSetup(
     || request.kind === 'workspace.plan.query'
     || request.kind === 'workspace.protection.query'
     || request.kind === 'workspace.restore.query'
+    || request.kind === 'workspace.application-build.query'
+    || request.kind === 'workspace.migration-safety.query'
+    || request.kind === 'workspace.migration-rollback.preview'
+    || request.kind === 'workspace.migration-rollback.query'
     || request.kind === 'workspace.task-series.query'
     || request.kind === 'workspace.task-occurrence.preview'
     || request.kind === 'workspace.meeting-series.query'
@@ -191,6 +208,126 @@ function initializeWorkspace(): Promise<WorkspaceSetupOutcome> {
 function querySetup(): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeSetupQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Reads the exact local build descriptor and rollback classification.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated ApplicationBuildStatus outcome.
+ */
+function queryApplicationBuildStatus(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeApplicationBuildStatusRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Reads the registered migration safety copy without exposing its path.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated safety-copy projection.
+ */
+function queryMigrationSafetyCopy(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeMigrationSafetyCopyQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Explicitly deletes one exact observed migration safety copy.
+ * @param {DeleteMigrationSafetyCopyCommand} command Version-bound delete command.
+ * @return {Promise<WorkspaceSetupOutcome>} Absent projection or structured problem.
+ */
+function deleteMigrationSafetyCopy(
+  command: DeleteMigrationSafetyCopyCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeDeleteMigrationSafetyCopyRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
+  ));
+}
+
+/**
+ * Creates a rollback impact preview bound to current DATA, Library, and builds.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated rollback preview.
+ */
+function previewMigrationRollback(): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeMigrationRollbackPreviewRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+  ));
+}
+
+/**
+ * Reads one exact rollback maintenance session or the current recovery state.
+ * @param {string | null} migrationRollbackSessionId Exact session or current session.
+ * @return {Promise<WorkspaceSetupOutcome>} Validated rollback session.
+ */
+function queryMigrationRollbackStatus(
+  migrationRollbackSessionId: string | null,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeMigrationRollbackStatusRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      migrationRollbackSessionId,
+    )
+  ));
+}
+
+/**
+ * Confirms an unchanged rollback preview.
+ * @param {ConfirmMigrationRollbackCommand} command Preview-bound confirmation.
+ * @return {Promise<WorkspaceSetupOutcome>} Durable maintenance status.
+ */
+function confirmMigrationRollback(
+  command: ConfirmMigrationRollbackCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeConfirmMigrationRollbackRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
+  ));
+}
+
+/**
+ * Cancels the rollback as the exact source build.
+ * @param {MigrationRollbackActionCommand} command Version-bound source action.
+ * @return {Promise<WorkspaceSetupOutcome>} Terminal or pending session.
+ */
+function cancelMigrationRollback(
+  command: MigrationRollbackActionCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeCancelMigrationRollbackRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
+  ));
+}
+
+/**
+ * Continues the rollback as the exact target build.
+ * @param {MigrationRollbackActionCommand} command Version-bound target action.
+ * @return {Promise<WorkspaceSetupOutcome>} Terminal or pending session.
+ */
+function continueMigrationRollback(
+  command: MigrationRollbackActionCommand,
+): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeContinueMigrationRollbackRequest(
+      requestId,
+      __COURSEFLOW_APP_BUILD_ID__,
+      epoch,
+      command,
+    )
   ));
 }
 
@@ -658,6 +795,14 @@ contextBridge.exposeInMainWorld(
     query: queryWorkspaceStatus,
     initialize: initializeWorkspace,
     querySetup,
+    queryApplicationBuildStatus,
+    queryMigrationSafetyCopy,
+    deleteMigrationSafetyCopy,
+    previewMigrationRollback,
+    queryMigrationRollbackStatus,
+    confirmMigrationRollback,
+    cancelMigrationRollback,
+    continueMigrationRollback,
     queryDataProtection,
     configureBackupDestination,
     startRestoreSession,

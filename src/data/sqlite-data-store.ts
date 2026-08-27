@@ -207,9 +207,12 @@ import {
 
 export {
     consumeMigrationSafetyCopyAfterRollback,
+    deleteMigrationSafetyCopy,
     inspectMigrationSafetyCopy,
+    migrationSafetyCopyDeleteConfirmationToken,
     stageMigrationSafetyCopyForRollback,
     type ConsumeMigrationSafetyCopyOptions,
+    type DeleteMigrationSafetyCopyOptions,
     type MigrationSafetyCopyMetadataV1,
     type MigrationSafetyCopyStatus,
     type MigrationRollbackArtifactV1,

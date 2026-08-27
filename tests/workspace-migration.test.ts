@@ -21,16 +21,31 @@ import {
     COURSEFLOW_APPLICATION_ID,
     migrateLevel0To1,
 } from '../src/data/schema';
-import {inspectMigrationSafetyCopy} from '../src/data/sqlite-data-store';
+import {
+    deleteMigrationSafetyCopy,
+    inspectMigrationSafetyCopy,
+    migrationSafetyCopyDeleteConfirmationToken,
+} from '../src/data/sqlite-data-store';
 import {observeRestoreDataSlot, stageRestoreDataSlot} from '../src/platform/restore-activation-files';
 import {
     armMigrationRollbackHandoff,
+    cancelMigrationRollbackHandoff,
     continueMigrationRollbackHandoff,
     createMigrationRollbackHandoff,
     prepareMigrationRollbackHandoff,
     type MigrationRollbackHandoffFacts,
 } from '../src/protect/migration-rollback-handoff';
 import {makeBootstrapRequest} from '../src/shared/bootstrap-contract';
+import {
+    makeApplicationBuildStatusRequest,
+    makeCancelMigrationRollbackRequest,
+    makeConfirmMigrationRollbackRequest,
+    makeContinueMigrationRollbackRequest,
+    makeDeleteMigrationSafetyCopyRequest,
+    makeMigrationRollbackPreviewRequest,
+    makeMigrationRollbackStatusRequest,
+    makeMigrationSafetyCopyQueryRequest,
+} from '../src/shared/workspace-migration-contract';
 import {
     makeInitializeWorkspaceRequest,
     makeRestoreSessionQueryRequest,
@@ -64,7 +79,7 @@ const ROLLBACK_TARGET = Object.freeze({
     ] as const),
 });
 
-function createLevel1Workspace(t: test.TestContext): string {
+function createLevel1Workspace(): string {
     const dataSlotsRoot = mkdtempSync(path.join(tmpdir(), 'courseflow-workspace-migration-'));
     const active = path.join(dataSlotsRoot, 'active');
     mkdirSync(active);
@@ -97,7 +112,6 @@ function createLevel1Workspace(t: test.TestContext): string {
     finally {
         database.close();
     }
-    t.after(() => rmSync(dataSlotsRoot, {recursive: true, force: true}));
     return dataSlotsRoot;
 }
 
@@ -215,7 +229,7 @@ async function bootstrap(application: WorkspaceApplication, appBuildId: string) 
 }
 
 test('TEST-WORKSPACE-007: Workspace binds migration safety metadata to its exact build', async t => {
-    const dataSlotsRoot = createLevel1Workspace(t);
+    const dataSlotsRoot = createLevel1Workspace();
 
     const application = await WorkspaceApplication.open(dataSlotsRoot, SOURCE_APP_BUILD_ID, {
         migrationRollbackTarget: ROLLBACK_TARGET,
@@ -226,7 +240,10 @@ test('TEST-WORKSPACE-007: Workspace binds migration safety metadata to its exact
             }
         },
     });
-    t.after(() => application.close());
+    t.after(async () => {
+        await application.close();
+        rmSync(dataSlotsRoot, {recursive: true, force: true});
+    });
 
     const status = inspectMigrationSafetyCopy(dataSlotsRoot);
     assert.equal(status.kind, 'verified');
@@ -235,6 +252,316 @@ test('TEST-WORKSPACE-007: Workspace binds migration safety metadata to its exact
     }
     assert.equal(status.metadata.createdByAppBuildId, SOURCE_APP_BUILD_ID);
     assert.deepEqual(status.metadata.rollbackTarget, ROLLBACK_TARGET);
+});
+
+test('TEST-WORKSPACE-007/PROTECT-007: Workspace owns preview, maintenance, and exact source cancel', async t => {
+    const dataSlotsRoot = createLevel1Workspace();
+    const activityControlRoot = `${dataSlotsRoot}-activity-control`;
+    mkdirSync(activityControlRoot);
+    const applicationOptions = {
+        activityControlRoot,
+        migrationRollbackTarget: ROLLBACK_TARGET,
+        applicationRelease: Object.freeze({
+            releaseVersion: '0.0.0-development-source',
+            tag: 'development-source',
+        }),
+        clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+    } as const;
+    let application = await WorkspaceApplication.open(
+        dataSlotsRoot,
+        SOURCE_APP_BUILD_ID,
+        applicationOptions,
+    );
+    t.after(async () => {
+        await application.close();
+        rmSync(dataSlotsRoot, {recursive: true, force: true});
+        rmSync(activityControlRoot, {recursive: true, force: true});
+    });
+    const initial = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    assert.equal(initial.workspaceData.kind, 'ready');
+
+    const build = await application.handle(makeApplicationBuildStatusRequest(
+        'build-status',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(build.ok, true);
+    if (!build.ok || build.value.kind !== 'workspace.application-build-status') {
+        throw new Error('Expected ApplicationBuildStatus');
+    }
+    assert.deepEqual(build.value.status.processMatch, {
+        main: 'exact',
+        renderer: 'exact',
+        workspace: 'exact',
+        allExact: true,
+    });
+    assert.equal(build.value.status.descriptor.appBuildId, SOURCE_APP_BUILD_ID);
+    assert.deepEqual(build.value.status.descriptor.rollbackTargets, [ROLLBACK_TARGET]);
+    assert.deepEqual(build.value.status.rollback, {kind: 'clear'});
+
+    const safety = await application.handle(makeMigrationSafetyCopyQueryRequest(
+        'safety-status',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(safety.ok, true);
+    if (!safety.ok || safety.value.kind !== 'workspace.migration-safety-copy'
+        || safety.value.safetyCopy.kind !== 'verified') {
+        throw new Error('Expected a verified MigrationSafetyCopy projection');
+    }
+    assert.equal(safety.value.safetyCopy.sourceSchemaLevel, '1');
+    assert.equal(safety.value.safetyCopy.target.appBuildId, TARGET_APP_BUILD_ID);
+
+    const preview = await application.handle(makeMigrationRollbackPreviewRequest(
+        'rollback-preview',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(preview.ok, true);
+    if (!preview.ok || preview.value.kind !== 'workspace.migration-rollback-session'
+        || preview.value.session.phase !== 'previewed') {
+        throw new Error('Expected a MigrationRollback preview');
+    }
+    const previewSession = preview.value.session;
+    assert.deepEqual(previewSession.binding?.currentLibrary, {kind: 'absent'});
+    assert.equal(previewSession.binding?.currentData.schemaLevel, '16');
+    assert.equal(previewSession.binding?.safetyCopy.migrationSafetyCopyId,
+        safety.value.safetyCopy.migrationSafetyCopyId);
+
+    const blockedDelete = await application.handle(makeDeleteMigrationSafetyCopyRequest(
+        'blocked-safety-delete',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: '88888888-8888-4888-8888-888888888888',
+            migrationSafetyCopyId: safety.value.safetyCopy.migrationSafetyCopyId,
+            expectedCopyVersion: safety.value.safetyCopy.copyVersion,
+            confirmationToken: safety.value.safetyCopy.deleteConfirmationToken,
+        },
+    ));
+    assert.equal(blockedDelete.ok, false);
+    assert.equal(blockedDelete.ok ? null : blockedDelete.problem.code, 'operation-in-progress');
+
+    const confirmed = await application.handle(makeConfirmMigrationRollbackRequest(
+        'rollback-confirm',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: MIGRATION_ROLLBACK_CONFIRM_COMMAND_ID,
+            migrationRollbackSessionId: previewSession.migrationRollbackSessionId!,
+            expectedSessionVersion: previewSession.sessionVersion!,
+            previewToken: previewSession.previewToken!,
+        },
+    ));
+    assert.equal(confirmed.ok, true);
+    if (!confirmed.ok || confirmed.value.kind !== 'workspace.migration-rollback-session') {
+        throw new Error('Expected a prepared MigrationRollback handoff');
+    }
+    assert.equal(confirmed.value.session.phase, 'awaiting-target-build');
+    assert.deepEqual(confirmed.value.session.allowedActions, ['cancel-as-source']);
+
+    const ordinary = await application.handle(makeInitializeWorkspaceRequest(
+        'blocked-ordinary',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(ordinary.ok, false);
+    assert.equal(ordinary.ok ? null : ordinary.problem.code, 'stale-workspace');
+
+    const maintenance = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    assert.notEqual(maintenance.workspaceEpoch, initial.workspaceEpoch);
+    assert.equal(maintenance.workspaceData.kind, 'recovery');
+
+    const cancelCommand = Object.freeze({
+        commandId: '77777777-7777-4777-8777-777777777777',
+        migrationRollbackSessionId: confirmed.value.session.migrationRollbackSessionId!,
+        expectedSessionVersion: confirmed.value.session.sessionVersion!,
+    });
+    await assert.rejects(
+        cancelMigrationRollbackHandoff(
+            activityControlRoot,
+            dataSlotsRoot,
+            Object.freeze({
+                action: 'cancel-as-source' as const,
+                ...cancelCommand,
+                currentAppBuildId: SOURCE_APP_BUILD_ID,
+            }),
+            Object.freeze({
+                async reopen(): Promise<void> {},
+                async libraryReconcile(): Promise<void> {},
+                async flow00(): Promise<void> {},
+            }),
+            Object.freeze({
+                failpoint(point): void {
+                    if (point === 'handoff.command-cancel.after-publish') {
+                        throw new Error('lost source-cancel response');
+                    }
+                },
+            }),
+        ),
+        /completion-pending/,
+    );
+    await application.close();
+    application = await WorkspaceApplication.open(
+        dataSlotsRoot,
+        SOURCE_APP_BUILD_ID,
+        applicationOptions,
+    );
+    const restartedMaintenance = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    const retryStatus = await application.handle(makeMigrationRollbackStatusRequest(
+        'rollback-retry-status',
+        SOURCE_APP_BUILD_ID,
+        restartedMaintenance.workspaceEpoch,
+        cancelCommand.migrationRollbackSessionId,
+    ));
+    assert.equal(retryStatus.ok, true);
+    if (!retryStatus.ok || retryStatus.value.kind !== 'workspace.migration-rollback-session') {
+        throw new Error('Expected durable source-cancel retry command');
+    }
+    assert.deepEqual(retryStatus.value.session.retryCommand, {
+        action: 'cancel-as-source',
+        commandId: cancelCommand.commandId,
+        expectedSessionVersion: cancelCommand.expectedSessionVersion,
+    });
+
+    const cancelled = await application.handle(makeCancelMigrationRollbackRequest(
+        'rollback-cancel',
+        SOURCE_APP_BUILD_ID,
+        restartedMaintenance.workspaceEpoch,
+        cancelCommand,
+    ));
+    assert.equal(cancelled.ok, true);
+    if (!cancelled.ok || cancelled.value.kind !== 'workspace.migration-rollback-session') {
+        throw new Error('Expected exact source cancellation');
+    }
+    assert.equal(cancelled.value.session.phase, 'cancelled');
+    assert.equal(cancelled.value.session.outcome, 'cancelled');
+
+    const reopened = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    assert.equal(reopened.workspaceData.kind, 'ready');
+    assert.equal(inspectMigrationSafetyCopy(dataSlotsRoot).kind, 'verified');
+});
+
+test('TEST-WORKSPACE-007: changed preview facts resume ordinary DATA without partial maintenance', async t => {
+    const dataSlotsRoot = createLevel1Workspace();
+    const activityControlRoot = `${dataSlotsRoot}-activity-control`;
+    mkdirSync(activityControlRoot);
+    const application = await WorkspaceApplication.open(dataSlotsRoot, SOURCE_APP_BUILD_ID, {
+        activityControlRoot,
+        migrationRollbackTarget: ROLLBACK_TARGET,
+        clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+    });
+    t.after(async () => {
+        await application.close();
+        rmSync(dataSlotsRoot, {recursive: true, force: true});
+        rmSync(activityControlRoot, {recursive: true, force: true});
+    });
+    const initial = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    const safetyStatus = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(safetyStatus.kind, 'verified');
+    if (safetyStatus.kind !== 'verified') {
+        throw new Error('Expected a migration safety copy');
+    }
+    const preview = await application.handle(makeMigrationRollbackPreviewRequest(
+        'stale-preview',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(preview.ok, true);
+    if (!preview.ok || preview.value.kind !== 'workspace.migration-rollback-session') {
+        throw new Error('Expected a rollback preview');
+    }
+    deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safetyStatus.metadata.migrationSafetyCopyId,
+        safetyStatus.metadata.metadataDigest,
+        migrationSafetyCopyDeleteConfirmationToken(
+            safetyStatus.metadata.migrationSafetyCopyId,
+            safetyStatus.metadata.metadataDigest,
+        ),
+    );
+    const confirmed = await application.handle(makeConfirmMigrationRollbackRequest(
+        'stale-confirm',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: '99999999-9999-4999-8999-999999999999',
+            migrationRollbackSessionId: preview.value.session.migrationRollbackSessionId!,
+            expectedSessionVersion: preview.value.session.sessionVersion!,
+            previewToken: preview.value.session.previewToken!,
+        },
+    ));
+    assert.equal(confirmed.ok, false);
+    assert.equal(confirmed.ok ? null : confirmed.problem.code, 'conflict');
+    assert.equal(confirmed.ok ? null : confirmed.problem.dataEffect, 'unchanged');
+
+    const ordinary = await application.handle(makeInitializeWorkspaceRequest(
+        'ordinary-after-stale-preview',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(ordinary.ok, true);
+    const reopened = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    assert.equal(reopened.workspaceData.kind, 'ready');
+});
+
+test('TEST-WORKSPACE-007: explicit safety deletion is confirmation-bound and replay-safe', async t => {
+    const dataSlotsRoot = createLevel1Workspace();
+    const activityControlRoot = `${dataSlotsRoot}-activity-control`;
+    mkdirSync(activityControlRoot);
+    const application = await WorkspaceApplication.open(dataSlotsRoot, SOURCE_APP_BUILD_ID, {
+        activityControlRoot,
+        migrationRollbackTarget: ROLLBACK_TARGET,
+        clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+    });
+    t.after(async () => {
+        await application.close();
+        rmSync(dataSlotsRoot, {recursive: true, force: true});
+        rmSync(activityControlRoot, {recursive: true, force: true});
+    });
+    const initial = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    const safety = await application.handle(makeMigrationSafetyCopyQueryRequest(
+        'delete-safety-query',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(safety.ok, true);
+    if (!safety.ok || safety.value.kind !== 'workspace.migration-safety-copy'
+        || safety.value.safetyCopy.kind !== 'verified') {
+        throw new Error('Expected a verified safety copy');
+    }
+    const command = Object.freeze({
+        commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        migrationSafetyCopyId: safety.value.safetyCopy.migrationSafetyCopyId,
+        expectedCopyVersion: safety.value.safetyCopy.copyVersion,
+        confirmationToken: safety.value.safetyCopy.deleteConfirmationToken,
+    });
+    const deleted = await application.handle(makeDeleteMigrationSafetyCopyRequest(
+        'delete-safety',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+        command,
+    ));
+    assert.equal(deleted.ok, true);
+    assert.deepEqual(deleted.ok ? deleted.value : null, {
+        kind: 'workspace.migration-safety-copy',
+        protocolVersion: 2,
+        appBuildId: SOURCE_APP_BUILD_ID,
+        requestId: 'delete-safety',
+        workspaceEpoch: initial.workspaceEpoch,
+        safetyCopy: {kind: 'absent'},
+    });
+
+    const replay = await application.handle(makeDeleteMigrationSafetyCopyRequest(
+        'delete-safety-replay',
+        SOURCE_APP_BUILD_ID,
+        initial.workspaceEpoch,
+        command,
+    ));
+    assert.equal(replay.ok, true);
+    assert.deepEqual(replay.ok && replay.value.kind === 'workspace.migration-safety-copy'
+        ? replay.value.safetyCopy
+        : null, {kind: 'absent'});
 });
 
 test('TEST-WORKSPACE-005/007: pre-DATA boot classifies rollback builds without physical continuation', async t => {
@@ -309,6 +636,31 @@ test('TEST-WORKSPACE-005/007: pre-DATA boot classifies rollback builds without p
         ));
         assert.equal(restore.ok, false);
         assert.equal(restore.ok ? null : restore.problem.code, 'operation-in-progress');
+        const wrongBuildAction = expected.appBuildId === TARGET_APP_BUILD_ID
+            ? makeCancelMigrationRollbackRequest(
+                'wrong-build-action',
+                expected.appBuildId,
+                first.workspaceEpoch,
+                {
+                    commandId: MIGRATION_ROLLBACK_CONTINUE_COMMAND_ID,
+                    migrationRollbackSessionId: MIGRATION_ROLLBACK_SESSION_ID,
+                    expectedSessionVersion: '4',
+                },
+            )
+            : makeContinueMigrationRollbackRequest(
+                'wrong-build-action',
+                expected.appBuildId,
+                first.workspaceEpoch,
+                {
+                    commandId: MIGRATION_ROLLBACK_CONTINUE_COMMAND_ID,
+                    migrationRollbackSessionId: MIGRATION_ROLLBACK_SESSION_ID,
+                    expectedSessionVersion: '4',
+                },
+            );
+        const stopped = await application.handle(wrongBuildAction);
+        assert.equal(stopped.ok, false);
+        assert.equal(stopped.ok ? null : stopped.problem.code, 'build-mismatch');
+        assert.equal(stopped.ok ? null : stopped.problem.dataEffect, 'unchanged');
         assert.deepEqual(physicalDataSnapshot(fixture.dataSlotsRoot), before);
         assert.doesNotMatch(
             JSON.stringify(first.workspaceData),

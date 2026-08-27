@@ -36,6 +36,12 @@ import {
     isCanonicalUuid,
 } from './workspace-data-contract';
 import {
+    isWorkspaceMigrationRequest,
+    isWorkspaceMigrationSuccessValue,
+    type WorkspaceMigrationRequest,
+    type WorkspaceMigrationSuccessValue,
+} from './workspace-migration-contract';
+import {
     isDataProtectionProjection,
     isRestoreSessionView,
     normalizeCancelRestoreSessionCommand,
@@ -366,7 +372,8 @@ export type WorkspaceSetupRequest =
     | TaskOccurrenceImpactRequest
     | MeetingOccurrenceImpactRequest
     | ChangeMeetingOccurrenceRequest
-    | CancelMeetingOccurrenceRequest;
+    | CancelMeetingOccurrenceRequest
+    | WorkspaceMigrationRequest;
 
 export type WorkspaceProcessRequest =
     | Exclude<WorkspaceSetupRequest, ConfigureBackupDestinationRequest>
@@ -449,6 +456,10 @@ export type WorkspaceSetupProblem = Readonly<{
 }>;
 
 export type WorkspaceSetupOutcome =
+    | Readonly<{
+        ok: true;
+        value: WorkspaceMigrationSuccessValue;
+    }>
     | Readonly<{
         ok: true;
         value: Readonly<{
@@ -1499,6 +1510,9 @@ export function isWorkspaceSetupRequest(
     expectedBuildId: string,
     expectedWorkspaceEpoch: string,
 ): value is WorkspaceSetupRequest {
+    if (isWorkspaceMigrationRequest(value, expectedBuildId, expectedWorkspaceEpoch)) {
+        return true;
+    }
     if (!isPlainObject(value)
         || value.appBuildId !== expectedBuildId
         || value.workspaceEpoch !== expectedWorkspaceEpoch
@@ -2065,6 +2079,15 @@ export function isWorkspaceSetupOutcome(
         && outcome.workspaceEpoch === expectedWorkspaceEpoch;
     if (!common) {
         return false;
+    }
+
+    if (isWorkspaceMigrationSuccessValue(
+        outcome,
+        expectedBuildId,
+        expectedRequestId,
+        expectedWorkspaceEpoch,
+    )) {
+        return true;
     }
 
     if (outcome.kind === 'workspace.setup-projection') {

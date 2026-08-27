@@ -31,9 +31,11 @@ import {
 import {
     initializeWorkspaceData,
     inspectMigrationSafetyCopy,
+    migrationSafetyCopyDeleteConfirmationToken,
     openWorkspaceData,
     openWorkspaceDataWithMigrations as openWorkspaceDataWithMigrationsUnbound,
     consumeMigrationSafetyCopyAfterRollback,
+    deleteMigrationSafetyCopy,
     stageMigrationSafetyCopyForRollback,
 } from '../../src/data/sqlite-data-store';
 import {
@@ -835,6 +837,72 @@ test('TEST-DATA-007: current schema opens without creating a migration safety co
     }
     assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
     assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
+});
+
+test('TEST-DATA-007: explicit safety-copy delete is identity-bound and never reports a failed delete', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+    const safety = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(safety.kind, 'verified');
+    if (safety.kind !== 'verified') {
+        throw new Error('Expected one deletable MigrationSafetyCopyV1');
+    }
+    const confirmationToken = migrationSafetyCopyDeleteConfirmationToken(
+        safety.metadata.migrationSafetyCopyId,
+        safety.metadata.metadataDigest,
+    );
+
+    assert.throws(() => deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        '0'.repeat(64),
+        confirmationToken,
+    ), /identity changed/);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), safety);
+
+    assert.throws(() => deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        safety.metadata.metadataDigest,
+        '0'.repeat(64),
+    ), /confirmation changed/);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), safety);
+
+    assert.throws(() => deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        safety.metadata.metadataDigest,
+        confirmationToken,
+        {
+            failpoint(point) {
+                if (point === 'migration-safety-delete.before-quarantine') {
+                    throw new Error(point);
+                }
+            },
+        },
+    ), /migration-safety-delete\.before-quarantine/);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), safety);
+
+    deleteMigrationSafetyCopy(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        safety.metadata.metadataDigest,
+        confirmationToken,
+    );
+
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
+    assert.equal(
+        readdirSync(dataSlotsRoot).some(name => name.includes(safety.metadata.migrationSafetyCopyId)),
+        false,
+    );
 });
 
 test('TEST-DATA-007: an old schema without an exact build binding remains unchanged', async t => {

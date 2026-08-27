@@ -21,6 +21,11 @@ import {
 } from '../src/shared/workspace-setup-contract';
 import type { CreateTermCommand } from '../src/shared/workspace-term-contract';
 import type {
+    ConfirmMigrationRollbackCommand,
+    DeleteMigrationSafetyCopyCommand,
+    MigrationRollbackActionCommand,
+} from '../src/shared/workspace-migration-contract';
+import type {
     ConfigureBackupDestinationCommand,
     ConfirmRestoreSessionCommand,
     RestoreSessionActionCommand,
@@ -88,6 +93,26 @@ const RESTORE_ACTION_COMMAND = {
     expectedSessionVersion: '2',
 } as const satisfies RestoreSessionActionCommand;
 
+const DELETE_MIGRATION_SAFETY_COMMAND = {
+    commandId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    migrationSafetyCopyId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    expectedCopyVersion: 'e'.repeat(64),
+    confirmationToken: 'f'.repeat(64),
+} as const satisfies DeleteMigrationSafetyCopyCommand;
+
+const CONFIRM_MIGRATION_ROLLBACK_COMMAND = {
+    commandId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    migrationRollbackSessionId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+    expectedSessionVersion: '0',
+    previewToken: 'a'.repeat(64),
+} as const satisfies ConfirmMigrationRollbackCommand;
+
+const MIGRATION_ROLLBACK_ACTION_COMMAND = {
+    commandId: '12121212-1212-4212-8212-121212121212',
+    migrationRollbackSessionId: CONFIRM_MIGRATION_ROLLBACK_COMMAND.migrationRollbackSessionId,
+    expectedSessionVersion: '4',
+} as const satisfies MigrationRollbackActionCommand;
+
 type PreloadCourseFlow = Readonly<{
     query(): Promise<BootstrapOutcome>;
     querySetup(): Promise<WorkspaceSetupOutcome>;
@@ -100,6 +125,14 @@ type PreloadCourseFlow = Readonly<{
     cancelRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
     resumeRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
     rollbackRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
+    queryApplicationBuildStatus(): Promise<WorkspaceSetupOutcome>;
+    queryMigrationSafetyCopy(): Promise<WorkspaceSetupOutcome>;
+    deleteMigrationSafetyCopy(command: DeleteMigrationSafetyCopyCommand): Promise<WorkspaceSetupOutcome>;
+    previewMigrationRollback(): Promise<WorkspaceSetupOutcome>;
+    queryMigrationRollbackStatus(migrationRollbackSessionId: string | null): Promise<WorkspaceSetupOutcome>;
+    confirmMigrationRollback(command: ConfirmMigrationRollbackCommand): Promise<WorkspaceSetupOutcome>;
+    cancelMigrationRollback(command: MigrationRollbackActionCommand): Promise<WorkspaceSetupOutcome>;
+    continueMigrationRollback(command: MigrationRollbackActionCommand): Promise<WorkspaceSetupOutcome>;
 }>;
 
 type PreloadWindowFrame = Readonly<{
@@ -358,4 +391,63 @@ test('preload sends path-free protection and restore requests on the bounded cha
     const requestsJson = JSON.stringify(harness.setupRequests);
     assert.equal(requestsJson.includes('selectedDirectoryPath'), false);
     assert.doesNotMatch(requestsJson, /(?:[A-Za-z]:[\\/]|canonicalPath|directoryPath)/);
+});
+
+test('TEST-SHELL-005: preload exposes every path-free migration maintenance request', async () => {
+    const harness = loadPreload(async request => ({
+        ok: false,
+        problem: {
+            code: 'operation-in-progress',
+            message: 'Migration maintenance is active.',
+            requestId: request.requestId,
+            appBuildId: APP_BUILD_ID,
+            workspaceEpoch: WORKSPACE_EPOCH,
+            dataEffect: 'unchanged',
+        },
+    }));
+    await harness.courseFlow.query();
+
+    await harness.courseFlow.queryApplicationBuildStatus();
+    await harness.courseFlow.queryMigrationSafetyCopy();
+    await harness.courseFlow.deleteMigrationSafetyCopy(DELETE_MIGRATION_SAFETY_COMMAND);
+    await harness.courseFlow.previewMigrationRollback();
+    await harness.courseFlow.queryMigrationRollbackStatus(
+        CONFIRM_MIGRATION_ROLLBACK_COMMAND.migrationRollbackSessionId,
+    );
+    await harness.courseFlow.confirmMigrationRollback(CONFIRM_MIGRATION_ROLLBACK_COMMAND);
+    await harness.courseFlow.cancelMigrationRollback(MIGRATION_ROLLBACK_ACTION_COMMAND);
+    await harness.courseFlow.continueMigrationRollback(MIGRATION_ROLLBACK_ACTION_COMMAND);
+
+    assert.deepEqual(harness.setupRequests.map(request => request.kind), [
+        'workspace.application-build.query',
+        'workspace.migration-safety.query',
+        'workspace.migration-safety.delete',
+        'workspace.migration-rollback.preview',
+        'workspace.migration-rollback.query',
+        'workspace.migration-rollback.confirm',
+        'workspace.migration-rollback.cancel',
+        'workspace.migration-rollback.continue',
+    ]);
+    const requestsJson = JSON.stringify(harness.setupRequests);
+    assert.doesNotMatch(
+        requestsJson,
+        /(?:[A-Za-z]:[\\/]|canonicalPath|directoryPath|dataSlotsRoot|activityControlRoot)/,
+    );
+});
+
+test('migration queries stay unchanged while lost mutation responses stay unknown', async () => {
+    const harness = loadPreload(() => Promise.reject(new Error('response lost')));
+    await harness.courseFlow.query();
+
+    const buildProblem = outcomeProblem(
+        await harness.courseFlow.queryApplicationBuildStatus(),
+    );
+    const safetyProblem = outcomeProblem(await harness.courseFlow.queryMigrationSafetyCopy());
+    const confirmProblem = outcomeProblem(
+        await harness.courseFlow.confirmMigrationRollback(CONFIRM_MIGRATION_ROLLBACK_COMMAND),
+    );
+
+    assert.equal(buildProblem.dataEffect, 'unchanged');
+    assert.equal(safetyProblem.dataEffect, 'unchanged');
+    assert.equal(confirmProblem.dataEffect, 'unknown');
 });

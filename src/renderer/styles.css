@@ -1738,6 +1738,223 @@ h2:focus-visible {
     border-radius: 0.2rem;
 }
 
+.migration-dialog {
+    width: min(760px, calc(100vw - 2rem));
+    max-width: none;
+    max-height: calc(100vh - 2rem);
+    padding: 0;
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-large);
+    color: var(--ink);
+    background: transparent;
+}
+
+.migration-dialog::backdrop {
+    background: rgba(43, 43, 38, .42);
+    backdrop-filter: blur(7px);
+}
+
+.migration-dialog-surface {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    max-height: calc(100vh - 2rem);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, .78);
+    border-radius: inherit;
+    background: rgba(247, 247, 241, .96);
+    box-shadow: 0 2rem 6rem rgba(18, 18, 16, .3);
+    backdrop-filter: blur(28px) saturate(118%);
+}
+
+.migration-dialog-header {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--line);
+}
+
+.migration-dialog-header h1 {
+    margin-top: .12rem;
+    font-size: 1.45rem;
+    font-weight: 550;
+    letter-spacing: -.04em;
+}
+
+.migration-dialog-body {
+    min-height: 0;
+    padding: clamp(1rem, 3vw, 1.6rem);
+    overflow-y: auto;
+}
+
+.migration-safety-card,
+.migration-empty-card,
+.migration-confirmation-card,
+.migration-preview-card,
+.migration-target-card {
+    display: grid;
+    gap: .9rem;
+    padding: clamp(1rem, 3vw, 1.5rem);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-medium);
+    background: rgba(255, 255, 255, .72);
+}
+
+.migration-safety-card > p,
+.migration-empty-card > p,
+.migration-confirmation-card > p,
+.migration-preview-card > p,
+.migration-target-card > p,
+.migration-maintenance-card > p {
+    color: var(--ink-soft);
+    line-height: 1.55;
+}
+
+.migration-card-heading {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+    justify-content: space-between;
+}
+
+.migration-card-heading h2,
+.migration-confirmation-card h2,
+.migration-preview-card > h2,
+.migration-target-card h2 {
+    margin-top: .15rem;
+    font-size: clamp(1.3rem, 3vw, 1.8rem);
+    font-weight: 550;
+    letter-spacing: -.04em;
+}
+
+.migration-verified-status {
+    padding: .38rem .65rem;
+    border: 1px solid rgba(37, 102, 63, .28);
+    border-radius: 999px;
+    color: #245f3d;
+    background: rgba(220, 242, 224, .78);
+    font-size: .78rem;
+    font-weight: 750;
+}
+
+.migration-facts {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: .65rem;
+}
+
+.migration-facts > div {
+    min-width: 0;
+    padding: .75rem;
+    border-radius: .85rem;
+    background: rgba(43, 43, 38, .055);
+}
+
+.migration-facts dt {
+    color: var(--ink-soft);
+    font-size: .75rem;
+    font-weight: 700;
+}
+
+.migration-facts dd {
+    margin-top: .28rem;
+    overflow-wrap: anywhere;
+    font-size: .86rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.45;
+}
+
+.migration-facts code {
+    user-select: text;
+}
+
+.migration-digest {
+    word-break: break-all;
+}
+
+.migration-warning {
+    padding: 1rem;
+    border: 1px solid rgba(140, 76, 48, .28);
+    border-radius: 1rem;
+    color: #633b2f;
+    background: rgba(255, 232, 215, .75);
+}
+
+.migration-warning p {
+    margin-top: .4rem;
+    line-height: 1.5;
+}
+
+.migration-target-card {
+    background: rgba(245, 212, 87, .16);
+}
+
+.migration-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: .65rem;
+    align-items: center;
+    justify-content: flex-end;
+    padding-top: .2rem;
+}
+
+.migration-destructive-action {
+    color: #ffffff;
+    background: #744439;
+}
+
+.migration-destructive-action:hover:not(:disabled) {
+    background: #5d332a;
+}
+
+.migration-status {
+    min-height: 1.5rem;
+    margin-top: .75rem;
+    color: var(--ink-soft);
+    line-height: 1.5;
+}
+
+.migration-status--problem {
+    color: #744439;
+}
+
+.migration-maintenance-surface {
+    display: grid;
+    min-height: calc(100vh - var(--titlebar-height));
+    padding: clamp(1rem, 4vw, 3rem);
+    overflow-y: auto;
+    place-items: center;
+}
+
+.migration-maintenance-card {
+    display: grid;
+    gap: 1rem;
+    width: min(760px, 100%);
+    padding: clamp(1.25rem, 4vw, 2.5rem);
+    border: 1px solid rgba(255, 255, 255, .74);
+    border-radius: var(--radius-large);
+    background: rgba(247, 247, 241, .88);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(24px) saturate(112%);
+}
+
+.migration-maintenance-card > h1 {
+    font-size: clamp(1.9rem, 5vw, 3rem);
+    font-weight: 520;
+    letter-spacing: -.055em;
+}
+
+.migration-phase-status {
+    padding: .75rem 1rem;
+    border-radius: .85rem;
+    color: var(--ink);
+    background: var(--morning-pale);
+    font-weight: 750;
+    line-height: 1.5;
+}
+
 @media (max-width: 1080px) {
     .topbar {
         grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
@@ -1908,6 +2125,27 @@ h2:focus-visible {
         max-height: 100vh;
     }
 
+    .migration-dialog {
+        width: 100vw;
+        max-width: 100vw;
+        max-height: 100vh;
+        border-radius: 0;
+    }
+
+    .migration-dialog-surface {
+        max-height: 100vh;
+        border: 0;
+    }
+
+    .migration-facts {
+        grid-template-columns: 1fr;
+    }
+
+    .migration-actions {
+        align-items: stretch;
+        flex-direction: column-reverse;
+    }
+
     .setup-modal {
         border: 0;
         border-radius: 0;
@@ -1981,6 +2219,8 @@ h2:focus-visible {
     .setup-progress-card,
     .setup-progress-pad,
     .setup-modal,
+    .migration-dialog-surface,
+    .migration-maintenance-card,
     .topbar,
     .startup-titlebar,
     .task-action-feedback,
@@ -2012,6 +2252,11 @@ h2:focus-visible {
         background: #4a4a45;
         backdrop-filter: none;
     }
+
+    .migration-dialog::backdrop {
+        background: #4a4a45;
+        backdrop-filter: none;
+    }
 }
 
 @media (prefers-contrast: more) {
@@ -2027,6 +2272,13 @@ h2:focus-visible {
     .setup-step-panel,
     .setup-progress-card,
     .setup-progress-pad,
+    .migration-dialog-surface,
+    .migration-maintenance-card,
+    .migration-safety-card,
+    .migration-empty-card,
+    .migration-confirmation-card,
+    .migration-preview-card,
+    .migration-target-card,
     .field input,
     .field select,
     .window-control-button {
@@ -2047,6 +2299,13 @@ h2:focus-visible {
     .setup-progress-card,
     .setup-progress-pad,
     .setup-modal,
+    .migration-dialog-surface,
+    .migration-maintenance-card,
+    .migration-safety-card,
+    .migration-empty-card,
+    .migration-confirmation-card,
+    .migration-preview-card,
+    .migration-target-card,
     .brand-pill,
     .primary-nav,
     .settings-button,

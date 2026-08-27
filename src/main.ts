@@ -96,7 +96,15 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
           || kind === 'workspace.meeting-occurrence.change'
           || kind === 'workspace.meeting-occurrence.cancel'
           || kind === 'workspace.protection.query'
-          || kind === 'workspace.protection.configure')
+          || kind === 'workspace.protection.configure'
+          || kind === 'workspace.application-build.query'
+          || kind === 'workspace.migration-safety.query'
+          || kind === 'workspace.migration-safety.delete'
+          || kind === 'workspace.migration-rollback.preview'
+          || kind === 'workspace.migration-rollback.query'
+          || kind === 'workspace.migration-rollback.confirm'
+          || kind === 'workspace.migration-rollback.cancel'
+          || kind === 'workspace.migration-rollback.continue')
           ? 'validation'
           : 'invalid-request',
       message: 'Workspace request is unavailable.',
@@ -296,7 +304,16 @@ async function startApplication(roots: DevelopmentRoots): Promise<void> {
           selection.filePaths[0]!,
         ));
       }
-      return await workspaceSupervisor!.request(value);
+      const outcome = await workspaceSupervisor!.request(value);
+      if (
+        value.kind === 'workspace.migration-rollback.confirm'
+        && outcome.ok
+        && outcome.value.kind === 'workspace.migration-rollback-session'
+        && outcome.value.session.phase === 'awaiting-target-build'
+      ) {
+        setImmediate(() => app.quit());
+      }
+      return outcome;
     } catch {
       return {
         ok: false,
