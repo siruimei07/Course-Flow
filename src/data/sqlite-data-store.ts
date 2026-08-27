@@ -163,7 +163,7 @@ import {
 import {
     COURSEFLOW_APPLICATION_ID,
     CURRENT_SCHEMA_LEVEL,
-    createSchemaLevel16,
+    createSchemaLevel15,
     migrateLevel1To2,
     migrateLevel2To3,
     migrateLevel3To4,
@@ -275,7 +275,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 16 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 15 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -317,13 +317,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 16;
+        schemaLevel: 15;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 16;
+        schemaLevel: 15;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -10710,7 +10710,7 @@ export function inspectRestoreDataSlot(
             || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL) {
             throw new Error('Restore DataSlot database identity is invalid');
         }
-        const facts = validateSchemaLevel16(candidate);
+        const facts = validateSchemaLevel15(candidate);
         return Object.freeze({
             workspaceId: facts.workspaceId,
             schemaLevel: identity.schemaLevel.toString(),
@@ -10751,7 +10751,7 @@ export function inspectRestoreCompletionReceipt(
             || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL) {
             throw new Error('Restore receipt DATA identity is invalid');
         }
-        validateSchemaLevel16(database);
+        validateSchemaLevel15(database);
         const row = database.prepare(`
             SELECT *
             FROM restore_completion_receipts
@@ -10798,7 +10798,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel16(stagingDatabase);
+        createSchemaLevel15(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -10847,7 +10847,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel16(validationDatabase);
+            validateSchemaLevel15(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -10856,7 +10856,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel16(activeDatabase);
+        const facts = validateSchemaLevel15(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -10929,7 +10929,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel16(validationDatabase);
+        const facts = validateSchemaLevel15(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -10979,7 +10979,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel16(activeDatabase);
+        const facts = validateSchemaLevel15(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -11211,7 +11211,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel16(maintenance);
+            validateSchemaLevel15(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

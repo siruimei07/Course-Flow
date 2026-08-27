@@ -140,7 +140,7 @@ type ActivationPlanV1 = Readonly<{
     library: Readonly<{kind: 'absent'}>;
     versions: Readonly<{
         canonicalEncoding: typeof CANONICAL_ENCODING;
-        databaseFormat: 'sqlite-schema-16';
+        databaseFormat: 'sqlite-schema-15';
         markerFormat: 'not-applicable';
         pathKeyEncoding: 'not-applicable';
         operationFormats: 'a-only-v1';
@@ -767,7 +767,7 @@ function requirePlan(
             'journalVersion',
         ])
         || value.versions.canonicalEncoding !== CANONICAL_ENCODING
-        || value.versions.databaseFormat !== 'sqlite-schema-16'
+        || value.versions.databaseFormat !== 'sqlite-schema-15'
         || value.versions.markerFormat !== 'not-applicable'
         || value.versions.pathKeyEncoding !== 'not-applicable'
         || value.versions.operationFormats !== 'a-only-v1'
@@ -1215,7 +1215,7 @@ function createActivationPlan(
         library: Object.freeze({kind: 'absent' as const}),
         versions: Object.freeze({
             canonicalEncoding: CANONICAL_ENCODING,
-            databaseFormat: 'sqlite-schema-16' as const,
+            databaseFormat: 'sqlite-schema-15' as const,
             markerFormat: 'not-applicable' as const,
             pathKeyEncoding: 'not-applicable' as const,
             operationFormats: 'a-only-v1' as const,

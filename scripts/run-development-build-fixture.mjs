@@ -941,7 +941,7 @@ function verifyCompatibleRollbackStages(fixture, stages) {
         throw new Error('source cancel terminal receipt did not survive restart');
     }
     requireExactValue(continuation.completed.events, [
-        'reopen:15:1',
+        'reopen-read-only:15:1',
         'library-reconcile-fixture-port',
         'flow00-fixture-port',
         'consume-safety-copy',
@@ -951,14 +951,12 @@ function verifyCompatibleRollbackStages(fixture, stages) {
         || continuation.completed.safetyCopy !== 'absent') {
         throw new Error('exact rollback target did not install and consume the safety copy');
     }
-    requireExactValue(
-        continuation.completed.physical,
-        continuation.terminalRestart.physical,
-        'target terminal restart',
-    );
     if (continuation.terminalRestart.status.kind !== 'succeeded'
         || continuation.terminalRestart.journalRecordCount
-            !== continuation.completed.journalRecordCount) {
+            !== continuation.completed.journalRecordCount
+        || continuation.terminalRestart.physical.activeFacts.schemaLevel !== '15'
+        || continuation.writableRestart.status.revision !== '1'
+        || continuation.writableRestart.safetyCopy !== 'absent') {
         throw new Error('target continue terminal receipt did not survive restart');
     }
     for (const mixed of [stages.mixedByTarget, stages.mixedBySource]) {
@@ -1076,6 +1074,10 @@ function runCompatibleFixture(fixture) {
             continuation.activityControlRoot,
             fixture.rollbackTargetBuild.appBuildId,
         ]);
+        continuation.writableRestart = runStage(targetStagePath, 'reopen', [
+            targetSourceRoot,
+            continuation.dataRoot,
+        ]);
         continuation.terminalRestart = runStage(targetStagePath, 'handoff-inspect', [
             targetSourceRoot,
             continuation.dataRoot,
@@ -1151,6 +1153,7 @@ function emitCompatibleFixtureEvidence(fixture, stages) {
                 && stages.mixedBySource.oldAcceptsNew === false
                 && stages.mixedBySource.newAcceptsOld === false,
             terminalCrossProcessRestart: stages.cancel.terminalRestart.status.kind === 'cancelled'
+                && stages.continuation.writableRestart.status.revision === '1'
                 && stages.continuation.terminalRestart.status.kind === 'succeeded',
             sourceFullTest: 'pass',
             sourceTypecheck: 'pass',

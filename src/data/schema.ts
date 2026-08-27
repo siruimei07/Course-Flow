@@ -13,7 +13,7 @@ import {
 import { MAX_SETUP_DRAFT_PAYLOAD_BYTES } from '../shared/workspace-term-contract';
 
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
-export const CURRENT_SCHEMA_LEVEL = 16;
+export const CURRENT_SCHEMA_LEVEL = 15;
 
 const UUID_CHECK = `
     length(%COLUMN%) = 36

@@ -591,17 +591,25 @@ async function migrateData(sourceRoot, dataRoot, sourceAppBuildId, targetAppBuil
  */
 async function reopenData(sourceRoot, dataRoot) {
     const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
+    const schema = loadCompiledModule(sourceRoot, 'data/schema');
+    const expectedSchema = String(schema.CURRENT_SCHEMA_LEVEL);
+    const expectedRevision = expectedSchema === '15' ? '1' : '2';
     const opened = data.openWorkspaceData(dataRoot);
     assert.equal(opened.kind, 'ready');
     const status = opened.store.status();
     const snapshot = opened.store.readWorkspaceSetupSnapshot();
     await opened.store.close();
-    requireStableFacts(readActiveFacts(dataRoot), '16', '2');
-    assert.equal(status.revision, '2');
+    requireStableFacts(readActiveFacts(dataRoot), expectedSchema, expectedRevision);
+    assert.equal(status.revision, expectedRevision);
     assert.equal(snapshot.setup.lastDecision, 'later');
     const safetyStatus = data.inspectMigrationSafetyCopy(dataRoot);
-    assert.equal(safetyStatus.kind, 'verified');
-    emit({action: 'reopen', status, snapshot, safetyMetadata: safetyStatus.metadata});
+    emit({
+        action: 'reopen',
+        status,
+        snapshot,
+        safetyCopy: safetyStatus.kind,
+        ...(safetyStatus.kind === 'verified' ? {safetyMetadata: safetyStatus.metadata} : {}),
+    });
 }
 
 /**
@@ -700,19 +708,21 @@ async function armInterruptedMigrationRollback(
  * @param {Record<string, unknown>} data Exact-build compiled DATA module.
  * @param {string} dataRoot Disposable DataSlots root.
  * @param {string[]} events Ordered completion evidence.
+ * @param {boolean} readOnly Whether the exact-build reopen must preserve closed bytes.
  * @return {Readonly<Record<string, unknown>>} Completion callbacks.
  */
-function migrationRollbackCompletionCallbacks(data, dataRoot, events) {
+function migrationRollbackCompletionCallbacks(data, dataRoot, events, readOnly = false) {
     return Object.freeze({
         async reopen(expected) {
-            const opened = data.openWorkspaceData(dataRoot);
-            assert.equal(opened.kind, 'ready');
+            const opened = data.openWorkspaceData(dataRoot, {readOnly});
+            assert.equal(opened.kind, readOnly ? 'read-only' : 'ready');
             await opened.store.close();
             const facts = readActiveFacts(dataRoot);
             assert.equal(facts.workspaceId, expected.workspaceId);
             assert.equal(facts.schemaLevel, expected.schemaLevel);
             assert.equal(facts.revision, expected.revision);
-            events.push(`reopen:${facts.schemaLevel}:${facts.revision}`);
+            const mode = readOnly ? 'reopen-read-only' : 'reopen';
+            events.push(`${mode}:${facts.schemaLevel}:${facts.revision}`);
         },
         async libraryReconcile() {
             events.push('library-reconcile-fixture-port');
@@ -786,7 +796,7 @@ async function continueMigrationRollback(
     const handoff = loadCompiledModule(sourceRoot, 'protect/migration-rollback-handoff');
     const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
     const events = [];
-    const callbacks = migrationRollbackCompletionCallbacks(data, dataRoot, events);
+    const callbacks = migrationRollbackCompletionCallbacks(data, dataRoot, events, true);
     const status = await handoff.continueMigrationRollbackHandoff(
         activityControlRoot,
         dataRoot,
@@ -1021,6 +1031,9 @@ async function main() {
 
 main().catch(error => {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`FAIL development build fixture stage: ${message}\n`);
+    const cause = error instanceof Error && error.cause instanceof Error
+        ? `: ${error.cause.message}`
+        : '';
+    process.stderr.write(`FAIL development build fixture stage: ${message}${cause}\n`);
     process.exitCode = 1;
 });
