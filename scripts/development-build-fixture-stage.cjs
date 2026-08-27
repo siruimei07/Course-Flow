@@ -36,6 +36,70 @@ const COMMAND_ID = '22222222-2222-4222-8222-222222222222';
 const FOLLOW_UP_ID = '33333333-3333-4333-8333-333333333333';
 
 /**
+ * Stable handoff identities used only inside the disposable fixture.
+ *
+ * @const
+ * @type {Readonly<Record<string, string>>}
+ */
+const HANDOFF_IDS = Object.freeze({
+    session: '44444444-4444-4444-8444-444444444444',
+    operation: '55555555-5555-4555-8555-555555555555',
+    confirmCommand: '66666666-6666-4666-8666-666666666666',
+});
+
+/**
+ * Closed development-only rollback artifacts carried by the fixture metadata.
+ *
+ * @const
+ * @type {ReadonlyArray<Readonly<Record<string, string>>>}
+ */
+const ROLLBACK_ARTIFACTS = Object.freeze([
+    Object.freeze({
+        platform: 'darwin-arm64',
+        name: 'CourseFlow-0.0.0-development-old-macOS-arm64.dmg',
+        sha256: 'c'.repeat(64),
+    }),
+    Object.freeze({
+        platform: 'win32-x64',
+        name: 'CourseFlow-0.0.0-development-old-Windows-x64.msi',
+        sha256: 'd'.repeat(64),
+    }),
+]);
+
+/**
+ * Requires one exact development AppBuildId at the fixture process boundary.
+ *
+ * @param {unknown} value Candidate identity.
+ * @param {string} label Error label.
+ * @return {string} Validated identity.
+ */
+function requireDevelopmentBuildId(value, label) {
+    if (typeof value !== 'string' || !/^development:[0-9a-f]{40}$/.test(value)) {
+        throw new Error(`${label} must be an exact development AppBuildId`);
+    }
+    return value;
+}
+
+/**
+ * Builds the closed development-only binding required before migration writes.
+ *
+ * @param {string} sourceAppBuildId Build creating the safety copy.
+ * @param {string} targetAppBuildId Exact rollback build.
+ * @return {Readonly<Record<string, unknown>>} DATA migration binding.
+ */
+function migrationSafetyBinding(sourceAppBuildId, targetAppBuildId) {
+    return Object.freeze({
+        createdByAppBuildId: requireDevelopmentBuildId(sourceAppBuildId, 'source AppBuildId'),
+        rollbackTarget: Object.freeze({
+            releaseVersion: '0.0.0-development-old',
+            tag: 'development-old',
+            appBuildId: requireDevelopmentBuildId(targetAppBuildId, 'target AppBuildId'),
+            artifacts: ROLLBACK_ARTIFACTS,
+        }),
+    });
+}
+
+/**
  * Resolves a path only when it belongs to this fixture's OS-temporary tree.
  *
  * @param {unknown} value Candidate path.
@@ -140,6 +204,207 @@ function requireStableFacts(facts, expectedSchema, expectedRevision) {
 }
 
 /**
+ * Revalidates the registered V1 safety copy and returns path-free evidence.
+ *
+ * @param {string} sourceRoot Exact new-build source root.
+ * @param {Record<string, unknown>} data Compiled DATA module.
+ * @param {string} dataRoot Disposable DataSlots root.
+ * @param {Readonly<Record<string, unknown>>} binding Expected build binding.
+ * @return {Readonly<Record<string, unknown>>} Verified path-free evidence.
+ */
+function requireMigrationSafetyEvidence(sourceRoot, data, dataRoot, binding) {
+    const {canonicalJson} = loadCompiledModule(sourceRoot, 'shared/canonical-json');
+    const status = data.inspectMigrationSafetyCopy(dataRoot);
+    assert.equal(status.kind, 'verified');
+    const metadata = status.metadata;
+    assert.deepEqual(Object.keys(metadata).sort(), [
+        'schema',
+        'limitsVersion',
+        'digestVersion',
+        'migrationSafetyCopyId',
+        'workspaceId',
+        'sourceRevision',
+        'sourceSchemaLevel',
+        'sourceDataSlotProvenance',
+        'targetSchemaLevel',
+        'createdAt',
+        'byteSize',
+        'closedDataSlotDigest',
+        'createdByAppBuildId',
+        'rollbackTarget',
+        'replacesMigrationSafetyCopyId',
+        'metadataDigest',
+    ].sort());
+    assert.equal(metadata.schema, 'courseflow-migration-safety-copy-v1');
+    assert.equal(metadata.limitsVersion, 'migration-safety-copy-limits-v1');
+    assert.equal(metadata.digestVersion, 'sha256-v1');
+    assert.match(metadata.migrationSafetyCopyId, /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/);
+    assert.equal(metadata.workspaceId, WORKSPACE_ID);
+    assert.equal(metadata.sourceRevision, '1');
+    assert.equal(metadata.sourceSchemaLevel, '15');
+    assert.deepEqual(Object.keys(metadata.sourceDataSlotProvenance).sort(), [
+        'schema',
+        'slotDevice',
+        'slotInode',
+        'databaseDevice',
+        'databaseInode',
+    ].sort());
+    assert.equal(
+        metadata.sourceDataSlotProvenance.schema,
+        'courseflow-data-slot-stable-identity-v1',
+    );
+    for (const key of ['slotDevice', 'slotInode', 'databaseDevice', 'databaseInode']) {
+        const identity = metadata.sourceDataSlotProvenance[key];
+        assert.match(identity, /^(0|[1-9][0-9]*)$/);
+        assert.ok(BigInt(identity) <= 18_446_744_073_709_551_615n);
+    }
+    const provenanceJson = JSON.stringify(metadata.sourceDataSlotProvenance);
+    assert.equal(provenanceJson.includes('dataRoot'), false);
+    assert.equal(provenanceJson.includes('sourceRoot'), false);
+    assert.equal(metadata.targetSchemaLevel, '16');
+    assert.equal(new Date(metadata.createdAt).toISOString(), metadata.createdAt);
+    assert.equal(metadata.createdByAppBuildId, binding.createdByAppBuildId);
+    assert.deepEqual(metadata.rollbackTarget, binding.rollbackTarget);
+    assert.equal(metadata.replacesMigrationSafetyCopyId, null);
+    assert.match(metadata.metadataDigest, /^[0-9a-f]{64}$/);
+
+    const safetyNames = readdirSync(dataRoot)
+        .filter(name => name.startsWith('migration-safety-copy-'))
+        .sort();
+    assert.deepEqual(safetyNames, [`migration-safety-copy-${metadata.migrationSafetyCopyId}`]);
+    const safetyRoot = path.join(dataRoot, safetyNames[0]);
+    assert.deepEqual(readdirSync(safetyRoot).sort(), [
+        'migration-safety-copy-v1.json',
+        'workspace.sqlite',
+    ]);
+    const metadataBytes = readFileSync(path.join(safetyRoot, 'migration-safety-copy-v1.json'));
+    assert.equal(metadataBytes.toString('utf8'), canonicalJson(metadata));
+    const metadataWithoutDigest = {...metadata};
+    delete metadataWithoutDigest.metadataDigest;
+    assert.equal(metadata.metadataDigest, createHash('sha256')
+        .update(canonicalJson(metadataWithoutDigest), 'utf8')
+        .digest('hex'));
+    const databaseBytes = readFileSync(path.join(safetyRoot, 'workspace.sqlite'));
+    assert.equal(metadata.byteSize, String(databaseBytes.byteLength));
+    assert.equal(metadata.closedDataSlotDigest, createHash('sha256')
+        .update(databaseBytes)
+        .digest('hex'));
+    const safetyFacts = readDatabaseFacts(path.join(safetyRoot, 'workspace.sqlite'));
+    requireStableFacts(safetyFacts, '15', '1');
+    return Object.freeze({metadata, safetyFacts});
+}
+
+/**
+ * Returns the operation-owned deterministic handoff slot name.
+ *
+ * @param {'rollback'} role Closed role used by fixture observations.
+ * @return {string} Direct-child slot name.
+ */
+function migrationRollbackSlotName(role) {
+    return `.migration-rollback-${role}-${HANDOFF_IDS.operation}`;
+}
+
+/**
+ * Counts durable canonical records without exposing the journal path.
+ *
+ * @param {string} activityControlRoot Stable fixture control root.
+ * @return {number} Published record count.
+ */
+function migrationRollbackRecordCount(activityControlRoot) {
+    return readdirSync(path.join(
+        activityControlRoot,
+        'migration-rollback',
+        HANDOFF_IDS.operation,
+        'journal',
+    )).filter(name => !name.startsWith('.tmp-')).length;
+}
+
+/**
+ * Reads path-free facts proving inspection did not perform another physical switch.
+ *
+ * @param {string} dataRoot Disposable DataSlots root.
+ * @return {Readonly<Record<string, unknown>>} Active and rollback DATA evidence.
+ */
+function migrationRollbackPhysicalEvidence(dataRoot) {
+    const rollbackSlotName = migrationRollbackSlotName('rollback');
+    const activeFacts = readActiveFacts(dataRoot);
+    const rollbackFacts = readDatabaseFacts(path.join(
+        dataRoot,
+        rollbackSlotName,
+        'workspace.sqlite',
+    ));
+    requireStableFacts(activeFacts, '15', '1');
+    requireStableFacts(rollbackFacts, '16', '2');
+    return Object.freeze({
+        activeFacts,
+        activeHash: hashActiveDatabase(dataRoot),
+        rollbackFacts,
+        rollbackHash: createHash('sha256')
+            .update(readFileSync(path.join(dataRoot, rollbackSlotName, 'workspace.sqlite')))
+            .digest('hex'),
+    });
+}
+
+/**
+ * Builds exact immutable handoff facts from current and safety DATA evidence.
+ *
+ * @param {string} sourceRoot Exact new-build source root.
+ * @param {string} dataRoot Disposable DataSlots root.
+ * @param {string} sourceAppBuildId Exact current/source build.
+ * @param {string} targetAppBuildId Exact rollback target build.
+ * @return {Readonly<Record<string, unknown>>} Closed handoff facts.
+ */
+function migrationRollbackFacts(
+    sourceRoot,
+    dataRoot,
+    sourceAppBuildId,
+    targetAppBuildId,
+) {
+    const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
+    const platform = loadCompiledModule(sourceRoot, 'platform/restore-activation-files');
+    const status = data.inspectMigrationSafetyCopy(dataRoot);
+    assert.equal(status.kind, 'verified');
+    const metadata = status.metadata;
+    assert.equal(metadata.createdByAppBuildId, sourceAppBuildId);
+    assert.equal(metadata.rollbackTarget.appBuildId, targetAppBuildId);
+    const currentFacts = readActiveFacts(dataRoot);
+    requireStableFacts(currentFacts, '16', '2');
+    const currentSlot = platform.observeRestoreDataSlot(dataRoot, 'active');
+    assert.equal(currentSlot.kind, 'present');
+    const currentDatabaseBytes = readFileSync(path.join(dataRoot, 'active', 'workspace.sqlite'));
+    return Object.freeze({
+        migrationRollbackSessionId: HANDOFF_IDS.session,
+        operationId: HANDOFF_IDS.operation,
+        sourceAppBuildId,
+        currentAppBuildId: sourceAppBuildId,
+        targetAppBuildId,
+        sourceReleaseVersion: '0.0.0-development-new',
+        currentReleaseVersion: '0.0.0-development-new',
+        targetReleaseVersion: metadata.rollbackTarget.releaseVersion,
+        previewDigest: createHash('sha256').update('fixture rollback preview', 'utf8').digest('hex'),
+        confirmationDigest: createHash('sha256')
+            .update('fixture rollback confirmation', 'utf8')
+            .digest('hex'),
+        safetyCopy: Object.freeze({
+            migrationSafetyCopyId: metadata.migrationSafetyCopyId,
+            workspaceId: metadata.workspaceId,
+            schemaLevel: metadata.sourceSchemaLevel,
+            revision: metadata.sourceRevision,
+            byteLength: metadata.byteSize,
+            digest: metadata.closedDataSlotDigest,
+        }),
+        currentData: Object.freeze({
+            workspaceId: currentFacts.workspaceId,
+            schemaLevel: currentFacts.schemaLevel,
+            revision: currentFacts.revision,
+            byteLength: String(currentDatabaseBytes.byteLength),
+            digest: createHash('sha256').update(currentDatabaseBytes).digest('hex'),
+            slotFingerprint: currentSlot.fingerprint.slotFingerprint,
+        }),
+    });
+}
+
+/**
  * Emits exactly one JSON evidence line.
  *
  * @param {unknown} value Evidence value.
@@ -202,14 +467,23 @@ async function createOldData(sourceRoot, dataRoot) {
  *
  * @param {string} sourceRoot Exact new-build source root.
  * @param {string} dataRoot Disposable DataSlots root.
+ * @param {string} sourceAppBuildId Exact new build identity.
+ * @param {string} targetAppBuildId Exact old rollback build identity.
  * @return {Promise<void>} Completion signal.
  */
-async function proveCopyBeforeWrite(sourceRoot, dataRoot) {
+async function proveCopyBeforeWrite(
+    sourceRoot,
+    dataRoot,
+    sourceAppBuildId,
+    targetAppBuildId,
+) {
     const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
+    const binding = migrationSafetyBinding(sourceAppBuildId, targetAppBuildId);
     const beforeFacts = readActiveFacts(dataRoot);
     const beforeHash = hashActiveDatabase(dataRoot);
     let reachedSafetyBoundary = false;
     const opened = await data.openWorkspaceDataWithMigrations(dataRoot, {
+        migrationSafetyCopy: binding,
         migrationFailpoint(point) {
             if (point === 'migration.after-safety-copy') {
                 reachedSafetyBoundary = true;
@@ -225,18 +499,14 @@ async function proveCopyBeforeWrite(sourceRoot, dataRoot) {
     assert.equal(afterHash, beforeHash);
     requireStableFacts(afterFacts, '15', '1');
 
-    const safetyNames = readdirSync(dataRoot)
-        .filter(name => name.startsWith('migration-safety-level-15-'))
-        .sort();
-    assert.equal(safetyNames.length, 1);
-    const safetyFacts = readDatabaseFacts(path.join(dataRoot, safetyNames[0], 'workspace.sqlite'));
-    requireStableFacts(safetyFacts, '15', '1');
+    const safety = requireMigrationSafetyEvidence(sourceRoot, data, dataRoot, binding);
     emit({
         action: 'copy-before-write',
         activeHash: afterHash,
         activeFacts: afterFacts,
-        safetyFacts,
-        safetyCopyCount: safetyNames.length,
+        safetyFacts: safety.safetyFacts,
+        safetyMetadata: safety.metadata,
+        safetyCopyCount: 1,
     });
 }
 
@@ -245,11 +515,17 @@ async function proveCopyBeforeWrite(sourceRoot, dataRoot) {
  *
  * @param {string} sourceRoot Exact new-build source root.
  * @param {string} dataRoot Disposable DataSlots root.
+ * @param {string} sourceAppBuildId Exact new build identity.
+ * @param {string} targetAppBuildId Exact old rollback build identity.
  * @return {Promise<void>} Completion signal.
  */
-async function migrateData(sourceRoot, dataRoot) {
+async function migrateData(sourceRoot, dataRoot, sourceAppBuildId, targetAppBuildId) {
     const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
-    const opened = await data.openWorkspaceDataWithMigrations(dataRoot);
+    const binding = migrationSafetyBinding(sourceAppBuildId, targetAppBuildId);
+    const beforeSafety = requireMigrationSafetyEvidence(sourceRoot, data, dataRoot, binding);
+    const opened = await data.openWorkspaceDataWithMigrations(dataRoot, {
+        migrationSafetyCopy: binding,
+    });
     assert.equal(opened.kind, 'ready');
     const snapshot = opened.store.readWorkspaceSetupSnapshot();
     await opened.store.close();
@@ -257,7 +533,12 @@ async function migrateData(sourceRoot, dataRoot) {
     requireStableFacts(facts, '16', '2');
     assert.equal(snapshot.revision, '2');
     assert.equal(snapshot.setup.lastDecision, 'later');
-    emit({action: 'migrate', facts, snapshot});
+    const afterSafety = requireMigrationSafetyEvidence(sourceRoot, data, dataRoot, binding);
+    assert.equal(
+        afterSafety.metadata.migrationSafetyCopyId,
+        beforeSafety.metadata.migrationSafetyCopyId,
+    );
+    emit({action: 'migrate', facts, snapshot, safetyMetadata: afterSafety.metadata});
 }
 
 /**
@@ -277,7 +558,130 @@ async function reopenData(sourceRoot, dataRoot) {
     requireStableFacts(readActiveFacts(dataRoot), '16', '2');
     assert.equal(status.revision, '2');
     assert.equal(snapshot.setup.lastDecision, 'later');
-    emit({action: 'reopen', status, snapshot});
+    const safetyStatus = data.inspectMigrationSafetyCopy(dataRoot);
+    assert.equal(safetyStatus.kind, 'verified');
+    emit({action: 'reopen', status, snapshot, safetyMetadata: safetyStatus.metadata});
+}
+
+/**
+ * Interrupts after the write-ahead install action but before its observed record.
+ *
+ * @param {string} sourceRoot Exact new-build source root.
+ * @param {string} dataRoot Disposable DataSlots root.
+ * @param {string} activityControlRoot Stable fixture control root.
+ * @param {string} sourceAppBuildId Exact current/source build.
+ * @param {string} targetAppBuildId Exact rollback target build.
+ * @return {Promise<void>} Completion signal.
+ */
+async function armInterruptedMigrationRollback(
+    sourceRoot,
+    dataRoot,
+    activityControlRoot,
+    sourceAppBuildId,
+    targetAppBuildId,
+) {
+    const handoff = loadCompiledModule(sourceRoot, 'protect/migration-rollback-handoff');
+    const data = loadCompiledModule(sourceRoot, 'data/sqlite-data-store');
+    const opened = data.openWorkspaceData(dataRoot);
+    assert.equal(opened.kind, 'ready');
+    opened.store.prepareForRestoreActivation();
+    await opened.store.close();
+    const facts = migrationRollbackFacts(
+        sourceRoot,
+        dataRoot,
+        sourceAppBuildId,
+        targetAppBuildId,
+    );
+    const safetyStatus = data.inspectMigrationSafetyCopy(dataRoot);
+    assert.equal(safetyStatus.kind, 'verified');
+    const planned = handoff.createMigrationRollbackHandoff(
+        activityControlRoot,
+        dataRoot,
+        facts,
+    );
+    assert.equal(planned.phase, 'planned');
+    assert.equal(planned.sessionVersion, '1');
+    const prepared = handoff.prepareMigrationRollbackHandoff(
+        activityControlRoot,
+        dataRoot,
+        HANDOFF_IDS.session,
+        ({migrationSafetyCopyId, candidateSlotName}) => (
+            data.stageMigrationSafetyCopyForRollback(
+                dataRoot,
+                migrationSafetyCopyId,
+                candidateSlotName,
+            )
+        ),
+    );
+    assert.equal(prepared.phase, 'prepared');
+    assert.equal(prepared.sessionVersion, '2');
+    let interruptionCode = null;
+    try {
+        handoff.armMigrationRollbackHandoff(
+            activityControlRoot,
+            dataRoot,
+            Object.freeze({
+                action: 'confirm',
+                commandId: HANDOFF_IDS.confirmCommand,
+                migrationRollbackSessionId: HANDOFF_IDS.session,
+                expectedSessionVersion: '2',
+                currentAppBuildId: sourceAppBuildId,
+            }),
+            {
+                failpoint(point) {
+                    if (point === 'physical.after-install-safety-action') {
+                        throw new Error(point);
+                    }
+                },
+            },
+        );
+    }
+    catch (error) {
+        interruptionCode = error?.code ?? null;
+    }
+    assert.equal(interruptionCode, 'activation-pending');
+    emit({
+        action: 'handoff-arm-interrupted',
+        interruptionCode,
+        journalRecordCount: migrationRollbackRecordCount(activityControlRoot),
+        physical: migrationRollbackPhysicalEvidence(dataRoot),
+        safetyCopyCount: readdirSync(dataRoot)
+            .filter(name => name.startsWith('migration-safety-copy-')).length,
+    });
+}
+
+/**
+ * Performs one fresh-process, exact-build boot inspection without physical continuation.
+ *
+ * @param {string} sourceRoot Exact new-build source root.
+ * @param {string} dataRoot Disposable DataSlots root.
+ * @param {string} activityControlRoot Stable fixture control root.
+ * @param {string} currentAppBuildId Calling build identity.
+ * @return {void}
+ */
+function inspectMigrationRollback(
+    sourceRoot,
+    dataRoot,
+    activityControlRoot,
+    currentAppBuildId,
+) {
+    const handoff = loadCompiledModule(sourceRoot, 'protect/migration-rollback-handoff');
+    const status = handoff.inspectMigrationRollbackBeforeWorkspaceOpen(
+        activityControlRoot,
+        dataRoot,
+        currentAppBuildId,
+    );
+    assert.equal(status.kind, 'maintenance');
+    assert.equal(status.phase, 'awaiting-target-build');
+    assert.equal(status.sessionVersion, '4');
+    assert.equal('dataSlotsRoot' in status, false);
+    assert.equal(JSON.stringify(status).includes(activityControlRoot), false);
+    emit({
+        action: 'handoff-inspect',
+        status,
+        journalRecordCount: migrationRollbackRecordCount(activityControlRoot),
+        physical: migrationRollbackPhysicalEvidence(dataRoot),
+    });
 }
 
 /**
@@ -351,6 +755,8 @@ async function main() {
         'copy-before-write',
         'migrate',
         'reopen',
+        'handoff-arm-interrupted',
+        'handoff-inspect',
         'reject-future-schema',
         'reject-mixed-builds',
     ].includes(action)) {
@@ -368,7 +774,17 @@ async function main() {
         return;
     }
 
-    const requiredCount = action === 'describe-build' ? 1 : 2;
+    let requiredCount = 2;
+    if (action === 'describe-build') {
+        requiredCount = 1;
+    }
+    else if (action === 'handoff-arm-interrupted') {
+        requiredCount = 5;
+    }
+    else if (action === 'handoff-inspect'
+        || ['copy-before-write', 'migrate'].includes(action)) {
+        requiredCount = 4;
+    }
     requireArgumentCount(args, requiredCount);
     const sourceRoot = requireDisposablePath(args[0], 'source root');
     if (action === 'describe-build') {
@@ -381,13 +797,30 @@ async function main() {
             await createOldData(sourceRoot, dataRoot);
             return;
         case 'copy-before-write':
-            await proveCopyBeforeWrite(sourceRoot, dataRoot);
+            await proveCopyBeforeWrite(sourceRoot, dataRoot, args[2], args[3]);
             return;
         case 'migrate':
-            await migrateData(sourceRoot, dataRoot);
+            await migrateData(sourceRoot, dataRoot, args[2], args[3]);
             return;
         case 'reopen':
             await reopenData(sourceRoot, dataRoot);
+            return;
+        case 'handoff-arm-interrupted':
+            await armInterruptedMigrationRollback(
+                sourceRoot,
+                dataRoot,
+                requireDisposablePath(args[2], 'activity control root'),
+                requireDevelopmentBuildId(args[3], 'source AppBuildId'),
+                requireDevelopmentBuildId(args[4], 'target AppBuildId'),
+            );
+            return;
+        case 'handoff-inspect':
+            inspectMigrationRollback(
+                sourceRoot,
+                dataRoot,
+                requireDisposablePath(args[2], 'activity control root'),
+                requireDevelopmentBuildId(args[3], 'current AppBuildId'),
+            );
             return;
         default:
             rejectFutureSchema(sourceRoot, dataRoot);

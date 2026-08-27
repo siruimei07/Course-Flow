@@ -14,6 +14,7 @@ import {
     type CommitOptions,
     type DataCommitResult,
     type DataOpenResult,
+    type MigrationRollbackTargetV1,
     type OpenWorkspaceDataOptions,
     type ReadSnapshotOptions,
     type SqliteDataStore,
@@ -83,6 +84,10 @@ import {
     RestoreSessionError,
 } from './protect/restore-session';
 import {
+    inspectMigrationRollbackBeforeWorkspaceOpen,
+    type MigrationRollbackBootState,
+} from './protect/migration-rollback-handoff';
+import {
     buildPlanProjection,
     createPlanEvaluationContext,
 } from './shared/workspace-plan-contract';
@@ -104,13 +109,14 @@ const SYSTEM_CLOCK: ClockPort = {
     },
 };
 
-export type WorkspaceApplicationOptions = OpenWorkspaceDataOptions & Readonly<{
+export type WorkspaceApplicationOptions = Omit<OpenWorkspaceDataOptions, 'migrationSafetyCopy'> & Readonly<{
     commitOptions?: CommitOptions;
     clock?: ClockPort;
     durableBackupOptions?: DurableBackupPassOptions;
     activityControlRoot?: string;
     restoreFailpoint?: (point: string) => void;
     libraryRootPath?: string | null;
+    migrationRollbackTarget?: MigrationRollbackTargetV1;
     setupProjectionReadOptions?: ReadSnapshotOptions;
 }>;
 
@@ -154,6 +160,23 @@ function dataStateFrom(opened: DataOpenResult): WorkspaceDataState {
     };
 }
 
+function migrationOpenOptions(
+    appBuildId: string,
+    options: WorkspaceApplicationOptions,
+): OpenWorkspaceDataOptions {
+    return Object.freeze({
+        readOnly: options.readOnly,
+        migrationFailpoint: options.migrationFailpoint,
+        migrationSafetyCopy: options.migrationRollbackTarget
+            ? Object.freeze({
+                createdByAppBuildId: appBuildId,
+                rollbackTarget: options.migrationRollbackTarget,
+                clock: options.clock,
+            })
+            : undefined,
+    });
+}
+
 function restoreActivationProblem(
     session: ReturnType<RestoreCoordinator['query']> | null,
 ): DataOpenProblem {
@@ -185,9 +208,89 @@ function restoreActivationProblem(
     });
 }
 
+function migrationRollbackEvidenceProblem(): DataOpenProblem {
+    return Object.freeze({
+        code: 'recovery-required' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: Object.freeze(['workspace.read', 'workspace.write'] as const),
+        allowedActions: Object.freeze([] as const),
+        context: Object.freeze({}),
+        details: Object.freeze({reason: 'migration-rollback-evidence' as const}),
+    });
+}
+
+type MigrationRollbackNonterminalPhase =
+    | 'planned'
+    | 'prepared'
+    | 'armed'
+    | 'awaiting-target-build'
+    | 'completing'
+    | 'cancelling';
+
+function isMigrationRollbackNonterminalPhase(
+    value: MigrationRollbackBootState['phase'],
+): value is MigrationRollbackNonterminalPhase {
+    return value === 'planned'
+        || value === 'prepared'
+        || value === 'armed'
+        || value === 'awaiting-target-build'
+        || value === 'completing'
+        || value === 'cancelling';
+}
+
+function migrationRollbackProblem(boot: MigrationRollbackBootState): DataOpenProblem {
+    if (boot.kind !== 'maintenance'
+        || !boot.migrationRollbackSessionId
+        || !boot.operationId
+        || !boot.requiredBuilds
+        || !boot.currentBuild
+        || !isMigrationRollbackNonterminalPhase(boot.phase)) {
+        return migrationRollbackEvidenceProblem();
+    }
+    const context = Object.freeze({
+        migrationRollbackSessionId: boot.migrationRollbackSessionId,
+        operationId: boot.operationId,
+    });
+    const details = Object.freeze({
+        reason: 'migration-rollback-pending' as const,
+        phase: boot.phase,
+        currentBuild: boot.currentBuild,
+        requiredBuilds: Object.freeze({...boot.requiredBuilds}),
+    });
+    if (boot.currentBuild === 'other') {
+        return Object.freeze({
+            code: 'rollback-build-mismatch' as const,
+            scope: 'workspace' as const,
+            dataEffect: 'unchanged' as const,
+            affectedCapabilities: Object.freeze(['workspace.read', 'workspace.write'] as const),
+            allowedActions: Object.freeze([] as const),
+            context,
+            details: Object.freeze({...details, currentBuild: 'other' as const}),
+        });
+    }
+    const allowedActions = boot.currentBuild === 'source'
+        ? boot.allowedActions.includes('cancel-as-source')
+            ? Object.freeze(['cancel-as-source'] as const)
+            : Object.freeze([] as const)
+        : boot.allowedActions.includes('continue-as-target')
+            ? Object.freeze(['continue-as-target'] as const)
+            : Object.freeze([] as const);
+    return Object.freeze({
+        code: 'rollback-required' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: Object.freeze(['workspace.read', 'workspace.write'] as const),
+        allowedActions,
+        context,
+        details: Object.freeze({...details, currentBuild: boot.currentBuild}),
+    });
+}
+
 export class WorkspaceApplication {
     private backupCoordinator: DurableBackupCoordinator | undefined;
     private restoreCoordinator: RestoreCoordinator | undefined;
+    private migrationMaintenance = false;
     private restoreMaintenance = false;
     private workspaceEpoch = randomUUID();
 
@@ -204,11 +307,40 @@ export class WorkspaceApplication {
         options: WorkspaceApplicationOptions = {},
     ): Promise<WorkspaceApplication> {
         let restoreBoot: ReturnType<typeof inspectRestoreBeforeWorkspaceOpen> | null = null;
+        let migrationRollbackBoot: MigrationRollbackBootState | null = null;
         if (options.activityControlRoot) {
             restoreBoot = inspectRestoreBeforeWorkspaceOpen(
                 options.activityControlRoot,
                 dataSlotsRoot,
             );
+            migrationRollbackBoot = inspectMigrationRollbackBeforeWorkspaceOpen(
+                options.activityControlRoot,
+                dataSlotsRoot,
+                appBuildId,
+            );
+            const restorePending = restoreBoot.kind === 'pre-checkpoint-session'
+                || restoreBoot.kind === 'recovery-required';
+            const migrationPending = migrationRollbackBoot.kind === 'maintenance'
+                || migrationRollbackBoot.kind === 'recovery-required';
+            if (migrationPending) {
+                const application = new WorkspaceApplication(
+                    dataSlotsRoot,
+                    appBuildId,
+                    {
+                        sqliteVersion: workspaceDataRuntimeVersion(),
+                        status: {
+                            kind: 'recovery',
+                            problem: restorePending
+                                || migrationRollbackBoot.kind === 'recovery-required'
+                                ? migrationRollbackEvidenceProblem()
+                                : migrationRollbackProblem(migrationRollbackBoot),
+                        },
+                    },
+                    options,
+                );
+                application.migrationMaintenance = true;
+                return application;
+            }
             if (restoreBoot.kind === 'recovery-required') {
                 const application = new WorkspaceApplication(
                     dataSlotsRoot,
@@ -236,7 +368,10 @@ export class WorkspaceApplication {
                 return application;
             }
         }
-        const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, options);
+        const opened = await openWorkspaceDataWithMigrations(
+            dataSlotsRoot,
+            migrationOpenOptions(appBuildId, options),
+        );
         const application = new WorkspaceApplication(
             dataSlotsRoot,
             appBuildId,
@@ -316,6 +451,14 @@ export class WorkspaceApplication {
                         ? 'validation'
                         : 'invalid-request';
             return this.problem(code, 'Workspace 请求无效。', requestIdFrom(request));
+        }
+
+        if (this.migrationMaintenance) {
+            return this.problem(
+                'operation-in-progress',
+                '迁移回退维护期间不能执行工作区请求。',
+                request.requestId,
+            );
         }
 
         if (this.restoreMaintenance
@@ -1731,7 +1874,10 @@ export class WorkspaceApplication {
 
     private async recoverCommittedReceipt(commandId: string): Promise<CommandReceiptOutcome | null> {
         try {
-            const reopened = await openWorkspaceDataWithMigrations(this.dataSlotsRoot, this.options);
+            const reopened = await openWorkspaceDataWithMigrations(
+                this.dataSlotsRoot,
+                migrationOpenOptions(this.appBuildId, this.options),
+            );
             this.dataState = dataStateFrom(reopened);
             return this.dataState.store?.receipt(commandId) ?? null;
         }

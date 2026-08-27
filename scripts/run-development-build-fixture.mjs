@@ -17,6 +17,14 @@ import {pathToFileURL} from 'node:url';
 const PINNED_OLD_COMMIT = '2361554e7e0a18c11ed0ce3b4b1da7bab52a6940';
 
 /**
+ * Exact unrelated development identity used to prove wrong-build stop behavior.
+ *
+ * @const
+ * @type {string}
+ */
+const OTHER_BUILD_ID = 'development:0000000000000000000000000000000000000000';
+
+/**
  * Closed fixture format identity.
  *
  * @const
@@ -93,16 +101,22 @@ function requireExactValue(actual, expected, label) {
  * Builds the exact expected format set for one endpoint.
  *
  * @param {string[]} restoreActivation Supported ADR-08 activation formats.
+ * @param {string[]} migrationSafetyCopy Supported migration safety-copy formats.
+ * @param {string[]} migrationRollbackHandoff Supported migration handoff formats.
  * @return {Record<string, string[]>} Closed format set.
  */
-function expectedFormats(restoreActivation) {
+function expectedFormats(
+    restoreActivation,
+    migrationSafetyCopy,
+    migrationRollbackHandoff,
+) {
     return {
         snapshotManifest: ['courseflow-snapshot-manifest-v1'],
         backupRepository: ['courseflow-backup-repository-v1'],
         restoreSafetySet: ['courseflow-restore-safety-set-v1'],
         restoreActivation,
-        migrationSafetyCopy: [],
-        migrationRollbackHandoff: [],
+        migrationSafetyCopy,
+        migrationRollbackHandoff,
     };
 }
 
@@ -113,9 +127,18 @@ function expectedFormats(restoreActivation) {
  * @param {string} label Descriptor label.
  * @param {number} schemaLevel Expected current schema.
  * @param {string[]} restoreActivation Expected activation formats.
+ * @param {string[]} migrationSafetyCopy Expected migration safety-copy formats.
+ * @param {string[]} migrationRollbackHandoff Expected migration handoff formats.
  * @return {Record<string, unknown>} Validated descriptor.
  */
-function requireBuildDescriptor(value, label, schemaLevel, restoreActivation) {
+function requireBuildDescriptor(
+    value,
+    label,
+    schemaLevel,
+    restoreActivation,
+    migrationSafetyCopy,
+    migrationRollbackHandoff,
+) {
     const descriptor = requireExactRecord(value, [
         'fullCommit',
         'appBuildId',
@@ -135,7 +158,11 @@ function requireBuildDescriptor(value, label, schemaLevel, restoreActivation) {
         migrationSources: Array.from({length: schemaLevel - 1}, (_value, index) => index + 1),
         future: 'stop',
     }, `${label}.dataSchema`);
-    requireExactValue(descriptor.formats, expectedFormats(restoreActivation), `${label}.formats`);
+    requireExactValue(descriptor.formats, expectedFormats(
+        restoreActivation,
+        migrationSafetyCopy,
+        migrationRollbackHandoff,
+    ), `${label}.formats`);
     return descriptor;
 }
 
@@ -158,11 +185,15 @@ function requireFixture(value) {
     if (!isRecord(fixture.oldBuild) || fixture.oldBuild.fullCommit !== PINNED_OLD_COMMIT) {
         throw new Error('oldBuild.fullCommit must equal the pinned old endpoint');
     }
-    const oldBuild = requireBuildDescriptor(fixture.oldBuild, 'oldBuild', 15, []);
+    const oldBuild = requireBuildDescriptor(fixture.oldBuild, 'oldBuild', 15, [], [], []);
     const newBuild = requireBuildDescriptor(fixture.newBuild, 'newBuild', 16, [
         'courseflow-activation-plan-v1',
         'courseflow-activation-journal-record-v1',
         'courseflow-restore-session-control-v1',
+    ], [
+        'courseflow-migration-safety-copy-v1',
+    ], [
+        'courseflow-migration-rollback-handoff-v1',
     ]);
     if (oldBuild.fullCommit === newBuild.fullCommit) {
         throw new Error('oldBuild and newBuild full commits must differ');
@@ -512,6 +543,84 @@ function cleanupFixture(repositoryRoot, fixtureRoot, worktrees) {
 }
 
 /**
+ * Requires the path-free V1 safety evidence to stay bound across fresh processes.
+ *
+ * @param {Record<string, unknown>} fixture Validated fixture.
+ * @param {Record<string, unknown>} stages Stage evidence.
+ * @return {void}
+ */
+function verifyMigrationSafetyStages(fixture, stages) {
+    const copyMetadata = stages.copy.safetyMetadata;
+    const migrationMetadata = stages.migration.safetyMetadata;
+    const restartMetadata = stages.restart.safetyMetadata;
+    if (!isRecord(copyMetadata)
+        || !isRecord(migrationMetadata)
+        || !isRecord(restartMetadata)) {
+        throw new Error('migration safety stages must emit closed metadata');
+    }
+    if (copyMetadata.schema !== 'courseflow-migration-safety-copy-v1'
+        || copyMetadata.createdByAppBuildId !== fixture.newBuild.appBuildId
+        || !isRecord(copyMetadata.rollbackTarget)
+        || copyMetadata.rollbackTarget.appBuildId !== fixture.oldBuild.appBuildId) {
+        throw new Error('migration safety metadata changed its exact declared build identities');
+    }
+    if (copyMetadata.migrationSafetyCopyId !== migrationMetadata.migrationSafetyCopyId
+        || copyMetadata.migrationSafetyCopyId !== restartMetadata.migrationSafetyCopyId
+        || stages.copy.safetyCopyCount !== 1) {
+        throw new Error('migration safety copy was not reused across restart');
+    }
+}
+
+/**
+ * Requires the V1-capable source reader to classify itself and an unrelated build without switching.
+ * The pinned old endpoint intentionally has no V1 reader; R6-04 owns the compatible-target fixture.
+ *
+ * @param {Record<string, unknown>} fixture Validated fixture.
+ * @param {Record<string, unknown>} stages Stage evidence.
+ * @return {void}
+ */
+function verifyMigrationRollbackStages(fixture, stages) {
+    if (stages.handoffArm.interruptionCode !== 'activation-pending'
+        || stages.handoffArm.safetyCopyCount !== 1
+        || stages.handoffArm.physical.activeFacts.schemaLevel !== '15'
+        || stages.handoffArm.physical.rollbackFacts.schemaLevel !== '16') {
+        throw new Error('migration rollback write-ahead interruption evidence is incomplete');
+    }
+    const classifications = [
+        [stages.handoffSource, 'source', ['cancel-as-source']],
+        [stages.handoffOther, 'other', []],
+    ];
+    for (const [stage, expectedBuild, expectedActions] of classifications) {
+        if (stage.status.kind !== 'maintenance'
+            || stage.status.phase !== 'awaiting-target-build'
+            || stage.status.sessionVersion !== '4'
+            || stage.status.currentBuild !== expectedBuild) {
+            throw new Error(`migration rollback ${expectedBuild} boot classification changed`);
+        }
+        requireExactValue(
+            stage.status.allowedActions,
+            expectedActions,
+            `migration rollback ${expectedBuild} allowed actions`,
+        );
+        requireExactValue(
+            stage.physical,
+            stages.handoffArm.physical,
+            `migration rollback ${expectedBuild} boot physical evidence`,
+        );
+        if (stage.status.requiredBuilds.sourceAppBuildId !== fixture.newBuild.appBuildId
+            || stage.status.requiredBuilds.targetAppBuildId !== fixture.oldBuild.appBuildId) {
+            throw new Error('migration rollback required builds changed');
+        }
+    }
+    if (stages.handoffSource.journalRecordCount
+            !== stages.handoffArm.journalRecordCount + 1
+        || stages.handoffOther.journalRecordCount
+            !== stages.handoffSource.journalRecordCount) {
+        throw new Error('migration rollback restart observation was not unique');
+    }
+}
+
+/**
  * Runs all build, migration, restart, and stop assertions in isolated worktrees.
  *
  * @param {Record<string, unknown>} fixture Validated fixture.
@@ -530,6 +639,7 @@ function runFullFixture(fixture) {
     const oldSourceRoot = path.join(fixtureRoot, 'old-source');
     const newSourceRoot = path.join(fixtureRoot, 'new-source');
     const dataRoot = path.join(fixtureRoot, 'data-slots');
+    const activityControlRoot = path.join(fixtureRoot, 'activity-control');
     const stagePath = path.join(repositoryRoot, 'scripts', 'development-build-fixture-stage.cjs');
     const createdWorktrees = [];
     let stages;
@@ -540,6 +650,7 @@ function runFullFixture(fixture) {
         addEndpointWorktree(repositoryRoot, newSourceRoot, fixture.newBuild.fullCommit);
         createdWorktrees.push(newSourceRoot);
         mkdirSync(dataRoot);
+        mkdirSync(activityControlRoot);
 
         runPnpm(oldSourceRoot, ['install', '--frozen-lockfile']);
         runPnpm(oldSourceRoot, ['run', 'test:compile']);
@@ -560,8 +671,18 @@ function runFullFixture(fixture) {
 
         stages = {
             oldCreate: runStage(stagePath, 'old-create', [oldSourceRoot, dataRoot]),
-            copy: runStage(stagePath, 'copy-before-write', [newSourceRoot, dataRoot]),
-            migration: runStage(stagePath, 'migrate', [newSourceRoot, dataRoot]),
+            copy: runStage(stagePath, 'copy-before-write', [
+                newSourceRoot,
+                dataRoot,
+                fixture.newBuild.appBuildId,
+                fixture.oldBuild.appBuildId,
+            ]),
+            migration: runStage(stagePath, 'migrate', [
+                newSourceRoot,
+                dataRoot,
+                fixture.newBuild.appBuildId,
+                fixture.oldBuild.appBuildId,
+            ]),
             restart: runStage(stagePath, 'reopen', [newSourceRoot, dataRoot]),
             wrong: runStage(stagePath, 'reject-future-schema', [oldSourceRoot, dataRoot]),
             mixed: runStage(stagePath, 'reject-mixed-builds', [
@@ -570,7 +691,28 @@ function runFullFixture(fixture) {
                 fixture.oldBuild.appBuildId,
                 fixture.newBuild.appBuildId,
             ]),
+            handoffArm: runStage(stagePath, 'handoff-arm-interrupted', [
+                newSourceRoot,
+                dataRoot,
+                activityControlRoot,
+                fixture.newBuild.appBuildId,
+                fixture.oldBuild.appBuildId,
+            ]),
+            handoffSource: runStage(stagePath, 'handoff-inspect', [
+                newSourceRoot,
+                dataRoot,
+                activityControlRoot,
+                fixture.newBuild.appBuildId,
+            ]),
+            handoffOther: runStage(stagePath, 'handoff-inspect', [
+                newSourceRoot,
+                dataRoot,
+                activityControlRoot,
+                OTHER_BUILD_ID,
+            ]),
         };
+        verifyMigrationSafetyStages(fixture, stages);
+        verifyMigrationRollbackStages(fixture, stages);
 
         packageAndSmoke(oldSourceRoot, fixture.oldBuild, fixtureRoot, 'old');
         packageAndSmoke(newSourceRoot, fixture.newBuild, fixtureRoot, 'new');
@@ -598,10 +740,28 @@ function emitFixtureEvidence(fixture, stages) {
             cleanDetachedWorktrees: true,
             oldBuildGeneratedOldSchema: stages.oldCreate.facts.schemaLevel === '15',
             copyBeforeWritePreservedActive: stages.copy.activeFacts.schemaLevel === '15',
+            safetyCopyClosedV1: stages.copy.safetyMetadata.schema
+                === 'courseflow-migration-safety-copy-v1',
+            safetyCopyCarriesExactDevelopmentBuildIds: stages.copy.safetyMetadata.createdByAppBuildId
+                === fixture.newBuild.appBuildId
+                && stages.copy.safetyMetadata.rollbackTarget.appBuildId
+                    === fixture.oldBuild.appBuildId,
+            safetyCopyRestartReused: stages.copy.safetyMetadata.migrationSafetyCopyId
+                === stages.migration.safetyMetadata.migrationSafetyCopyId
+                && stages.copy.safetyMetadata.migrationSafetyCopyId
+                    === stages.restart.safetyMetadata.migrationSafetyCopyId,
             migrationReachedNewSchema: stages.migration.facts.schemaLevel === '16',
             restartRevalidatedFacts: stages.restart.status.revision === '2',
             wrongBuildStopped: stages.wrong.problem.code === 'incompatible-version',
             mixedBuildStopped: stages.mixed.oldAcceptsNew === false && stages.mixed.newAcceptsOld === false,
+            handoffWriteAheadRestartRecovered: stages.handoffSource.journalRecordCount
+                === stages.handoffArm.journalRecordCount + 1,
+            handoffSourceAndOtherClassification: stages.handoffSource.status.currentBuild === 'source'
+                && stages.handoffOther.status.currentBuild === 'other',
+            pinnedOldHandoffReaderAbsent: fixture.oldBuild.formats.migrationRollbackHandoff.length === 0,
+            compatibleRollbackTargetDeferredToR604: true,
+            handoffInspectionDidNotSwitchAgain: stages.handoffSource.physical.activeHash
+                === stages.handoffOther.physical.activeHash,
             newFullTest: 'pass',
             newTypecheck: 'pass',
             oldPackageSmoke: 'pass',

@@ -33,13 +33,50 @@ import {
 } from '../../src/data/schema';
 import {
     openWorkspaceData,
-    openWorkspaceDataWithMigrations,
+    openWorkspaceDataWithMigrations as openWorkspaceDataWithMigrationsUnbound,
 } from '../../src/data/sqlite-data-store';
 
 const COURSE_ID = '22222222-2222-4222-8222-222222222222';
 const TASK_SERIES_ID = '33333333-3333-4333-8333-333333333333';
 const TASK_SEGMENT_ID = '44444444-4444-4444-8444-444444444444';
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
+const MIGRATION_SAFETY_COPY_BINDING = Object.freeze({
+    createdByAppBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    rollbackTarget: Object.freeze({
+        releaseVersion: '0.0.0-development-old',
+        tag: 'development-old',
+        appBuildId: 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        artifacts: Object.freeze([
+            Object.freeze({
+                platform: 'darwin-arm64' as const,
+                name: 'CourseFlow-0.0.0-development-old-macOS-arm64.dmg',
+                sha256: 'c'.repeat(64),
+            }),
+            Object.freeze({
+                platform: 'win32-x64' as const,
+                name: 'CourseFlow-0.0.0-development-old-Windows-x64.msi',
+                sha256: 'd'.repeat(64),
+            }),
+        ] as const),
+    }),
+    clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+});
+
+/**
+ * Opens an old test schema with an explicit exact development-build rollback binding.
+ * @param {string} dataSlotsRoot - Isolated DATA slots root.
+ * @param {Parameters<typeof openWorkspaceDataWithMigrationsUnbound>[1]} options - Migration controls.
+ * @return {ReturnType<typeof openWorkspaceDataWithMigrationsUnbound>} Migration outcome promise.
+ */
+function openWorkspaceDataWithMigrations(
+    dataSlotsRoot: string,
+    options: Parameters<typeof openWorkspaceDataWithMigrationsUnbound>[1] = {},
+): ReturnType<typeof openWorkspaceDataWithMigrationsUnbound> {
+    return openWorkspaceDataWithMigrationsUnbound(dataSlotsRoot, {
+        ...options,
+        migrationSafetyCopy: MIGRATION_SAFETY_COPY_BINDING,
+    });
+}
 
 /**
  * Inserts the minimal valid Workspace, Term, and Course parents for Task foreign keys.
@@ -907,7 +944,7 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 open migration retains safety and durab
     }
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter(name => name.startsWith('migration-safety-level-8-'));
+        .filter(name => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const safetyDatabase = new DatabaseSync(
         join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
@@ -946,7 +983,7 @@ test('ADR-04/TEST-DATA-006: level 8 to 9 before-commit failure rolls back every 
     }
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter(name => name.startsWith('migration-safety-level-8-'));
+        .filter(name => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const safetyDatabase = new DatabaseSync(
         join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),

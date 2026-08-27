@@ -31,6 +31,27 @@ const COMMAND_ID = '22222222-2222-4222-8222-222222222222';
 const FOLLOW_UP_ID = '33333333-3333-4333-8333-333333333333';
 const FIRST_BACKUP_SET_ID = '44444444-4444-4444-8444-444444444444';
 const SECOND_BACKUP_SET_ID = '55555555-5555-4555-8555-555555555555';
+const MIGRATION_SAFETY_COPY_BINDING = Object.freeze({
+    createdByAppBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    rollbackTarget: Object.freeze({
+        releaseVersion: '0.0.0-development-old',
+        tag: 'development-old',
+        appBuildId: 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        artifacts: Object.freeze([
+            Object.freeze({
+                platform: 'darwin-arm64' as const,
+                name: 'CourseFlow-0.0.0-development-old-macOS-arm64.dmg',
+                sha256: 'c'.repeat(64),
+            }),
+            Object.freeze({
+                platform: 'win32-x64' as const,
+                name: 'CourseFlow-0.0.0-development-old-Windows-x64.msi',
+                sha256: 'd'.repeat(64),
+            }),
+        ] as const),
+    }),
+    clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+});
 
 function createTempDataSlots(t: test.TestContext): string {
     const dataSlotsRoot = mkdtempSync(path.join(tmpdir(), 'courseflow-protection-data-'));
@@ -275,7 +296,9 @@ test('schema level 11 migrates to a legal unconfigured protection state', async 
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel11Workspace(dataSlotsRoot);
 
-    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationSafetyCopy: MIGRATION_SAFETY_COPY_BINDING,
+    });
     assert.equal(opened.kind, 'ready');
     if (opened.kind !== 'ready') {
         throw new Error('Expected current migrated DATA');

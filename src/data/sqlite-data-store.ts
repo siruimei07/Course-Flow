@@ -196,7 +196,25 @@ import {
     validateSchemaLevel14,
     validateSchemaLevel15,
     validateSchemaLevel16,
+    type SchemaFacts,
 } from './schema';
+import {
+    ensureMigrationSafetyCopy,
+    inspectMigrationSafetyCopy,
+    type MigrationSafetyCopyBuildBindingV1,
+    type MigrationSafetyCopyFailpoint,
+} from './migration-safety-copy';
+
+export {
+    consumeMigrationSafetyCopyAfterRollback,
+    inspectMigrationSafetyCopy,
+    stageMigrationSafetyCopyForRollback,
+    type ConsumeMigrationSafetyCopyOptions,
+    type MigrationSafetyCopyMetadataV1,
+    type MigrationSafetyCopyStatus,
+    type MigrationRollbackArtifactV1,
+    type MigrationRollbackTargetV1,
+} from './migration-safety-copy';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
 const DATABASE_FILE_NAME = 'workspace.sqlite';
@@ -222,6 +240,7 @@ export type InitializeWorkspaceDataOptions = Readonly<{
 export type OpenWorkspaceDataOptions = Readonly<{
     readOnly?: boolean;
     migrationFailpoint?: (point: MigrationFailpoint) => void;
+    migrationSafetyCopy?: MigrationSafetyCopyBuildBindingV1;
 }>;
 
 export type RestoreActivationCloseFailpoint =
@@ -236,7 +255,8 @@ export type RestoreDataSlotFacts = Readonly<{
 
 export type MigrationFailpoint =
     | 'migration.after-safety-copy'
-    | 'migration.before-level-commit';
+    | 'migration.before-level-commit'
+    | MigrationSafetyCopyFailpoint;
 
 export type DataOpenProblem =
     | Readonly<{
@@ -276,6 +296,15 @@ export type DataOpenProblem =
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
         details: Readonly<{ reason: 'database-unreadable' }>;
+    }>
+    | Readonly<{
+        code: 'migration-safety-unavailable';
+        scope: 'workspace';
+        dataEffect: 'unchanged';
+        affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+        allowedActions: readonly [];
+        context: Readonly<Record<never, never>>;
+        details: Readonly<{reason: 'build-binding-missing'}>;
     }>;
 
 export type DataOpenResult =
@@ -10581,6 +10610,18 @@ function databaseUnreadableProblem(): DataOpenProblem {
     });
 }
 
+function migrationSafetyUnavailableProblem(): DataOpenProblem {
+    return Object.freeze({
+        code: 'migration-safety-unavailable' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: freezePair(['workspace.read' as const, 'workspace.write' as const]),
+        allowedActions: freezeEmptyTuple(),
+        context: Object.freeze({}),
+        details: Object.freeze({reason: 'build-binding-missing' as const}),
+    });
+}
+
 function recoveryResult(problem: DataOpenProblem): DataOpenResult {
     return Object.freeze({
         kind: 'recovery' as const,
@@ -10992,113 +11033,71 @@ export async function openWorkspaceDataWithMigrations(
             closeBestEffort(source);
             return opened;
         }
+        let sourceFacts: SchemaFacts;
         if (identity.schemaLevel === 1) {
-            validateSchemaLevel1(source);
+            sourceFacts = validateSchemaLevel1(source);
         }
         else if (identity.schemaLevel === 2) {
-            validateSchemaLevel2(source);
+            sourceFacts = validateSchemaLevel2(source);
         }
         else if (identity.schemaLevel === 3) {
-            validateSchemaLevel3(source);
+            sourceFacts = validateSchemaLevel3(source);
         }
         else if (identity.schemaLevel === 4) {
-            validateSchemaLevel4(source);
+            sourceFacts = validateSchemaLevel4(source);
         }
         else if (identity.schemaLevel === 5) {
-            validateSchemaLevel5(source);
+            sourceFacts = validateSchemaLevel5(source);
         }
         else if (identity.schemaLevel === 6) {
-            validateSchemaLevel6(source);
+            sourceFacts = validateSchemaLevel6(source);
         }
         else if (identity.schemaLevel === 7) {
-            validateSchemaLevel7(source);
+            sourceFacts = validateSchemaLevel7(source);
         }
         else if (identity.schemaLevel === 8) {
-            validateSchemaLevel8(source);
+            sourceFacts = validateSchemaLevel8(source);
         }
         else if (identity.schemaLevel === 9) {
-            validateSchemaLevel9(source);
+            sourceFacts = validateSchemaLevel9(source);
         }
         else if (identity.schemaLevel === 10) {
-            validateSchemaLevel10(source);
+            sourceFacts = validateSchemaLevel10(source);
         }
         else if (identity.schemaLevel === 11) {
-            validateSchemaLevel11(source);
+            sourceFacts = validateSchemaLevel11(source);
         }
         else if (identity.schemaLevel === 12) {
-            validateSchemaLevel12(source);
+            sourceFacts = validateSchemaLevel12(source);
         }
         else if (identity.schemaLevel === 13) {
-            validateSchemaLevel13(source);
+            sourceFacts = validateSchemaLevel13(source);
         }
         else if (identity.schemaLevel === 14) {
-            validateSchemaLevel14(source);
+            sourceFacts = validateSchemaLevel14(source);
         }
         else {
-            validateSchemaLevel15(source);
+            sourceFacts = validateSchemaLevel15(source);
         }
         if (options.readOnly) {
             closeBestEffort(source);
             return recoveryResult(incompatibleVersionProblem(identity.schemaLevel));
         }
-        const safetyDirectory = join(
+        if (!options.migrationSafetyCopy) {
+            closeBestEffort(source);
+            source = undefined;
+            return recoveryResult(migrationSafetyUnavailableProblem());
+        }
+        await ensureMigrationSafetyCopy({
             dataSlotsRoot,
-            `migration-safety-level-${identity.schemaLevel}-${randomUUID()}`,
-        );
-        mkdirSync(safetyDirectory);
-        const safetyPath = join(safetyDirectory, DATABASE_FILE_NAME);
-        await backup(source, safetyPath);
-        const safetyDatabase = openDatabase(safetyPath, true);
-        try {
-            if (identity.schemaLevel === 1) {
-                validateSchemaLevel1(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 2) {
-                validateSchemaLevel2(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 3) {
-                validateSchemaLevel3(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 4) {
-                validateSchemaLevel4(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 5) {
-                validateSchemaLevel5(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 6) {
-                validateSchemaLevel6(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 7) {
-                validateSchemaLevel7(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 8) {
-                validateSchemaLevel8(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 9) {
-                validateSchemaLevel9(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 10) {
-                validateSchemaLevel10(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 11) {
-                validateSchemaLevel11(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 12) {
-                validateSchemaLevel12(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 13) {
-                validateSchemaLevel13(safetyDatabase);
-            }
-            else if (identity.schemaLevel === 14) {
-                validateSchemaLevel14(safetyDatabase);
-            }
-            else {
-                validateSchemaLevel15(safetyDatabase);
-            }
-        }
-        finally {
-            safetyDatabase.close();
-        }
+            sourceDatabase: source,
+            workspaceId: sourceFacts.workspaceId,
+            sourceRevision: sourceFacts.revision,
+            sourceSchemaLevel: identity.schemaLevel,
+            targetSchemaLevel: CURRENT_SCHEMA_LEVEL,
+            binding: options.migrationSafetyCopy,
+            failpoint: options.migrationFailpoint,
+        });
         options.migrationFailpoint?.('migration.after-safety-copy');
         source.close();
         source = undefined;

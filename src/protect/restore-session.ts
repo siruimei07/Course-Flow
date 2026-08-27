@@ -56,6 +56,7 @@ import {
     createRestoreSafetyManifestV1,
     validateRestoreSafetyManifestV1,
 } from './restore-safety-manifest';
+import {inspectNonterminalMigrationRollback} from './migration-rollback-handoff';
 import {
     beginRestoreActivation,
     continueRestoreActivation,
@@ -426,14 +427,30 @@ export class RestoreCoordinator {
             }
             return Promise.resolve(prior.view);
         }
-        const store = this.requireStore();
-        const durablePrior = store.readRestoreCommandReceipt(command.commandId);
-        if (durablePrior) {
-            if (durablePrior.payloadDigest !== commandDigest) {
+        const replayStore = this.store;
+        if (replayStore) {
+            const durablePrior = replayStore.readRestoreCommandReceipt(command.commandId);
+            if (durablePrior) {
+                if (durablePrior.payloadDigest !== commandDigest) {
+                    return Promise.reject(new RestoreSessionError('conflict'));
+                }
+                return Promise.resolve(this.replayDurableSession(durablePrior.restoreSessionId));
+            }
+        }
+        const dataSlotsRoot = this.options.dataSlotsRoot;
+        if (dataSlotsRoot) {
+            const migration = inspectNonterminalMigrationRollback(
+                this.activityControlRoot,
+                dataSlotsRoot,
+            );
+            if (migration.kind === 'nonterminal') {
                 return Promise.reject(new RestoreSessionError('conflict'));
             }
-            return Promise.resolve(this.replayDurableSession(durablePrior.restoreSessionId));
+            if (migration.kind === 'recovery-required') {
+                return Promise.reject(new RestoreSessionError('current-data-unavailable'));
+            }
         }
+        const store = this.requireStore();
         if (Array.from(this.sessions.values()).some(session => (
             session.view.phase !== 'cancelled'
             && session.view.phase !== 'succeeded'

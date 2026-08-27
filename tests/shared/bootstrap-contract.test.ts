@@ -121,6 +121,18 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     {
       kind: 'recovery',
       problem: {
+        code: 'migration-safety-unavailable',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.read', 'workspace.write'],
+        allowedActions: [],
+        context: {},
+        details: { reason: 'build-binding-missing' },
+      },
+    },
+    {
+      kind: 'recovery',
+      problem: {
         code: 'recovery-required',
         scope: 'workspace',
         dataEffect: 'unchanged',
@@ -131,6 +143,47 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
           operationId: '55555555-5555-4555-8555-555555555555',
         },
         details: { reason: 'restore-activation-pending' },
+      },
+    },
+    ...(['source', 'target', 'other'] as const).map(currentBuild => ({
+      kind: 'recovery' as const,
+      problem: {
+        code: currentBuild === 'other' ? 'rollback-build-mismatch' as const : 'rollback-required' as const,
+        scope: 'workspace' as const,
+        dataEffect: 'unchanged' as const,
+        affectedCapabilities: ['workspace.read', 'workspace.write'] as const,
+        allowedActions: currentBuild === 'source'
+          ? ['cancel-as-source'] as const
+          : currentBuild === 'target'
+            ? ['continue-as-target'] as const
+            : [] as const,
+        context: {
+          migrationRollbackSessionId: '66666666-6666-4666-8666-666666666666',
+          operationId: '77777777-7777-4777-8777-777777777777',
+        },
+        details: {
+          reason: 'migration-rollback-pending' as const,
+          phase: 'awaiting-target-build' as const,
+          currentBuild,
+          requiredBuilds: {
+            sourceAppBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            sourceReleaseVersion: '2.0.0-development',
+            targetAppBuildId: 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            targetReleaseVersion: '1.0.0-development',
+          },
+        },
+      },
+    })),
+    {
+      kind: 'recovery',
+      problem: {
+        code: 'recovery-required',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.read', 'workspace.write'],
+        allowedActions: [],
+        context: {},
+        details: { reason: 'migration-rollback-evidence' },
       },
     },
   ]) {
@@ -179,6 +232,55 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
             allowedActions: [],
             context: {},
             details: { actualSchemaLevel: 16, requiredSchemaLevel: 16 },
+          },
+        },
+      },
+    },
+    {
+      ...validOutcome,
+      value: {
+        ...validOutcome.value,
+        workspaceData: {
+          kind: 'recovery',
+          problem: {
+            code: 'migration-safety-unavailable',
+            scope: 'workspace',
+            dataEffect: 'unchanged',
+            affectedCapabilities: ['workspace.read', 'workspace.write'],
+            allowedActions: [],
+            context: {},
+            details: { reason: 'unknown-build' },
+          },
+        },
+      },
+    },
+    {
+      ...validOutcome,
+      value: {
+        ...validOutcome.value,
+        workspaceData: {
+          kind: 'recovery',
+          problem: {
+            code: 'rollback-build-mismatch',
+            scope: 'workspace',
+            dataEffect: 'unchanged',
+            affectedCapabilities: ['workspace.read', 'workspace.write'],
+            allowedActions: ['continue-as-target'],
+            context: {
+              migrationRollbackSessionId: '66666666-6666-4666-8666-666666666666',
+              operationId: '77777777-7777-4777-8777-777777777777',
+            },
+            details: {
+              reason: 'migration-rollback-pending',
+              phase: 'awaiting-target-build',
+              currentBuild: 'other',
+              requiredBuilds: {
+                sourceAppBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                sourceReleaseVersion: '2.0.0-development',
+                targetAppBuildId: 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+                targetReleaseVersion: '1.0.0-development',
+              },
+            },
           },
         },
       },

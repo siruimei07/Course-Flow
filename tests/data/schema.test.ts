@@ -3,7 +3,15 @@
  */
 
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import {createHash} from 'node:crypto';
+import {
+    existsSync,
+    mkdirSync,
+    mkdtempSync,
+    readFileSync,
+    readdirSync,
+    rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -18,14 +26,47 @@ import {
     migrateLevel2To3,
     migrateLevel3To4,
     migrateLevel4To5,
+    validateSchemaLevel1,
 } from '../../src/data/schema';
 import {
     initializeWorkspaceData,
+    inspectMigrationSafetyCopy,
     openWorkspaceData,
-    openWorkspaceDataWithMigrations,
+    openWorkspaceDataWithMigrations as openWorkspaceDataWithMigrationsUnbound,
+    consumeMigrationSafetyCopyAfterRollback,
+    stageMigrationSafetyCopyForRollback,
 } from '../../src/data/sqlite-data-store';
+import {
+    observeRestoreDataSlot,
+    renameRestoreDataSlot,
+    stageRestoreDataSlot,
+} from '../../src/platform/restore-activation-files';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
+const SOURCE_APP_BUILD_ID = 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const TARGET_APP_BUILD_ID = 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const MIGRATION_ROLLBACK_OPERATION_ID = '22222222-2222-4222-8222-222222222222';
+const MIGRATION_SAFETY_COPY_OPTIONS = Object.freeze({
+    createdByAppBuildId: SOURCE_APP_BUILD_ID,
+    rollbackTarget: Object.freeze({
+        releaseVersion: '0.0.0-development-old',
+        tag: 'development-old',
+        appBuildId: TARGET_APP_BUILD_ID,
+        artifacts: Object.freeze([
+            Object.freeze({
+                platform: 'darwin-arm64' as const,
+                name: 'CourseFlow-0.0.0-development-old-macOS-arm64.dmg',
+                sha256: 'c'.repeat(64),
+            }),
+            Object.freeze({
+                platform: 'win32-x64' as const,
+                name: 'CourseFlow-0.0.0-development-old-Windows-x64.msi',
+                sha256: 'd'.repeat(64),
+            }),
+        ] as const),
+    }),
+    clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+});
 const LEGACY_COURSE_DIGEST_HEX = 'ea56e352db9e80e799cd0b31961a85849aa11d97de6995e5c7815062a6c69fbc';
 const LEGACY_COURSE_COMMAND = {
     commandId: '66666666-6666-4666-8666-666666666666',
@@ -61,6 +102,16 @@ function createTempDataSlots(t: test.TestContext): string {
     const dataSlotsRoot = mkdtempSync(join(tmpdir(), 'courseflow-data-'));
     t.after(() => rmSync(dataSlotsRoot, { recursive: true, force: true }));
     return dataSlotsRoot;
+}
+
+function openWorkspaceDataWithMigrations(
+    dataSlotsRoot: string,
+    options: Parameters<typeof openWorkspaceDataWithMigrationsUnbound>[1] = {},
+) {
+    return openWorkspaceDataWithMigrationsUnbound(dataSlotsRoot, {
+        ...options,
+        migrationSafetyCopy: options.migrationSafetyCopy ?? MIGRATION_SAFETY_COPY_OPTIONS,
+    });
 }
 
 function readSchemaFacts(dataSlotsRoot: string) {
@@ -572,7 +623,7 @@ test('ADR-04/WP-R5-03: level 13 migrates to the resumable cleanup journal', asyn
     assert.equal(opened.store.readBackupOperation()?.snapshotId, '88888888-8888-4888-8888-888888888888');
     await opened.store.close();
     assert.equal(
-        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-13-')).length,
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
         1,
     );
 });
@@ -687,6 +738,498 @@ function addLevel1CommittedReceipt(dataSlotsRoot: string): void {
     }
 }
 
+test('TEST-DATA-007: a verified V1 safety copy is registered before the first schema write', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const activeDatabasePath = join(dataSlotsRoot, 'active', 'workspace.sqlite');
+    const activeBefore = readFileSync(activeDatabasePath);
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationSafetyCopy: MIGRATION_SAFETY_COPY_OPTIONS,
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    assert.equal(opened.kind, 'recovery');
+    assert.deepEqual(readFileSync(activeDatabasePath), activeBefore);
+    const status = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(status.kind, 'verified');
+    if (status.kind !== 'verified') {
+        throw new Error('Expected one verified MigrationSafetyCopyV1');
+    }
+    assert.match(status.metadata.migrationSafetyCopyId, /^[0-9a-f-]{36}$/);
+    assert.deepEqual(status.metadata, {
+        schema: 'courseflow-migration-safety-copy-v1',
+        limitsVersion: 'migration-safety-copy-limits-v1',
+        digestVersion: 'sha256-v1',
+        migrationSafetyCopyId: status.metadata.migrationSafetyCopyId,
+        workspaceId: WORKSPACE_ID,
+        sourceRevision: '0',
+        sourceSchemaLevel: '1',
+        targetSchemaLevel: '16',
+        createdAt: '2026-08-27T12:00:00.000Z',
+        byteSize: status.metadata.byteSize,
+        closedDataSlotDigest: status.metadata.closedDataSlotDigest,
+        sourceDataSlotProvenance: status.metadata.sourceDataSlotProvenance,
+        createdByAppBuildId: SOURCE_APP_BUILD_ID,
+        rollbackTarget: MIGRATION_SAFETY_COPY_OPTIONS.rollbackTarget,
+        replacesMigrationSafetyCopyId: null,
+        metadataDigest: status.metadata.metadataDigest,
+    });
+    assert.match(status.metadata.byteSize, /^[1-9][0-9]*$/);
+    assert.match(status.metadata.closedDataSlotDigest, /^[0-9a-f]{64}$/);
+    assert.match(status.metadata.metadataDigest, /^[0-9a-f]{64}$/);
+    assert.deepEqual(Object.keys(status.metadata.sourceDataSlotProvenance).sort(), [
+        'databaseDevice',
+        'databaseInode',
+        'schema',
+        'slotDevice',
+        'slotInode',
+    ]);
+    assert.equal(
+        status.metadata.sourceDataSlotProvenance.schema,
+        'courseflow-data-slot-stable-identity-v1',
+    );
+    for (const value of [
+        status.metadata.sourceDataSlotProvenance.slotDevice,
+        status.metadata.sourceDataSlotProvenance.slotInode,
+        status.metadata.sourceDataSlotProvenance.databaseDevice,
+        status.metadata.sourceDataSlotProvenance.databaseInode,
+    ]) {
+        assert.match(value, /^(0|[1-9][0-9]*)$/);
+    }
+    assert.equal(
+        JSON.stringify(status.metadata.sourceDataSlotProvenance).includes(dataSlotsRoot),
+        false,
+    );
+
+    const safetyDirectory = join(
+        dataSlotsRoot,
+        `migration-safety-copy-${status.metadata.migrationSafetyCopyId}`,
+    );
+    const safetyDatabase = readFileSync(join(safetyDirectory, 'workspace.sqlite'));
+    assert.equal(status.metadata.byteSize, String(safetyDatabase.byteLength));
+    assert.equal(
+        status.metadata.closedDataSlotDigest,
+        createHash('sha256').update(safetyDatabase).digest('hex'),
+    );
+    assert.deepEqual(readdirSync(safetyDirectory).sort(), [
+        'migration-safety-copy-v1.json',
+        'workspace.sqlite',
+    ]);
+});
+
+test('TEST-DATA-007: current schema opens without creating a migration safety copy', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    const initialized = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
+    await initialized.close();
+
+    const opened = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'ready');
+    if (opened.kind === 'ready') {
+        await opened.store.close();
+    }
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
+    assert.deepEqual(readdirSync(dataSlotsRoot), ['active']);
+});
+
+test('TEST-DATA-007: an old schema without an exact build binding remains unchanged', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const databasePath = join(dataSlotsRoot, 'active', 'workspace.sqlite');
+    const before = readFileSync(databasePath);
+
+    const opened = await openWorkspaceDataWithMigrationsUnbound(dataSlotsRoot);
+
+    assert.equal(opened.kind, 'recovery');
+    if (opened.kind !== 'recovery') {
+        throw new Error('Expected an exact migration build binding to be required');
+    }
+    assert.deepEqual(opened.problem, {
+        code: 'migration-safety-unavailable',
+        scope: 'workspace',
+        dataEffect: 'unchanged',
+        affectedCapabilities: ['workspace.read', 'workspace.write'],
+        allowedActions: [],
+        context: {},
+        details: {reason: 'build-binding-missing'},
+    });
+    assert.deepEqual(readFileSync(databasePath), before);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
+});
+
+test('TEST-DATA-007: restart reuses the one verified copy before continuing migration', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+    const firstStatus = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(firstStatus.kind, 'verified');
+    if (firstStatus.kind !== 'verified') {
+        throw new Error('Expected the interrupted migration copy');
+    }
+
+    const continued = await openWorkspaceDataWithMigrations(dataSlotsRoot);
+
+    assert.equal(continued.kind, 'ready');
+    if (continued.kind === 'ready') {
+        await continued.store.close();
+    }
+    const finalStatus = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(finalStatus.kind, 'verified');
+    if (finalStatus.kind !== 'verified') {
+        throw new Error('Expected the retained migration copy');
+    }
+    assert.equal(
+        finalStatus.metadata.migrationSafetyCopyId,
+        firstStatus.metadata.migrationSafetyCopyId,
+    );
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
+        1,
+    );
+});
+
+test('TEST-DATA-007: a verified copy from an earlier source revision is never reused', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const first = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(first.kind, 'recovery');
+    const stale = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(stale.kind, 'verified');
+    if (stale.kind !== 'verified') {
+        throw new Error('Expected the first verified copy');
+    }
+    addLevel1CommittedReceipt(dataSlotsRoot);
+
+    const retried = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    assert.equal(retried.kind, 'recovery');
+    const current = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(current.kind, 'verified');
+    if (current.kind !== 'verified') {
+        throw new Error('Expected the source-revision-bound replacement copy');
+    }
+    assert.notEqual(
+        current.metadata.migrationSafetyCopyId,
+        stale.metadata.migrationSafetyCopyId,
+    );
+    assert.equal(current.metadata.sourceSchemaLevel, '1');
+    assert.equal(current.metadata.sourceRevision, '1');
+});
+
+test('TEST-DATA-007: an active content branch swap cannot reuse another branch safety copy', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    addLevel1CommittedReceipt(dataSlotsRoot);
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+    const branchASafety = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(branchASafety.kind, 'verified');
+    if (branchASafety.kind !== 'verified') {
+        throw new Error('Expected branch A safety copy');
+    }
+
+    const branchBName = '.migration-safety-branch-b';
+    stageRestoreDataSlot(
+        join(dataSlotsRoot, 'active', 'workspace.sqlite'),
+        dataSlotsRoot,
+        branchBName,
+    );
+    const branchBDatabase = new DatabaseSync(
+        join(dataSlotsRoot, branchBName, 'workspace.sqlite'),
+        {enableForeignKeyConstraints: true},
+    );
+    try {
+        branchBDatabase.exec(`
+            UPDATE setup_state
+            SET last_decision = 'skip'
+            WHERE singleton = 1;
+        `);
+        validateSchemaLevel1(branchBDatabase);
+    }
+    finally {
+        branchBDatabase.close();
+    }
+    const branchA = observeRestoreDataSlot(dataSlotsRoot, 'active');
+    const branchB = observeRestoreDataSlot(dataSlotsRoot, branchBName);
+    assert.equal(branchA.kind, 'present');
+    assert.equal(branchB.kind, 'present');
+    if (branchA.kind !== 'present' || branchB.kind !== 'present') {
+        throw new Error('Expected both test DATA branches');
+    }
+    renameRestoreDataSlot(
+        dataSlotsRoot,
+        'active',
+        '.migration-safety-branch-a',
+        branchA.fingerprint.slotFingerprint,
+    );
+    renameRestoreDataSlot(
+        dataSlotsRoot,
+        branchBName,
+        'active',
+        branchB.fingerprint.slotFingerprint,
+    );
+
+    const retried = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+
+    assert.equal(retried.kind, 'recovery');
+    const branchBSafety = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(branchBSafety.kind, 'verified');
+    if (branchBSafety.kind !== 'verified') {
+        throw new Error('Expected branch B safety copy');
+    }
+    assert.notEqual(
+        branchBSafety.metadata.migrationSafetyCopyId,
+        branchASafety.metadata.migrationSafetyCopyId,
+    );
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
+        1,
+    );
+    const safetyDatabase = new DatabaseSync(join(
+        dataSlotsRoot,
+        `migration-safety-copy-${branchBSafety.metadata.migrationSafetyCopyId}`,
+        'workspace.sqlite',
+    ), {readOnly: true});
+    try {
+        const row = safetyDatabase.prepare(`
+            SELECT last_decision
+            FROM setup_state
+            WHERE singleton = 1
+        `).get() as {last_decision: string | null};
+        assert.equal(row.last_decision, 'skip');
+    }
+    finally {
+        safetyDatabase.close();
+    }
+});
+
+test('TEST-DATA-007: every replacement interruption preserves one registered verified copy', async t => {
+    for (const failpoint of [
+        'migration-safety.after-database-copy',
+        'migration-safety.after-metadata-write',
+        'migration-safety.after-publish',
+        'migration-safety.after-previous-quarantine',
+        'migration-safety.after-previous-member-delete',
+    ] as const) {
+        const dataSlotsRoot = createTempDataSlots(t);
+        createLevel1Workspace(dataSlotsRoot);
+        const first = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+            migrationFailpoint(point) {
+                if (point === 'migration.after-safety-copy') {
+                    throw new Error(point);
+                }
+            },
+        });
+        assert.equal(first.kind, 'recovery');
+        const oldStatus = inspectMigrationSafetyCopy(dataSlotsRoot);
+        assert.equal(oldStatus.kind, 'verified');
+        if (oldStatus.kind !== 'verified') {
+            throw new Error('Expected the previous verified copy');
+        }
+        const replacementBinding = Object.freeze({
+            ...MIGRATION_SAFETY_COPY_OPTIONS,
+            createdByAppBuildId: 'development:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee',
+        });
+
+        const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+            migrationSafetyCopy: replacementBinding,
+            migrationFailpoint(point) {
+                if (point === failpoint) {
+                    throw new Error(point);
+                }
+            },
+        });
+
+        assert.equal(interrupted.kind, 'recovery');
+        const registered = inspectMigrationSafetyCopy(dataSlotsRoot);
+        assert.equal(registered.kind, 'verified');
+        if (registered.kind !== 'verified') {
+            throw new Error('Expected one registered verified copy after interruption');
+        }
+        const replacementWasPublished = failpoint === 'migration-safety.after-publish'
+            || failpoint === 'migration-safety.after-previous-quarantine'
+            || failpoint === 'migration-safety.after-previous-member-delete';
+        if (replacementWasPublished) {
+            assert.equal(
+                registered.metadata.createdByAppBuildId,
+                replacementBinding.createdByAppBuildId,
+            );
+            assert.equal(
+                registered.metadata.replacesMigrationSafetyCopyId,
+                oldStatus.metadata.migrationSafetyCopyId,
+            );
+        }
+        else {
+            assert.equal(
+                registered.metadata.migrationSafetyCopyId,
+                oldStatus.metadata.migrationSafetyCopyId,
+            );
+        }
+
+        const retried = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+            migrationSafetyCopy: replacementBinding,
+            migrationFailpoint(point) {
+                if (point === 'migration.after-safety-copy') {
+                    throw new Error(point);
+                }
+            },
+        });
+        assert.equal(retried.kind, 'recovery');
+        const replaced = inspectMigrationSafetyCopy(dataSlotsRoot);
+        assert.equal(replaced.kind, 'verified');
+        if (replaced.kind !== 'verified') {
+            throw new Error('Expected the replacement copy');
+        }
+        assert.notEqual(
+            replaced.metadata.migrationSafetyCopyId,
+            oldStatus.metadata.migrationSafetyCopyId,
+        );
+        assert.equal(replaced.metadata.createdByAppBuildId, replacementBinding.createdByAppBuildId);
+        assert.equal(
+            readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
+            1,
+        );
+        assert.equal(
+            readdirSync(dataSlotsRoot).filter(name => name.startsWith('.migration-safety-')).length,
+            0,
+        );
+    }
+});
+
+test('TEST-DATA-007: rollback staging and safety-copy consumption stay path-private and restartable', async t => {
+    const dataSlotsRoot = createTempDataSlots(t);
+    createLevel1Workspace(dataSlotsRoot);
+    const interrupted = await openWorkspaceDataWithMigrations(dataSlotsRoot, {
+        migrationFailpoint(point) {
+            if (point === 'migration.after-safety-copy') {
+                throw new Error(point);
+            }
+        },
+    });
+    assert.equal(interrupted.kind, 'recovery');
+    const safety = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(safety.kind, 'verified');
+    if (safety.kind !== 'verified') {
+        throw new Error('Expected rollback source copy');
+    }
+    const candidateName = `.migration-rollback-candidate-${MIGRATION_ROLLBACK_OPERATION_ID}`;
+
+    const staged = stageMigrationSafetyCopyForRollback(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        candidateName,
+    );
+
+    assert.deepEqual(staged.members, [{
+        path: 'workspace.sqlite',
+        byteLength: safety.metadata.byteSize,
+        sha256: safety.metadata.closedDataSlotDigest,
+    }]);
+    assert.equal(JSON.stringify(staged).includes(dataSlotsRoot), false);
+    const active = observeRestoreDataSlot(dataSlotsRoot, 'active');
+    assert.equal(active.kind, 'present');
+    if (active.kind !== 'present') {
+        throw new Error('Expected current migrated slot');
+    }
+    renameRestoreDataSlot(
+        dataSlotsRoot,
+        'active',
+        `.migration-rollback-rollback-${MIGRATION_ROLLBACK_OPERATION_ID}`,
+        active.fingerprint.slotFingerprint,
+    );
+    renameRestoreDataSlot(
+        dataSlotsRoot,
+        candidateName,
+        'active',
+        staged.slotFingerprint,
+    );
+
+    assert.throws(() => consumeMigrationSafetyCopyAfterRollback(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        MIGRATION_ROLLBACK_OPERATION_ID,
+        {
+            failpoint(point) {
+                if (point === 'migration-safety-consume.after-quarantine') {
+                    throw new Error(point);
+                }
+            },
+        },
+    ), /migration-safety-consume\.after-quarantine/);
+    assert.deepEqual(inspectMigrationSafetyCopy(dataSlotsRoot), {kind: 'absent'});
+
+    assert.throws(() => consumeMigrationSafetyCopyAfterRollback(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        MIGRATION_ROLLBACK_OPERATION_ID,
+        {
+            failpoint(point) {
+                if (point === 'migration-safety-consume.after-database-delete') {
+                    throw new Error(point);
+                }
+            },
+        },
+    ), /migration-safety-consume\.after-database-delete/);
+    const consumedName = [
+        '.migration-safety-consumed',
+        MIGRATION_ROLLBACK_OPERATION_ID,
+        safety.metadata.migrationSafetyCopyId,
+    ].join('-');
+    assert.deepEqual(readdirSync(join(dataSlotsRoot, consumedName)), [
+        'migration-safety-copy-v1.json',
+    ]);
+
+    consumeMigrationSafetyCopyAfterRollback(
+        dataSlotsRoot,
+        safety.metadata.migrationSafetyCopyId,
+        MIGRATION_ROLLBACK_OPERATION_ID,
+    );
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
+        0,
+    );
+    assert.equal(
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('.migration-safety-consumed-')).length,
+        1,
+    );
+});
+
 test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', async (t) => {
     const dataSlotsRoot = createTempDataSlots(t);
     createLevel1Workspace(dataSlotsRoot);
@@ -706,7 +1249,7 @@ test('TEST-DATA-006: level 1 migrates through a retained verified safety copy', 
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter((name) => name.startsWith('migration-safety-level-1-'));
+        .filter((name) => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const safetyDatabase = new DatabaseSync(
         join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
@@ -765,7 +1308,7 @@ test('TEST-DATA-005/006: level 14 migrates through its retained verified safety 
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter(name => name.startsWith('migration-safety-level-14-'));
+        .filter(name => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const safetyDatabase = new DatabaseSync(
         join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
@@ -847,7 +1390,7 @@ test('TEST-DATA-006: migration interruption retains level 1 facts and its verifi
             database.close();
         }
         assert.equal(
-            readdirSync(dataSlotsRoot).filter((name) => name.startsWith('migration-safety-level-1-')).length,
+            readdirSync(dataSlotsRoot).filter((name) => name.startsWith('migration-safety-copy-')).length,
             1,
         );
     }
@@ -1317,7 +1860,7 @@ test('ADR-04/TEST-DATA-006: level 4 migrates occurrences with a restartable safe
         unchanged.close();
     }
     assert.equal(
-        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-4-')).length,
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
         1,
     );
 
@@ -1612,7 +2155,7 @@ test('TEST-DATA-002/006: level 2 Term facts migrate to current schema without id
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter((name) => name.startsWith('migration-safety-level-2-'));
+        .filter((name) => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const safetyDatabase = new DatabaseSync(
         join(dataSlotsRoot, safetyDirectories[0]!, 'workspace.sqlite'),
@@ -1734,7 +2277,7 @@ test('A-COURSE-007/TEST-DATA-002/006: level 3 ranges and identities migrate to c
     await opened.store.close();
 
     const safetyDirectories = readdirSync(dataSlotsRoot)
-        .filter(name => name.startsWith('migration-safety-level-3-'));
+        .filter(name => name.startsWith('migration-safety-copy-'));
     assert.equal(safetyDirectories.length, 1);
     const reopened = openWorkspaceData(dataSlotsRoot);
     assert.equal(reopened.kind, 'ready');
@@ -1811,7 +2354,7 @@ test('TEST-DATA-006: interrupted level 2 migration leaves all Term facts at leve
         database.close();
     }
     assert.equal(
-        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-2-')).length,
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
         1,
     );
 });

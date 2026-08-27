@@ -50,6 +50,7 @@ const STAGE_PATH = path.join(process.cwd(), 'scripts', 'development-build-fixtur
  * @return {object} Closed endpoint descriptor.
  */
 function buildDescriptor(fullCommit: string, schemaLevel: number, restoreActivation: readonly string[]) {
+    const supportsMigrationRollback = schemaLevel === 16;
     return {
         fullCommit,
         appBuildId: `development:${fullCommit}`,
@@ -64,8 +65,12 @@ function buildDescriptor(fullCommit: string, schemaLevel: number, restoreActivat
             backupRepository: ['courseflow-backup-repository-v1'],
             restoreSafetySet: ['courseflow-restore-safety-set-v1'],
             restoreActivation,
-            migrationSafetyCopy: [],
-            migrationRollbackHandoff: [],
+            migrationSafetyCopy: supportsMigrationRollback
+                ? ['courseflow-migration-safety-copy-v1']
+                : [],
+            migrationRollbackHandoff: supportsMigrationRollback
+                ? ['courseflow-migration-rollback-handoff-v1']
+                : [],
         },
     };
 }
@@ -122,6 +127,16 @@ test('ADR-04/08/10: fixture accepts only the closed disposable old/new build des
     assert.equal(result.stdout, 'PASS development build fixture input validation\n');
 });
 
+test('ADR-10: fixture rejects a new endpoint without MigrationSafetyCopyV1', () => {
+    const fixture = validFixture();
+    fixture.newBuild.formats.migrationSafetyCopy = [];
+
+    const result = runFixtureValidation(fixture);
+
+    assert.equal(result.status, 1);
+    assert.match(String(result.stderr), /newBuild\.formats does not match the closed fixture scope/);
+});
+
 test('ADR-10: fixture rejects a replacement for the pinned old full commit', () => {
     const fixture = validFixture();
     fixture.oldBuild.fullCommit = '0000000000000000000000000000000000000000';
@@ -166,4 +181,33 @@ test('ADR-04/08/10: fixture stage rejects every action outside its closed protoc
 
     assert.equal(result.status, 1);
     assert.match(String(result.stderr), /unsupported development build fixture stage action/);
+});
+
+test('ADR-10: migration fixture stage requires exact source and target build identities', () => {
+    const result = spawnSync(process.execPath, [
+        STAGE_PATH,
+        'copy-before-write',
+        path.join(tmpdir(), 'courseflow-development-build-fixture-source'),
+        path.join(tmpdir(), 'courseflow-development-build-fixture-data'),
+    ], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        windowsHide: true,
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(String(result.stderr), /wrong argument count/);
+});
+
+test('FLOW-07: handoff fixture stages accept only their closed restart arguments', () => {
+    for (const action of ['handoff-arm-interrupted', 'handoff-inspect']) {
+        const result = spawnSync(process.execPath, [STAGE_PATH, action], {
+            encoding: 'utf8',
+            timeout: 5_000,
+            windowsHide: true,
+        });
+
+        assert.equal(result.status, 1);
+        assert.match(String(result.stderr), /wrong argument count/);
+    }
 });

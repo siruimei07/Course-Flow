@@ -16,10 +16,47 @@ import {
 } from '../../src/data/schema';
 import {
     initializeWorkspaceData,
-    openWorkspaceDataWithMigrations,
+    openWorkspaceDataWithMigrations as openWorkspaceDataWithMigrationsUnbound,
 } from '../../src/data/sqlite-data-store';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
+const MIGRATION_SAFETY_COPY_BINDING = Object.freeze({
+    createdByAppBuildId: 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    rollbackTarget: Object.freeze({
+        releaseVersion: '0.0.0-development-old',
+        tag: 'development-old',
+        appBuildId: 'development:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        artifacts: Object.freeze([
+            Object.freeze({
+                platform: 'darwin-arm64' as const,
+                name: 'CourseFlow-0.0.0-development-old-macOS-arm64.dmg',
+                sha256: 'c'.repeat(64),
+            }),
+            Object.freeze({
+                platform: 'win32-x64' as const,
+                name: 'CourseFlow-0.0.0-development-old-Windows-x64.msi',
+                sha256: 'd'.repeat(64),
+            }),
+        ] as const),
+    }),
+    clock: Object.freeze({now: () => '2026-08-27T12:00:00.000Z'}),
+});
+
+/**
+ * Opens an old test schema with an explicit exact development-build rollback binding.
+ * @param {string} dataSlotsRoot - Isolated DATA slots root.
+ * @param {Parameters<typeof openWorkspaceDataWithMigrationsUnbound>[1]} options - Migration controls.
+ * @return {ReturnType<typeof openWorkspaceDataWithMigrationsUnbound>} Migration outcome promise.
+ */
+function openWorkspaceDataWithMigrations(
+    dataSlotsRoot: string,
+    options: Parameters<typeof openWorkspaceDataWithMigrationsUnbound>[1] = {},
+): ReturnType<typeof openWorkspaceDataWithMigrationsUnbound> {
+    return openWorkspaceDataWithMigrationsUnbound(dataSlotsRoot, {
+        ...options,
+        migrationSafetyCopy: MIGRATION_SAFETY_COPY_BINDING,
+    });
+}
 
 /**
  * Creates an isolated DATA slots root and removes it after the test.
@@ -163,7 +200,7 @@ test('ADR-04/TEST-DATA-006: level 6 migrates through HolidayRange storage atomic
         unchanged.close();
     }
     assert.equal(
-        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-level-6-')).length,
+        readdirSync(dataSlotsRoot).filter(name => name.startsWith('migration-safety-copy-')).length,
         1,
     );
 

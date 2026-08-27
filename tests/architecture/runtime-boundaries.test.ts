@@ -509,6 +509,7 @@ test('production keeps one utility process and Renderer imports no privileged ru
     .map((sourcePath) => path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'))
     .sort();
   assert.deepEqual(nodeSqliteImporters, [
+    'src/data/migration-safety-copy.ts',
     'src/data/schema.ts',
     'src/data/sqlite-data-store.ts',
   ]);

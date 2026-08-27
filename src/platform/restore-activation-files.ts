@@ -29,6 +29,8 @@ const DATA_SLOT_MEMBER_NAMES = Object.freeze([
     `${DATABASE_MEMBER_NAME}-wal`,
 ]);
 const MAXIMUM_DATABASE_BYTES = 1_099_511_627_776n;
+const MAXIMUM_UINT64 = 18_446_744_073_709_551_615n;
+const CANONICAL_UNSIGNED_DECIMAL_PATTERN = /^(0|[1-9][0-9]*)$/;
 
 export type RestoreDataSlotFingerprint = Readonly<{
     schema: 'courseflow-data-slot-fingerprint-v1';
@@ -43,6 +45,14 @@ export type RestoreDataSlotFingerprint = Readonly<{
 export type RestoreDataSlotObservation =
     | Readonly<{kind: 'absent'}>
     | Readonly<{kind: 'present'; fingerprint: RestoreDataSlotFingerprint}>;
+
+export type RestoreDataSlotStableIdentityV1 = Readonly<{
+    schema: 'courseflow-data-slot-stable-identity-v1';
+    slotDevice: string;
+    slotInode: string;
+    databaseDevice: string;
+    databaseInode: string;
+}>;
 
 export type RestoreActivationFileOptions = Readonly<{
     availableBytes?: (directoryPath: string) => bigint;
@@ -74,6 +84,63 @@ function requireChildName(name: string): void {
         || path.basename(name) !== name) {
         throw new TypeError('Restore slot name is invalid');
     }
+}
+
+/**
+ * Tests one canonical unsigned 64-bit decimal field.
+ * @param {unknown} value - Candidate serialized filesystem identity field.
+ * @return {value is string} Whether the field is canonical and bounded.
+ */
+function isCanonicalUnsigned64(value: unknown): value is string {
+    return typeof value === 'string'
+        && CANONICAL_UNSIGNED_DECIMAL_PATTERN.test(value)
+        && BigInt(value) <= MAXIMUM_UINT64;
+}
+
+/**
+ * Revalidates a path-free persisted DATA-slot identity.
+ * @param {unknown} value - Candidate persisted identity.
+ * @return {RestoreDataSlotStableIdentityV1} Frozen canonical identity.
+ */
+export function requireRestoreDataSlotStableIdentity(
+    value: unknown,
+): RestoreDataSlotStableIdentityV1 {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        throw new Error('Restore DATA stable identity is invalid');
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = [
+        'schema',
+        'slotDevice',
+        'slotInode',
+        'databaseDevice',
+        'databaseInode',
+    ];
+    const actualKeys = Reflect.ownKeys(descriptors);
+    if (Object.getPrototypeOf(value) !== Object.prototype
+        || actualKeys.length !== keys.length
+        || !actualKeys.every(key => typeof key === 'string' && keys.includes(key))
+        || !keys.every(key => {
+            const descriptor = descriptors[key];
+            return descriptor !== undefined && descriptor.enumerable && 'value' in descriptor;
+        })) {
+        throw new Error('Restore DATA stable identity is invalid');
+    }
+    const identity = value as Record<string, unknown>;
+    if (identity.schema !== 'courseflow-data-slot-stable-identity-v1'
+        || !isCanonicalUnsigned64(identity.slotDevice)
+        || !isCanonicalUnsigned64(identity.slotInode)
+        || !isCanonicalUnsigned64(identity.databaseDevice)
+        || !isCanonicalUnsigned64(identity.databaseInode)) {
+        throw new Error('Restore DATA stable identity is invalid');
+    }
+    return Object.freeze({
+        schema: identity.schema,
+        slotDevice: identity.slotDevice,
+        slotInode: identity.slotInode,
+        databaseDevice: identity.databaseDevice,
+        databaseInode: identity.databaseInode,
+    });
 }
 
 /**
@@ -160,6 +227,57 @@ export function observeRestoreDataSlot(
             name,
             digest: digestPlainFile(path.join(slotPath, name), MAXIMUM_DATABASE_BYTES),
         }))),
+    });
+}
+
+/**
+ * Reads a path-free stable identity for one exact DATA slot and database member.
+ * @param {string} dataSlotsRoot - Trusted DataSlots parent.
+ * @param {string} slotName - Exact direct-child name.
+ * @return {RestoreDataSlotStableIdentityV1} Stable directory and database identity.
+ */
+export function readRestoreDataSlotStableIdentity(
+    dataSlotsRoot: string,
+    slotName: string,
+): RestoreDataSlotStableIdentityV1 {
+    requirePlainDirectory(dataSlotsRoot);
+    requireChildName(slotName);
+    if (!plainChildDirectoryExists(dataSlotsRoot, slotName)) {
+        throw new Error('Restore DATA slot is missing');
+    }
+    const slotPath = path.join(dataSlotsRoot, slotName);
+    const slotBefore = lstatSync(slotPath, {bigint: true});
+    const memberNames = listPlainDirectory(slotPath);
+    if (!memberNames.includes(DATABASE_MEMBER_NAME)
+        || memberNames.some(name => !DATA_SLOT_MEMBER_NAMES.includes(name))) {
+        throw new Error('Restore DataSlot closure is invalid');
+    }
+    const databasePath = path.join(slotPath, DATABASE_MEMBER_NAME);
+    const databaseBefore = lstatSync(databasePath, {bigint: true});
+    if (!slotBefore.isDirectory()
+        || slotBefore.isSymbolicLink()
+        || !databaseBefore.isFile()
+        || databaseBefore.isSymbolicLink()) {
+        throw new Error('Restore DATA stable identity is invalid');
+    }
+    const slotAfter = lstatSync(slotPath, {bigint: true});
+    const databaseAfter = lstatSync(databasePath, {bigint: true});
+    if (!slotAfter.isDirectory()
+        || slotAfter.isSymbolicLink()
+        || slotAfter.dev !== slotBefore.dev
+        || slotAfter.ino !== slotBefore.ino
+        || !databaseAfter.isFile()
+        || databaseAfter.isSymbolicLink()
+        || databaseAfter.dev !== databaseBefore.dev
+        || databaseAfter.ino !== databaseBefore.ino) {
+        throw new Error('Restore DATA stable identity changed while observed');
+    }
+    return requireRestoreDataSlotStableIdentity({
+        schema: 'courseflow-data-slot-stable-identity-v1',
+        slotDevice: slotBefore.dev.toString(),
+        slotInode: slotBefore.ino.toString(),
+        databaseDevice: databaseBefore.dev.toString(),
+        databaseInode: databaseBefore.ino.toString(),
     });
 }
 

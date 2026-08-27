@@ -60,6 +60,68 @@ export type DataOpenProblem =
       details: Readonly<{ reason: 'database-unreadable' }>;
     }>
   | Readonly<{
+      code: 'migration-safety-unavailable';
+      scope: 'workspace';
+      dataEffect: 'unchanged';
+      affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+      allowedActions: readonly [];
+      context: Readonly<Record<never, never>>;
+      details: Readonly<{ reason: 'build-binding-missing' }>;
+    }>
+  | Readonly<{
+      code: 'rollback-required';
+      scope: 'workspace';
+      dataEffect: 'unchanged';
+      affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+      allowedActions: readonly ('cancel-as-source' | 'continue-as-target')[];
+      context: Readonly<{
+        migrationRollbackSessionId: string;
+        operationId: string;
+      }>;
+      details: Readonly<{
+        reason: 'migration-rollback-pending';
+        phase: 'planned' | 'prepared' | 'armed' | 'awaiting-target-build' | 'completing' | 'cancelling';
+        currentBuild: 'source' | 'target';
+        requiredBuilds: Readonly<{
+          sourceAppBuildId: string;
+          sourceReleaseVersion: string;
+          targetAppBuildId: string;
+          targetReleaseVersion: string;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      code: 'rollback-build-mismatch';
+      scope: 'workspace';
+      dataEffect: 'unchanged';
+      affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+      allowedActions: readonly [];
+      context: Readonly<{
+        migrationRollbackSessionId: string;
+        operationId: string;
+      }>;
+      details: Readonly<{
+        reason: 'migration-rollback-pending';
+        phase: 'planned' | 'prepared' | 'armed' | 'awaiting-target-build' | 'completing' | 'cancelling';
+        currentBuild: 'other';
+        requiredBuilds: Readonly<{
+          sourceAppBuildId: string;
+          sourceReleaseVersion: string;
+          targetAppBuildId: string;
+          targetReleaseVersion: string;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      code: 'recovery-required';
+      scope: 'workspace';
+      dataEffect: 'unchanged';
+      affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
+      allowedActions: readonly [];
+      context: Readonly<Record<never, never>>;
+      details: Readonly<{ reason: 'migration-rollback-evidence' }>;
+    }>
+  | Readonly<{
       code: 'recovery-required';
       scope: 'workspace';
       dataEffect: 'unchanged';
@@ -175,6 +237,34 @@ function isExactStringList(value: unknown, expected: readonly string[]): boolean
   );
 }
 
+function isBoundedIdentity(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= 255;
+}
+
+function isMigrationRollbackPhase(value: unknown): boolean {
+  return value === 'planned'
+    || value === 'prepared'
+    || value === 'armed'
+    || value === 'awaiting-target-build'
+    || value === 'completing'
+    || value === 'cancelling';
+}
+
+function isMigrationRollbackRequiredBuilds(value: unknown): boolean {
+  return isPlainObject(value)
+    && hasOnlyKeys(value, [
+      'sourceAppBuildId',
+      'sourceReleaseVersion',
+      'targetAppBuildId',
+      'targetReleaseVersion',
+    ])
+    && isBoundedIdentity(value.sourceAppBuildId)
+    && isBoundedIdentity(value.sourceReleaseVersion)
+    && isBoundedIdentity(value.targetAppBuildId)
+    && value.targetAppBuildId !== value.sourceAppBuildId
+    && isBoundedIdentity(value.targetReleaseVersion);
+}
+
 function isDataOpenProblem(value: unknown): value is DataOpenProblem {
   if (
     !isPlainObject(value) ||
@@ -207,6 +297,28 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
       && hasOnlyKeys(value.context, ['restoreSessionId', 'operationId'])
       && isCanonicalUuid(value.context.restoreSessionId)
       && isCanonicalUuid(value.context.operationId);
+  }
+
+  if ((value.code === 'rollback-required' || value.code === 'rollback-build-mismatch')
+    && hasOnlyKeys(value.context, ['migrationRollbackSessionId', 'operationId'])
+    && isCanonicalUuid(value.context.migrationRollbackSessionId)
+    && isCanonicalUuid(value.context.operationId)
+    && hasOnlyKeys(value.details, ['reason', 'phase', 'currentBuild', 'requiredBuilds'])
+    && value.details.reason === 'migration-rollback-pending'
+    && isMigrationRollbackPhase(value.details.phase)
+    && isMigrationRollbackRequiredBuilds(value.details.requiredBuilds)
+    && isExactStringList(value.affectedCapabilities, ['workspace.read', 'workspace.write'])) {
+    if (value.code === 'rollback-build-mismatch') {
+      return value.details.currentBuild === 'other'
+        && isExactStringList(value.allowedActions, []);
+    }
+    if (value.details.currentBuild === 'source') {
+      return isExactStringList(value.allowedActions, [])
+        || isExactStringList(value.allowedActions, ['cancel-as-source']);
+    }
+    return value.details.currentBuild === 'target'
+      && (isExactStringList(value.allowedActions, [])
+        || isExactStringList(value.allowedActions, ['continue-as-target']));
   }
 
   if (!isExactStringList(value.allowedActions, []) || !hasOnlyKeys(value.context, [])) {
@@ -244,11 +356,18 @@ function isDataOpenProblem(value: unknown): value is DataOpenProblem {
     );
   }
 
+  if (value.code === 'migration-safety-unavailable') {
+    return isExactStringList(value.affectedCapabilities, ['workspace.read', 'workspace.write'])
+      && hasOnlyKeys(value.details, ['reason'])
+      && value.details.reason === 'build-binding-missing';
+  }
+
   return (
     value.code === 'recovery-required' &&
     isExactStringList(value.affectedCapabilities, ['workspace.read', 'workspace.write']) &&
     hasOnlyKeys(value.details, ['reason']) &&
-    value.details.reason === 'database-unreadable'
+    (value.details.reason === 'database-unreadable'
+      || value.details.reason === 'migration-rollback-evidence')
   );
 }
 
