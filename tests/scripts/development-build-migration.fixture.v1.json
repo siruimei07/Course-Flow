@@ -45,8 +45,8 @@
     }
   },
   "newBuild": {
-    "fullCommit": "6ed1c23f70d282338d824df553d67a8e8dca20bb",
-    "appBuildId": "development:6ed1c23f70d282338d824df553d67a8e8dca20bb",
+    "fullCommit": "f3b46238008f87fc3d812af44d5ec47e80a2f761",
+    "appBuildId": "development:f3b46238008f87fc3d812af44d5ec47e80a2f761",
     "workspaceProtocol": {
       "current": 2,
       "accepted": [
@@ -89,8 +89,12 @@
         "courseflow-activation-journal-record-v1",
         "courseflow-restore-session-control-v1"
       ],
-      "migrationSafetyCopy": [],
-      "migrationRollbackHandoff": []
+      "migrationSafetyCopy": [
+        "courseflow-migration-safety-copy-v1"
+      ],
+      "migrationRollbackHandoff": [
+        "courseflow-migration-rollback-handoff-v1"
+      ]
     }
   },
   "dataRoot": {
