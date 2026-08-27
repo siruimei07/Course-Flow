@@ -1,5 +1,5 @@
 /**
- * @file Runs the exact disposable old/new development-build migration fixture.
+ * @file Runs exact disposable migration and compatible rollback development-build fixtures.
  */
 
 import {spawnSync} from 'node:child_process';
@@ -31,6 +31,14 @@ const OTHER_BUILD_ID = 'development:0000000000000000000000000000000000000000';
  * @type {string}
  */
 const FIXTURE_VERSION = 'courseflow-development-build-fixture-v1';
+
+/**
+ * Closed compatible source/rollback-target fixture format identity.
+ *
+ * @const
+ * @type {string}
+ */
+const COMPATIBLE_FIXTURE_VERSION = 'courseflow-compatible-build-fixture-v1';
 
 /**
  * Maximum time allowed for one dependency, test, package, or smoke command.
@@ -172,7 +180,7 @@ function requireBuildDescriptor(
  * @param {unknown} value Parsed fixture JSON.
  * @return {Record<string, unknown>} Validated fixture.
  */
-function requireFixture(value) {
+function requireLegacyFixture(value) {
     const fixture = requireExactRecord(value, [
         'fixtureVersion',
         'oldBuild',
@@ -204,6 +212,91 @@ function requireFixture(value) {
         realDataAllowed: false,
     }, 'dataRoot');
     return fixture;
+}
+
+/**
+ * Validates the compatible source/rollback-target fixture document.
+ *
+ * @param {unknown} value Parsed fixture JSON.
+ * @return {Record<string, unknown>} Validated fixture.
+ */
+function requireCompatibleFixture(value) {
+    const fixture = requireExactRecord(value, [
+        'fixtureVersion',
+        'rollbackTargetBuild',
+        'sourceBuild',
+        'dataRoot',
+    ], 'fixture');
+    if (fixture.fixtureVersion !== COMPATIBLE_FIXTURE_VERSION) {
+        throw new Error(`fixtureVersion must equal ${COMPATIBLE_FIXTURE_VERSION}`);
+    }
+    const activationFormats = [
+        'courseflow-activation-plan-v1',
+        'courseflow-activation-journal-record-v1',
+        'courseflow-restore-session-control-v1',
+    ];
+    const safetyFormats = ['courseflow-migration-safety-copy-v1'];
+    const handoffFormats = ['courseflow-migration-rollback-handoff-v1'];
+    const rollbackTargetBuild = requireBuildDescriptor(
+        fixture.rollbackTargetBuild,
+        'rollbackTargetBuild',
+        15,
+        activationFormats,
+        safetyFormats,
+        handoffFormats,
+    );
+    const sourceBuild = requireBuildDescriptor(
+        fixture.sourceBuild,
+        'sourceBuild',
+        16,
+        activationFormats,
+        safetyFormats,
+        handoffFormats,
+    );
+    if (rollbackTargetBuild.fullCommit === sourceBuild.fullCommit) {
+        throw new Error('rollback target and source full commits must differ');
+    }
+    requireExactValue(fixture.dataRoot, {
+        kind: 'os-temporary',
+        disposable: true,
+        realDataAllowed: false,
+    }, 'dataRoot');
+    return fixture;
+}
+
+/**
+ * Validates one supported fixture document without weakening either closed schema.
+ *
+ * @param {unknown} value Parsed fixture JSON.
+ * @return {Record<string, unknown>} Validated fixture.
+ */
+function requireFixture(value) {
+    if (!isRecord(value)) {
+        throw new Error('fixture must be an object');
+    }
+    if (value.fixtureVersion === FIXTURE_VERSION) {
+        return requireLegacyFixture(value);
+    }
+    if (value.fixtureVersion === COMPATIBLE_FIXTURE_VERSION) {
+        return requireCompatibleFixture(value);
+    }
+    throw new Error('fixtureVersion is unsupported');
+}
+
+/**
+ * Returns the target/source endpoint pair for either closed fixture schema.
+ *
+ * @param {Record<string, unknown>} fixture Validated fixture.
+ * @return {{targetBuild: Record<string, unknown>, sourceBuild: Record<string, unknown>}} Build pair.
+ */
+function endpointBuilds(fixture) {
+    if (fixture.fixtureVersion === COMPATIBLE_FIXTURE_VERSION) {
+        return {
+            targetBuild: fixture.rollbackTargetBuild,
+            sourceBuild: fixture.sourceBuild,
+        };
+    }
+    return {targetBuild: fixture.oldBuild, sourceBuild: fixture.newBuild};
 }
 
 /**
@@ -461,9 +554,15 @@ function verifyFormatScope(sourceRoot, build) {
 function verifyCompiledDescriptor(build, evidence) {
     requireExactValue(evidence, {
         action: 'describe-build',
+        fullCommit: build.fullCommit,
+        appBuildId: build.appBuildId,
         workspaceProtocol: build.workspaceProtocol.current,
         dataSchema: build.dataSchema.current,
         backupRepository: build.formats.backupRepository[0],
+        readers: {
+            migrationSafetyCopyV1: build.formats.migrationSafetyCopy.length === 1,
+            migrationRollbackHandoffV1: build.formats.migrationRollbackHandoff.length === 1,
+        },
     }, `${build.fullCommit} compiled descriptor`);
 }
 
@@ -511,7 +610,8 @@ function packageAndSmoke(sourceRoot, build, fixtureRoot, label) {
  * @return {void}
  */
 function requireEndpointObjects(repositoryRoot, fixture) {
-    for (const build of [fixture.oldBuild, fixture.newBuild]) {
+    const {targetBuild, sourceBuild} = endpointBuilds(fixture);
+    for (const build of [targetBuild, sourceBuild]) {
         const resolved = runGit(repositoryRoot, ['rev-parse', '--verify', `${build.fullCommit}^{commit}`]);
         if (resolved !== build.fullCommit) {
             throw new Error(`fixture endpoint is not the exact commit ${build.fullCommit}`);
@@ -626,7 +726,7 @@ function verifyMigrationRollbackStages(fixture, stages) {
  * @param {Record<string, unknown>} fixture Validated fixture.
  * @return {void}
  */
-function runFullFixture(fixture) {
+function runLegacyFixture(fixture) {
     if (process.platform !== 'win32' || process.arch !== 'x64') {
         throw new Error('full development build fixture currently requires a Windows x64 host');
     }
@@ -724,6 +824,351 @@ function runFullFixture(fixture) {
 }
 
 /**
+ * Creates one independent migrated DATA and armed handoff scenario.
+ *
+ * @param {Record<string, unknown>} fixture Validated compatible fixture.
+ * @param {Record<string, string>} paths Exact endpoint and disposable scenario paths.
+ * @return {Record<string, unknown>} Fresh-process stage evidence.
+ */
+function prepareCompatibleScenario(fixture, paths) {
+    const dataRoot = path.join(paths.scenarioRoot, 'data-slots');
+    const activityControlRoot = path.join(paths.scenarioRoot, 'activity-control');
+    mkdirSync(paths.scenarioRoot);
+    mkdirSync(dataRoot);
+    mkdirSync(activityControlRoot);
+    const stages = {
+        targetCreate: runStage(paths.targetStagePath, 'old-create', [
+            paths.targetSourceRoot,
+            dataRoot,
+        ]),
+        copy: runStage(paths.sourceStagePath, 'copy-before-write', [
+            paths.sourceSourceRoot,
+            dataRoot,
+            fixture.sourceBuild.appBuildId,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]),
+        migration: runStage(paths.sourceStagePath, 'migrate', [
+            paths.sourceSourceRoot,
+            dataRoot,
+            fixture.sourceBuild.appBuildId,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]),
+        restart: runStage(paths.sourceStagePath, 'reopen', [
+            paths.sourceSourceRoot,
+            dataRoot,
+        ]),
+        targetBeforeHandoff: runStage(paths.targetStagePath, 'reject-future-schema', [
+            paths.targetSourceRoot,
+            dataRoot,
+        ]),
+        handoffArm: runStage(paths.sourceStagePath, 'handoff-arm-interrupted', [
+            paths.sourceSourceRoot,
+            dataRoot,
+            activityControlRoot,
+            fixture.sourceBuild.appBuildId,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]),
+    };
+    verifyMigrationSafetyStages({
+        oldBuild: fixture.rollbackTargetBuild,
+        newBuild: fixture.sourceBuild,
+    }, stages);
+    return {dataRoot, activityControlRoot, ...stages};
+}
+
+/**
+ * Verifies both terminal branches and every exact-build stop classification.
+ *
+ * @param {Record<string, unknown>} fixture Validated compatible fixture.
+ * @param {Record<string, unknown>} stages Complete stage evidence.
+ * @return {void}
+ */
+function verifyCompatibleRollbackStages(fixture, stages) {
+    const cancel = stages.cancel;
+    const continuation = stages.continuation;
+    const armEvidence = [cancel.handoffArm, continuation.handoffArm];
+    for (const arm of armEvidence) {
+        if (arm.interruptionCode !== 'activation-pending'
+            || arm.safetyCopyCount !== 1
+            || arm.physical.activeFacts.schemaLevel !== '15'
+            || arm.physical.rollbackFacts.schemaLevel !== '16') {
+            throw new Error('compatible handoff write-ahead evidence is incomplete');
+        }
+    }
+    const classifications = [
+        [cancel.sourceInspect, 'source', ['cancel-as-source']],
+        [cancel.otherInspect, 'other', []],
+        [continuation.targetInspect, 'target', ['continue-as-target']],
+        [continuation.otherInspect, 'other', []],
+    ];
+    for (const [stage, currentBuild, allowedActions] of classifications) {
+        if (stage.status.kind !== 'maintenance'
+            || stage.status.phase !== 'awaiting-target-build'
+            || stage.status.sessionVersion !== '4'
+            || stage.status.currentBuild !== currentBuild) {
+            throw new Error(`compatible handoff ${currentBuild} classification changed`);
+        }
+        requireExactValue(
+            stage.status.allowedActions,
+            allowedActions,
+            `compatible handoff ${currentBuild} allowed actions`,
+        );
+        if (stage.status.requiredBuilds.sourceAppBuildId !== fixture.sourceBuild.appBuildId
+            || stage.status.requiredBuilds.targetAppBuildId
+                !== fixture.rollbackTargetBuild.appBuildId) {
+            throw new Error('compatible handoff required builds changed');
+        }
+    }
+    requireExactValue(cancel.sourceInspect.physical, cancel.otherInspect.physical, 'source other stop');
+    requireExactValue(
+        continuation.targetInspect.physical,
+        continuation.otherInspect.physical,
+        'target other stop',
+    );
+    requireExactValue(cancel.completed.events, [
+        'reopen:16:2',
+        'library-reconcile-fixture-port',
+        'flow00-fixture-port',
+    ], 'source cancel completion order');
+    if (cancel.completed.status.kind !== 'cancelled'
+        || cancel.completed.physical.activeFacts.schemaLevel !== '16'
+        || cancel.completed.safetyCopy !== 'verified') {
+        throw new Error('exact source cancel did not preserve migrated DATA and safety evidence');
+    }
+    requireExactValue(cancel.completed.physical, cancel.terminalRestart.physical, 'source terminal restart');
+    if (cancel.terminalRestart.status.kind !== 'cancelled'
+        || cancel.terminalRestart.journalRecordCount !== cancel.completed.journalRecordCount) {
+        throw new Error('source cancel terminal receipt did not survive restart');
+    }
+    requireExactValue(continuation.completed.events, [
+        'reopen:15:1',
+        'library-reconcile-fixture-port',
+        'flow00-fixture-port',
+        'consume-safety-copy',
+    ], 'target continue completion order');
+    if (continuation.completed.status.kind !== 'succeeded'
+        || continuation.completed.physical.activeFacts.schemaLevel !== '15'
+        || continuation.completed.safetyCopy !== 'absent') {
+        throw new Error('exact rollback target did not install and consume the safety copy');
+    }
+    requireExactValue(
+        continuation.completed.physical,
+        continuation.terminalRestart.physical,
+        'target terminal restart',
+    );
+    if (continuation.terminalRestart.status.kind !== 'succeeded'
+        || continuation.terminalRestart.journalRecordCount
+            !== continuation.completed.journalRecordCount) {
+        throw new Error('target continue terminal receipt did not survive restart');
+    }
+    for (const mixed of [stages.mixedByTarget, stages.mixedBySource]) {
+        if (mixed.oldAcceptsNew !== false || mixed.newAcceptsOld !== false) {
+            throw new Error('mixed exact-build bootstrap was not stopped');
+        }
+    }
+}
+
+/**
+ * Runs the exact compatible source/rollback-target fixture in isolated worktrees.
+ *
+ * @param {Record<string, unknown>} fixture Validated compatible fixture.
+ * @return {void}
+ */
+function runCompatibleFixture(fixture) {
+    if (process.platform !== 'win32' || process.arch !== 'x64') {
+        throw new Error('full compatible build fixture currently requires a Windows x64 host');
+    }
+    const repositoryRoot = runGit(process.cwd(), ['rev-parse', '--show-toplevel']);
+    requireEndpointObjects(repositoryRoot, fixture);
+    const fixtureRoot = requireDisposableFixtureRoot(mkdtempSync(path.join(
+        tmpdir(),
+        'courseflow-development-build-fixture-',
+    )));
+    const targetSourceRoot = path.join(fixtureRoot, 'rollback-target-source');
+    const sourceSourceRoot = path.join(fixtureRoot, 'source-build-source');
+    const createdWorktrees = [];
+    let stages;
+
+    try {
+        addEndpointWorktree(repositoryRoot, targetSourceRoot, fixture.rollbackTargetBuild.fullCommit);
+        createdWorktrees.push(targetSourceRoot);
+        addEndpointWorktree(repositoryRoot, sourceSourceRoot, fixture.sourceBuild.fullCommit);
+        createdWorktrees.push(sourceSourceRoot);
+        const targetStagePath = path.join(
+            targetSourceRoot,
+            'scripts',
+            'development-build-fixture-stage.cjs',
+        );
+        const sourceStagePath = path.join(
+            sourceSourceRoot,
+            'scripts',
+            'development-build-fixture-stage.cjs',
+        );
+
+        runPnpm(targetSourceRoot, ['install', '--frozen-lockfile']);
+        runPnpm(targetSourceRoot, ['run', 'test:compile']);
+        runPnpm(targetSourceRoot, ['typecheck']);
+        runPnpm(sourceSourceRoot, ['install', '--frozen-lockfile']);
+        runPnpm(sourceSourceRoot, ['test']);
+        runPnpm(sourceSourceRoot, ['typecheck']);
+
+        verifyFormatScope(targetSourceRoot, fixture.rollbackTargetBuild);
+        verifyFormatScope(sourceSourceRoot, fixture.sourceBuild);
+        const targetDescriptor = runStage(targetStagePath, 'describe-build', [targetSourceRoot]);
+        const sourceDescriptor = runStage(sourceStagePath, 'describe-build', [sourceSourceRoot]);
+        verifyCompiledDescriptor(fixture.rollbackTargetBuild, targetDescriptor);
+        verifyCompiledDescriptor(fixture.sourceBuild, sourceDescriptor);
+
+        const sharedPaths = {
+            targetSourceRoot,
+            sourceSourceRoot,
+            targetStagePath,
+            sourceStagePath,
+        };
+        const cancel = prepareCompatibleScenario(fixture, {
+            ...sharedPaths,
+            scenarioRoot: path.join(fixtureRoot, 'source-cancel'),
+        });
+        cancel.sourceInspect = runStage(sourceStagePath, 'handoff-inspect', [
+            sourceSourceRoot,
+            cancel.dataRoot,
+            cancel.activityControlRoot,
+            fixture.sourceBuild.appBuildId,
+        ]);
+        cancel.otherInspect = runStage(sourceStagePath, 'handoff-inspect', [
+            sourceSourceRoot,
+            cancel.dataRoot,
+            cancel.activityControlRoot,
+            OTHER_BUILD_ID,
+        ]);
+        cancel.completed = runStage(sourceStagePath, 'handoff-cancel', [
+            sourceSourceRoot,
+            cancel.dataRoot,
+            cancel.activityControlRoot,
+            fixture.sourceBuild.appBuildId,
+        ]);
+        cancel.terminalRestart = runStage(sourceStagePath, 'handoff-inspect', [
+            sourceSourceRoot,
+            cancel.dataRoot,
+            cancel.activityControlRoot,
+            fixture.sourceBuild.appBuildId,
+        ]);
+
+        const continuation = prepareCompatibleScenario(fixture, {
+            ...sharedPaths,
+            scenarioRoot: path.join(fixtureRoot, 'target-continue'),
+        });
+        continuation.targetInspect = runStage(targetStagePath, 'handoff-inspect', [
+            targetSourceRoot,
+            continuation.dataRoot,
+            continuation.activityControlRoot,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]);
+        continuation.otherInspect = runStage(targetStagePath, 'handoff-inspect', [
+            targetSourceRoot,
+            continuation.dataRoot,
+            continuation.activityControlRoot,
+            OTHER_BUILD_ID,
+        ]);
+        continuation.completed = runStage(targetStagePath, 'handoff-continue', [
+            targetSourceRoot,
+            continuation.dataRoot,
+            continuation.activityControlRoot,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]);
+        continuation.terminalRestart = runStage(targetStagePath, 'handoff-inspect', [
+            targetSourceRoot,
+            continuation.dataRoot,
+            continuation.activityControlRoot,
+            fixture.rollbackTargetBuild.appBuildId,
+        ]);
+
+        stages = {
+            targetDescriptor,
+            sourceDescriptor,
+            cancel,
+            continuation,
+            mixedByTarget: runStage(targetStagePath, 'reject-mixed-builds', [
+                targetSourceRoot,
+                sourceSourceRoot,
+                fixture.rollbackTargetBuild.appBuildId,
+                fixture.sourceBuild.appBuildId,
+            ]),
+            mixedBySource: runStage(sourceStagePath, 'reject-mixed-builds', [
+                targetSourceRoot,
+                sourceSourceRoot,
+                fixture.rollbackTargetBuild.appBuildId,
+                fixture.sourceBuild.appBuildId,
+            ]),
+        };
+        verifyCompatibleRollbackStages(fixture, stages);
+
+        packageAndSmoke(
+            targetSourceRoot,
+            fixture.rollbackTargetBuild,
+            fixtureRoot,
+            'rollback-target',
+        );
+        packageAndSmoke(sourceSourceRoot, fixture.sourceBuild, fixtureRoot, 'source');
+    }
+    finally {
+        cleanupFixture(repositoryRoot, fixtureRoot, createdWorktrees);
+    }
+    emitCompatibleFixtureEvidence(fixture, stages);
+}
+
+/**
+ * Emits path-free evidence for the compatible fixture run.
+ *
+ * @param {Record<string, unknown>} fixture Validated compatible fixture.
+ * @param {Record<string, unknown>} stages Complete stage evidence.
+ * @return {void}
+ */
+function emitCompatibleFixtureEvidence(fixture, stages) {
+    const evidence = {
+        fixtureVersion: fixture.fixtureVersion,
+        host: 'win32/x64',
+        rollbackTargetBuild: fixture.rollbackTargetBuild,
+        sourceBuild: fixture.sourceBuild,
+        checks: {
+            cleanDetachedWorktrees: true,
+            independentCommits: fixture.rollbackTargetBuild.fullCommit
+                !== fixture.sourceBuild.fullCommit,
+            targetOwnDescriptor: stages.targetDescriptor.appBuildId
+                === fixture.rollbackTargetBuild.appBuildId,
+            sourceOwnDescriptor: stages.sourceDescriptor.appBuildId
+                === fixture.sourceBuild.appBuildId,
+            targetOwnHandoffAndSafetyReaders: stages.targetDescriptor.readers.migrationSafetyCopyV1
+                && stages.targetDescriptor.readers.migrationRollbackHandoffV1,
+            sourceOwnHandoffAndSafetyReaders: stages.sourceDescriptor.readers.migrationSafetyCopyV1
+                && stages.sourceDescriptor.readers.migrationRollbackHandoffV1,
+            sourceCancel: stages.cancel.completed.status.kind === 'cancelled',
+            targetContinue: stages.continuation.completed.status.kind === 'succeeded',
+            otherBuildStopped: stages.cancel.otherInspect.status.allowedActions.length === 0
+                && stages.continuation.otherInspect.status.allowedActions.length === 0,
+            mixedBuildStopped: stages.mixedByTarget.oldAcceptsNew === false
+                && stages.mixedByTarget.newAcceptsOld === false
+                && stages.mixedBySource.oldAcceptsNew === false
+                && stages.mixedBySource.newAcceptsOld === false,
+            terminalCrossProcessRestart: stages.cancel.terminalRestart.status.kind === 'cancelled'
+                && stages.continuation.terminalRestart.status.kind === 'succeeded',
+            sourceFullTest: 'pass',
+            sourceTypecheck: 'pass',
+            targetTypecheck: 'pass',
+            targetPackageSmoke: 'pass',
+            sourcePackageSmoke: 'pass',
+        },
+        dataRoot: {
+            kind: 'os-temporary',
+            disposable: true,
+            disposedAfterRun: true,
+            pathRecorded: false,
+        },
+    };
+    process.stdout.write(`PASS compatible build fixture ${JSON.stringify(evidence)}\n`);
+}
+
+/**
  * Emits path-free evidence for the complete fixture run.
  *
  * @param {Record<string, unknown>} fixture Validated fixture.
@@ -789,7 +1234,11 @@ async function main() {
         process.stdout.write('PASS development build fixture input validation\n');
         return;
     }
-    runFullFixture(fixture);
+    if (fixture.fixtureVersion === COMPATIBLE_FIXTURE_VERSION) {
+        runCompatibleFixture(fixture);
+        return;
+    }
+    runLegacyFixture(fixture);
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

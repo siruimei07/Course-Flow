@@ -37,7 +37,7 @@ export type DataOpenProblem =
       affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
       allowedActions: readonly [];
       context: Readonly<Record<never, never>>;
-      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 16 }>;
+      details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 15 }>;
     }>
   | Readonly<{
       code: 'integrity';
@@ -139,13 +139,13 @@ export type WorkspaceDataStatus =
   | Readonly<{
       kind: 'ready';
       workspaceId: string;
-      schemaLevel: 16;
+      schemaLevel: 15;
       revision: string;
     }>
   | Readonly<{
       kind: 'read-only';
       workspaceId: string;
-      schemaLevel: 16;
+      schemaLevel: 15;
       revision: string;
       problem: DataOpenProblem;
     }>
