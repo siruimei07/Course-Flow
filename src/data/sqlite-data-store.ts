@@ -218,6 +218,63 @@ export {
     type MigrationRollbackArtifactV1,
     type MigrationRollbackTargetV1,
 } from './migration-safety-copy';
+import {
+    firstTaskWeeklyAnchor,
+    firstWeeklyLogicalAnchor,
+    candidateLogicalAnchors,
+    hasOccurrenceOutsideRequestedWindow,
+    isActiveLogicalAnchor,
+    lastTaskWeeklyAnchor,
+    logicalAnchorBelongsToSegment,
+    occurrenceDate,
+    planOccurrenceWindows,
+    validateMeetingSegmentSequence,
+} from '../plan/anchors';
+import {
+    addClampedLocalDateDays,
+    addLocalDateDays,
+    localDateMilliseconds,
+} from '../plan/local-date';
+import {
+    expandConflictMeetingOccurrences,
+    meetingLocation,
+    meetingTypeName,
+} from '../plan/meeting-occurrences';
+import type {
+    ConflictMeetingOccurrence,
+    StoredConflictMeetingOverride,
+    StoredConflictMeetingSegment,
+    StoredHolidayRange,
+    StoredMeetingOverride,
+    StoredMeetingSegment,
+} from '../plan/meeting-occurrences';
+import {
+    meetingOverlapWarningKey,
+    meetingOverlapWarnings,
+    meetingScheduleOverlapWarnings,
+} from '../plan/meeting-overlap';
+import {
+    meetingOccurrenceConfirmationToken,
+    taskOccurrenceConfirmationToken,
+} from '../plan/confirmation-tokens';
+import {
+    taskDeadlineColumns,
+    taskDeadlineProjection,
+    taskLogicalAnchors,
+    taskOccurrenceStateProjection,
+    taskOverrideReplacement,
+    taskSchedule,
+    taskScheduleColumns,
+    taskScheduleProjection,
+    taskSegmentForAnchor,
+    taskSegmentOccurrenceDeadline,
+} from '../plan/task-schedule';
+import type {
+    StoredTaskOccurrenceOverride,
+    StoredTaskOccurrenceState,
+    StoredTaskSchedule,
+    StoredTaskSegment,
+} from '../plan/task-schedule';
 
 const ACTIVE_DIRECTORY_NAME = 'active';
 const DATABASE_FILE_NAME = 'workspace.sqlite';
@@ -1204,983 +1261,51 @@ function decimalToCoefficient(value: string | null): readonly [bigint | null, bi
     return freezePair([BigInt(integer + fraction), BigInt(fraction.length)]);
 }
 
-function meetingTypeName(type: MeetingTypeCode): 'Lecture' | 'Tutorial' | 'Practical' {
-    if (type === 'LEC') {
-        return 'Lecture';
-    }
-    return type === 'TUT' ? 'Tutorial' : 'Practical';
-}
 
-const MILLISECONDS_PER_DAY = 86_400_000;
-const MEETING_WEEKDAY_NUMBERS: Readonly<Record<MeetingWeekday, number>> = Object.freeze({
-    SUN: 0,
-    MON: 1,
-    TUE: 2,
-    WED: 3,
-    THU: 4,
-    FRI: 5,
-    SAT: 6,
-});
 
-/**
- * Converts a canonical LocalDate to a UTC arithmetic coordinate.
- * @param {string} value - Canonical LocalDate.
- * @return {number} UTC midnight milliseconds used only for date arithmetic.
- */
-function localDateMilliseconds(value: string): number {
-    return Date.parse(`${value}T00:00:00.000Z`);
-}
 
-/**
- * Adds an in-range number of calendar days to a canonical LocalDate.
- * @param {string} value - Canonical LocalDate.
- * @param {number} days - Signed day offset known to remain representable.
- * @return {string} Shifted canonical LocalDate.
- */
-function addLocalDateDays(value: string, days: number): string {
-    return new Date(localDateMilliseconds(value) + days * MILLISECONDS_PER_DAY)
-        .toISOString()
-        .slice(0, 10);
-}
 
-/**
- * Adds days while clamping to the supported LocalDate endpoints.
- * @param {string} value - Canonical LocalDate.
- * @param {number} days - Signed day offset.
- * @return {string} Shifted or endpoint-clamped canonical LocalDate.
- */
-function addClampedLocalDateDays(value: string, days: number): string {
-    const shifted = localDateMilliseconds(value) + days * MILLISECONDS_PER_DAY;
-    const minimum = localDateMilliseconds('0000-01-01');
-    const maximum = localDateMilliseconds('9999-12-31');
-    return new Date(Math.min(maximum, Math.max(minimum, shifted))).toISOString().slice(0, 10);
-}
 
-/**
- * Splits one legal Term into non-overlapping bounded occurrence-query windows.
- * @param {string} startDate - Inclusive canonical Term start date.
- * @param {string} endDate - Inclusive canonical Term end date.
- * @return {readonly MeetingOccurrenceWindow[]} Stable windows covering the Term exactly once.
- */
-function planOccurrenceWindows(
-    startDate: string,
-    endDate: string,
-): readonly MeetingOccurrenceWindow[] {
-    const windows: MeetingOccurrenceWindow[] = [];
-    let windowStart = startDate;
-    while (windowStart <= endDate) {
-        const maximumWindowEnd = addClampedLocalDateDays(
-            windowStart,
-            MAX_MEETING_OCCURRENCE_WINDOW_DAYS - 1,
-        );
-        const windowEnd = maximumWindowEnd < endDate ? maximumWindowEnd : endDate;
-        windows.push(Object.freeze({ startDate: windowStart, endDate: windowEnd }));
-        if (windowEnd === endDate) {
-            break;
-        }
-        windowStart = addLocalDateDays(windowEnd, 1);
-    }
-    return Object.freeze(windows);
-}
 
-/**
- * Projects a stable weekly logical anchor onto an effective weekday.
- * @param {string} originalLogicalAnchor - Stable occurrence identity anchor.
- * @param {MeetingWeekday} weekday - Effective weekday after segment or override rules.
- * @return {string | null} Physical LocalDate, or null beyond the supported date domain.
- */
-function occurrenceDate(originalLogicalAnchor: string, weekday: MeetingWeekday): string | null {
-    const anchorWeekday = new Date(localDateMilliseconds(originalLogicalAnchor)).getUTCDay();
-    const milliseconds = localDateMilliseconds(originalLogicalAnchor)
-        + (MEETING_WEEKDAY_NUMBERS[weekday] - anchorWeekday) * MILLISECONDS_PER_DAY;
-    if (milliseconds < localDateMilliseconds('0000-01-01')
-        || milliseconds > localDateMilliseconds('9999-12-31')) {
-        return null;
-    }
-    return new Date(milliseconds).toISOString().slice(0, 10);
-}
 
-/**
- * Chooses the first representable weekly identity anchor for a new Meeting series.
- * @param {string} startDate - Resolved inclusive effective-range start.
- * @param {MeetingWeekday} weekday - Initial Meeting weekday.
- * @return {string} First matching anchor, using the previous match at the LocalDate ceiling.
- */
-function firstWeeklyLogicalAnchor(startDate: string, weekday: MeetingWeekday): string {
-    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
-    const startWeekday = new Date(localDateMilliseconds(startDate)).getUTCDay();
-    const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
-    const forwardMilliseconds = localDateMilliseconds(startDate) + forwardDays * MILLISECONDS_PER_DAY;
-    return forwardMilliseconds <= localDateMilliseconds('9999-12-31')
-        ? new Date(forwardMilliseconds).toISOString().slice(0, 10)
-        : addLocalDateDays(startDate, forwardDays - 7);
-}
 
-/**
- * Chooses the first weekly Task anchor on or after its inclusive start without crossing LocalDate max.
- * @param {string} startDate - Inclusive Task schedule start.
- * @param {MeetingWeekday} weekday - Required Task weekday.
- * @return {string | null} First matching LocalDate, or null when no representable match exists.
- */
-function firstTaskWeeklyAnchor(startDate: string, weekday: MeetingWeekday): string | null {
-    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
-    const startMilliseconds = localDateMilliseconds(startDate);
-    const startWeekday = new Date(startMilliseconds).getUTCDay();
-    const forwardDays = (weekdayNumber - startWeekday + 7) % 7;
-    const forwardMilliseconds = startMilliseconds + forwardDays * MILLISECONDS_PER_DAY;
-    return forwardMilliseconds > localDateMilliseconds('9999-12-31')
-        ? null
-        : new Date(forwardMilliseconds).toISOString().slice(0, 10);
-}
 
-/**
- * Chooses the final weekly Task anchor on or before its inclusive confirmed end.
- * @param {string} endDate - Inclusive confirmed Task schedule end.
- * @param {MeetingWeekday} weekday - Required Task weekday.
- * @return {string} Final matching LocalDate.
- */
-function lastTaskWeeklyAnchor(endDate: string, weekday: MeetingWeekday): string {
-    const weekdayNumber = MEETING_WEEKDAY_NUMBERS[weekday];
-    const endMilliseconds = localDateMilliseconds(endDate);
-    const endWeekday = new Date(endMilliseconds).getUTCDay();
-    const backwardDays = (endWeekday - weekdayNumber + 7) % 7;
-    return addLocalDateDays(endDate, -backwardDays);
-}
 
-type StoredMeetingSegment = Readonly<{
-    meeting_segment_id: string;
-    meeting_type: MeetingTypeCode;
-    weekday: MeetingWeekday;
-    local_start: string;
-    local_end: string;
-    end_day_offset: MeetingEndDayOffset;
-    logical_start_anchor: string;
-    logical_end_anchor: string | null;
-    effective_range_kind: MeetingEffectiveRangeIntent['kind'];
-    effective_start_date: string | null;
-    effective_end_date: string | null;
-    resolved_start_date: string;
-    resolved_end_date: string;
-    location_kind: 'known' | 'tba';
-    location_value: string | null;
-}>;
 
-type StoredMeetingOverride = Readonly<{
-    original_logical_anchor: string;
-    override_kind: 'replaced' | 'cancelled';
-    meeting_type: MeetingTypeCode | null;
-    weekday: MeetingWeekday | null;
-    local_start: string | null;
-    local_end: string | null;
-    end_day_offset: MeetingEndDayOffset | null;
-    location_kind: 'known' | 'tba' | null;
-    location_value: string | null;
-}>;
 
-type StoredConflictMeetingSegment = StoredMeetingSegment & Readonly<{
-    meeting_series_id: string;
-    course_id: string;
-    course_code: string;
-    term_zone: string;
-}>;
 
-type StoredConflictMeetingOverride = StoredMeetingOverride & Readonly<{
-    meeting_series_id: string;
-}>;
 
-type StoredHolidayRange = Readonly<{
-    holiday_range_id: string;
-    start_date: string;
-    end_date: string;
-}>;
 
-type ConflictMeetingObject = Readonly<{
-    courseId: string | null;
-    courseCode: string;
-    meetingSeriesId: string | null;
-}>;
 
-type ConflictMeetingOccurrence = Readonly<{
-    object: ConflictMeetingObject;
-    meetingType: MeetingTypeCode;
-    originalLogicalAnchor: string;
-    date: string;
-    time: MeetingInstantWindow;
-}>;
 
-/**
- * Expands effective scheduled occurrences for one Meeting series in a bounded date window.
- * @param {ConflictMeetingObject} object - Stable stored object or unsaved draft reference.
- * @param {string} termZone - Explicit TermZone owning every local time in the series.
- * @param {readonly StoredMeetingSegment[]} segments - Ordered effective rule segments.
- * @param {readonly StoredMeetingOverride[]} overrides - Replacements and cancellations by anchor.
- * @param {readonly StoredHolidayRange[]} holidayRanges - Active inclusive suppression ranges.
- * @param {MeetingOccurrenceWindow} requestedWindow - Bounded physical start-date window.
- * @return {readonly ConflictMeetingOccurrence[]} Effective scheduled occurrences only.
- */
-function expandConflictMeetingOccurrences(
-    object: ConflictMeetingObject,
-    termZone: string,
-    segments: readonly StoredMeetingSegment[],
-    overrides: readonly StoredMeetingOverride[],
-    holidayRanges: readonly StoredHolidayRange[],
-    requestedWindow: MeetingOccurrenceWindow,
-): readonly ConflictMeetingOccurrence[] {
-    validateMeetingSegmentSequence(segments);
-    const overrideByAnchor = new Map(overrides.map(override => [
-        override.original_logical_anchor,
-        override,
-    ]));
-    const occurrences: ConflictMeetingOccurrence[] = [];
-    const seenAnchors = new Set<string>();
-    for (const segment of segments) {
-        for (const anchor of candidateLogicalAnchors(segment, requestedWindow)) {
-            if (seenAnchors.has(anchor)) {
-                throw new Error('Meeting occurrence logical anchor is duplicated');
-            }
-            seenAnchors.add(anchor);
-            const override = overrideByAnchor.get(anchor);
-            const baseDate = occurrenceDate(anchor, segment.weekday);
-            const weekday = override?.override_kind === 'replaced'
-                ? override.weekday!
-                : segment.weekday;
-            if (!isActiveLogicalAnchor(segment, anchor, segment.weekday)
-                || override?.override_kind === 'cancelled') {
-                continue;
-            }
-            const type = override?.override_kind === 'replaced'
-                ? override.meeting_type!
-                : segment.meeting_type;
-            const localStart = override?.override_kind === 'replaced'
-                ? override.local_start!
-                : segment.local_start;
-            const localEnd = override?.override_kind === 'replaced'
-                ? override.local_end!
-                : segment.local_end;
-            const endDayOffset = override?.override_kind === 'replaced'
-                ? override.end_day_offset!
-                : segment.end_day_offset;
-            const date = occurrenceDate(anchor, weekday);
-            if (baseDate === null
-                || date === null
-                || date < requestedWindow.startDate
-                || date > requestedWindow.endDate
-                || (override?.override_kind !== 'replaced'
-                    && holidayRanges.some(range => (
-                        baseDate >= range.start_date && baseDate <= range.end_date
-                    )))) {
-                continue;
-            }
-            occurrences.push(Object.freeze({
-                object,
-                meetingType: type,
-                originalLogicalAnchor: anchor,
-                date,
-                time: resolveMeetingOccurrenceTime({
-                    termZone,
-                    date,
-                    localStart,
-                    localEnd,
-                    endDayOffset,
-                }),
-            }));
-        }
-    }
-    return Object.freeze(occurrences);
-}
 
-/**
- * Materializes user-facing overlap warnings for proposed and retained effective occurrences.
- * @param {string} commandId - Stable draft/decision identity.
- * @param {readonly ConflictMeetingOccurrence[]} proposed - Proposed effective occurrences.
- * @param {readonly ConflictMeetingOccurrence[]} existing - Retained stored occurrences.
- * @return {readonly MeetingOverlapWarning[]} Exact positive overlaps in deterministic order.
- */
-function meetingOverlapWarnings(
-    commandId: string,
-    proposed: readonly ConflictMeetingOccurrence[],
-    existing: readonly ConflictMeetingOccurrence[],
-): readonly MeetingOverlapWarning[] {
-    const warnings: MeetingOverlapWarning[] = [];
-    for (const proposedOccurrence of proposed) {
-        if (warnings.length >= MAX_MEETING_OVERLAP_WARNINGS) {
-            break;
-        }
-        for (const existingOccurrence of existing) {
-            const overlap = findMeetingTimeOverlap(proposedOccurrence.time, existingOccurrence.time);
-            if (overlap === null) {
-                continue;
-            }
-            warnings.push(Object.freeze({
-                code: 'meeting-time-overlap' as const,
-                proposed: Object.freeze({
-                    commandId,
-                    courseId: proposedOccurrence.object.courseId,
-                    courseCode: proposedOccurrence.object.courseCode,
-                    meetingSeriesId: proposedOccurrence.object.meetingSeriesId,
-                    meetingType: proposedOccurrence.meetingType,
-                    occurrenceId: Object.freeze({
-                        meetingSeriesId: proposedOccurrence.object.meetingSeriesId,
-                        originalLogicalAnchor: proposedOccurrence.originalLogicalAnchor,
-                    }),
-                    startInstant: proposedOccurrence.time.startInstant,
-                    endInstant: proposedOccurrence.time.endInstant,
-                }),
-                existing: Object.freeze({
-                    courseId: existingOccurrence.object.courseId!,
-                    courseCode: existingOccurrence.object.courseCode,
-                    meetingSeriesId: existingOccurrence.object.meetingSeriesId!,
-                    meetingType: existingOccurrence.meetingType,
-                    occurrenceId: deriveMeetingOccurrenceId(
-                        existingOccurrence.object.meetingSeriesId!,
-                        existingOccurrence.originalLogicalAnchor,
-                    ),
-                    startInstant: existingOccurrence.time.startInstant,
-                    endInstant: existingOccurrence.time.endInstant,
-                }),
-                overlap,
-            }));
-            if (warnings.length >= MAX_MEETING_OVERLAP_WARNINGS) {
-                break;
-            }
-        }
-    }
-    return Object.freeze(warnings.sort((first, second) => (
-        first.overlap.startInstant.localeCompare(second.overlap.startInstant)
-        || first.proposed.occurrenceId.originalLogicalAnchor.localeCompare(
-            second.proposed.occurrenceId.originalLogicalAnchor,
-        )
-        || first.existing.occurrenceId.meetingSeriesId.localeCompare(
-            second.existing.occurrenceId.meetingSeriesId,
-        )
-    )));
-}
 
-/**
- * Returns an order-independent identity for one derived Meeting conflict pair.
- * @param {MeetingOverlapWarning} warning - Derived overlap warning.
- * @return {string} Stable pair identity independent of proposed/existing ordering.
- */
-function meetingOverlapWarningKey(warning: MeetingOverlapWarning): string {
-    return [
-        `${warning.proposed.occurrenceId.meetingSeriesId}:${warning.proposed.occurrenceId.originalLogicalAnchor}`,
-        `${warning.existing.occurrenceId.meetingSeriesId}:${warning.existing.occurrenceId.originalLogicalAnchor}`,
-    ].sort().join('|');
-}
 
-/**
- * Derives all pairwise warnings in one bounded effective schedule.
- * @param {string} commandId - Holiday mutation command identity used by warning DTOs.
- * @param {readonly ConflictMeetingOccurrence[]} occurrences - Effective scheduled occurrences.
- * @return {readonly MeetingOverlapWarning[]} Deterministically ordered positive overlaps.
- */
-function meetingScheduleOverlapWarnings(
-    commandId: string,
-    occurrences: readonly ConflictMeetingOccurrence[],
-): readonly MeetingOverlapWarning[] {
-    const warnings: MeetingOverlapWarning[] = [];
-    for (let index = 0; index < occurrences.length; index += 1) {
-        warnings.push(...meetingOverlapWarnings(
-            commandId,
-            [occurrences[index]!],
-            occurrences.slice(index + 1),
-        ));
-    }
-    return Object.freeze(warnings.sort((first, second) => (
-        first.overlap.startInstant.localeCompare(second.overlap.startInstant)
-        || meetingOverlapWarningKey(first).localeCompare(meetingOverlapWarningKey(second))
-    )));
-}
 
-/**
- * Rejects an ordered segment sequence whose logical ranges overlap.
- * @param {readonly StoredMeetingSegment[]} segments - Segments ordered by logical start anchor.
- * @return {void}
- */
-function validateMeetingSegmentSequence(segments: readonly StoredMeetingSegment[]): void {
-    let previousEndAnchor: string | null | undefined;
-    for (const segment of segments) {
-        if (previousEndAnchor !== undefined
-            && (previousEndAnchor === null || segment.logical_start_anchor <= previousEndAnchor)) {
-            throw new Error('Meeting series has overlapping logical segments');
-        }
-        previousEndAnchor = segment.logical_end_anchor;
-    }
-}
 
-/**
- * Tests logical range membership and the segment's seven-day cadence.
- * @param {StoredMeetingSegment} segment - Candidate owning segment.
- * @param {string} anchor - Stable logical occurrence anchor.
- * @return {boolean} Whether the anchor belongs to the segment's weekly sequence.
- */
-function logicalAnchorBelongsToSegment(segment: StoredMeetingSegment, anchor: string): boolean {
-    return segment.logical_start_anchor <= anchor
-        && (segment.logical_end_anchor === null || segment.logical_end_anchor >= anchor)
-        && (localDateMilliseconds(anchor) - localDateMilliseconds(segment.logical_start_anchor))
-            % (7 * MILLISECONDS_PER_DAY) === 0;
-}
 
-/**
- * Tests whether a logical anchor produces an occurrence inside the resolved effective range.
- * @param {StoredMeetingSegment} segment - Candidate owning segment.
- * @param {string} anchor - Stable logical occurrence anchor.
- * @param {MeetingWeekday} weekday - Effective weekday used for physical range membership.
- * @return {boolean} Whether the occurrence is currently active.
- */
-function isActiveLogicalAnchor(
-    segment: StoredMeetingSegment,
-    anchor: string,
-    weekday: MeetingWeekday = segment.weekday,
-): boolean {
-    const date = occurrenceDate(anchor, weekday);
-    return date !== null
-        && logicalAnchorBelongsToSegment(segment, anchor)
-        && segment.resolved_start_date <= date
-        && segment.resolved_end_date >= date;
-}
 
-/**
- * Enumerates only weekly anchors that can project into a bounded physical window.
- * @param {StoredMeetingSegment} segment - Segment owning the weekly sequence.
- * @param {MeetingOccurrenceWindow} requestedWindow - Bounded physical query window.
- * @return {readonly string[]} Candidate anchors for final rule and override evaluation.
- */
-function candidateLogicalAnchors(
-    segment: StoredMeetingSegment,
-    requestedWindow: MeetingOccurrenceWindow,
-): readonly string[] {
-    const weekMilliseconds = 7 * MILLISECONDS_PER_DAY;
-    const requestedStart = requestedWindow.startDate > segment.resolved_start_date
-        ? requestedWindow.startDate
-        : segment.resolved_start_date;
-    const requestedEnd = requestedWindow.endDate < segment.resolved_end_date
-        ? requestedWindow.endDate
-        : segment.resolved_end_date;
-    if (requestedEnd < requestedStart) {
-        return Object.freeze([]);
-    }
-    const firstAnchorMilliseconds = localDateMilliseconds(segment.logical_start_anchor);
-    const earliestAnchorMilliseconds = Math.max(
-        localDateMilliseconds('0000-01-01'),
-        localDateMilliseconds(requestedStart) - 6 * MILLISECONDS_PER_DAY,
-    );
-    const latestAnchorMilliseconds = Math.min(
-        localDateMilliseconds('9999-12-31'),
-        localDateMilliseconds(requestedEnd) + 6 * MILLISECONDS_PER_DAY,
-    );
-    const minimumIndex = Math.max(0, Math.ceil(
-        (earliestAnchorMilliseconds - firstAnchorMilliseconds) / weekMilliseconds,
-    ));
-    let maximumIndex = Math.floor(
-        (latestAnchorMilliseconds - firstAnchorMilliseconds) / weekMilliseconds,
-    );
-    if (segment.logical_end_anchor !== null) {
-        maximumIndex = Math.min(maximumIndex, Math.floor(
-            (localDateMilliseconds(segment.logical_end_anchor)
-                - localDateMilliseconds(segment.logical_start_anchor)) / weekMilliseconds,
-        ));
-    }
-    if (maximumIndex < minimumIndex) {
-        return Object.freeze([]);
-    }
-    return Object.freeze(Array.from({ length: maximumIndex - minimumIndex + 1 }, (_, index) => (
-        addLocalDateDays(segment.logical_start_anchor, (minimumIndex + index) * 7)
-    )));
-}
 
-/**
- * Counts weekly anchors satisfying both logical-anchor and physical-date bounds.
- * @param {StoredMeetingSegment} segment - Segment owning the logical anchor sequence.
- * @param {MeetingWeekday} weekday - Weekday used to project each anchor to a physical date.
- * @param {number} minimumAnchor - Inclusive lower logical-anchor bound in UTC milliseconds.
- * @param {number} maximumAnchor - Inclusive upper logical-anchor bound in UTC milliseconds.
- * @param {number} minimumDate - Inclusive lower physical-date bound in UTC milliseconds.
- * @param {number} maximumDate - Inclusive upper physical-date bound in UTC milliseconds.
- * @return {number} Number of active anchors satisfying every bound.
- */
-function countActiveLogicalAnchors(
-    segment: StoredMeetingSegment,
-    weekday: MeetingWeekday,
-    minimumAnchor: number,
-    maximumAnchor: number,
-    minimumDate: number,
-    maximumDate: number,
-): number {
-    if (maximumAnchor < minimumAnchor || maximumDate < minimumDate) {
-        return 0;
-    }
-    const weekMilliseconds = 7 * MILLISECONDS_PER_DAY;
-    const firstAnchor = localDateMilliseconds(segment.logical_start_anchor);
-    const firstAnchorWeekday = new Date(firstAnchor).getUTCDay();
-    const firstDate = firstAnchor
-        + (MEETING_WEEKDAY_NUMBERS[weekday] - firstAnchorWeekday) * MILLISECONDS_PER_DAY;
-    const resolvedStart = localDateMilliseconds(segment.resolved_start_date);
-    const resolvedEnd = localDateMilliseconds(segment.resolved_end_date);
-    const localDateMaximum = localDateMilliseconds('9999-12-31');
-    let minimumIndex = Math.max(
-        0,
-        Math.ceil((minimumAnchor - firstAnchor) / weekMilliseconds),
-        Math.ceil((Math.max(minimumDate, resolvedStart) - firstDate) / weekMilliseconds),
-    );
-    let maximumIndex = Math.min(
-        Math.floor((maximumAnchor - firstAnchor) / weekMilliseconds),
-        Math.floor((Math.min(maximumDate, resolvedEnd) - firstDate) / weekMilliseconds),
-        Math.floor((localDateMaximum - firstAnchor) / weekMilliseconds),
-    );
-    if (segment.logical_end_anchor !== null) {
-        maximumIndex = Math.min(
-            maximumIndex,
-            Math.floor(
-                (localDateMilliseconds(segment.logical_end_anchor) - firstAnchor) / weekMilliseconds,
-            ),
-        );
-    }
-    minimumIndex = Math.ceil(minimumIndex);
-    maximumIndex = Math.floor(maximumIndex);
-    return maximumIndex < minimumIndex ? 0 : maximumIndex - minimumIndex + 1;
-}
 
-/**
- * Detects whether a bounded preview omits an actual weekly occurrence in an anchor partition.
- * @param {readonly StoredMeetingSegment[]} segments - Ordered segments in the Meeting series.
- * @param {number} minimumAnchor - Inclusive lower logical-anchor bound in UTC milliseconds.
- * @param {number} maximumAnchor - Inclusive upper logical-anchor bound in UTC milliseconds.
- * @param {MeetingOccurrenceWindow} requestedWindow - Physical dates shown by the preview.
- * @param {MeetingWeekday | null} replacementWeekday - Proposed weekday, or null for stored rules.
- * @param {readonly StoredMeetingOverride[]} overrides - Boundary replacements that can cross the window.
- * @param {string | null} clearedOverrideAnchor - Override cleared by the proposed split, when any.
- * @return {boolean} Whether at least one matching occurrence falls outside the requested window.
- */
-function hasOccurrenceOutsideRequestedWindow(
-    segments: readonly StoredMeetingSegment[],
-    minimumAnchor: number,
-    maximumAnchor: number,
-    requestedWindow: MeetingOccurrenceWindow,
-    replacementWeekday: MeetingWeekday | null,
-    overrides: readonly StoredMeetingOverride[],
-    clearedOverrideAnchor: string | null,
-): boolean {
-    const localDateMinimum = localDateMilliseconds('0000-01-01');
-    const localDateMaximum = localDateMilliseconds('9999-12-31');
-    const requestedStart = localDateMilliseconds(requestedWindow.startDate);
-    const requestedEnd = localDateMilliseconds(requestedWindow.endDate);
-    let outsideCount = segments.reduce((count, segment) => {
-        const weekday = replacementWeekday ?? segment.weekday;
-        const total = countActiveLogicalAnchors(
-            segment,
-            weekday,
-            minimumAnchor,
-            maximumAnchor,
-            localDateMinimum,
-            localDateMaximum,
-        );
-        const visible = countActiveLogicalAnchors(
-            segment,
-            weekday,
-            minimumAnchor,
-            maximumAnchor,
-            requestedStart,
-            requestedEnd,
-        );
-        return count + total - visible;
-    }, 0);
 
-    for (const override of overrides) {
-        if (override.override_kind !== 'replaced'
-            || override.original_logical_anchor === clearedOverrideAnchor) {
-            continue;
-        }
-        const anchor = localDateMilliseconds(override.original_logical_anchor);
-        if (anchor < minimumAnchor || anchor > maximumAnchor) {
-            continue;
-        }
-        const matchingSegments = segments.filter(segment => (
-            logicalAnchorBelongsToSegment(segment, override.original_logical_anchor)
-        ));
-        if (matchingSegments.length !== 1) {
-            throw new Error('Meeting override does not target a logical occurrence');
-        }
-        const segment = matchingSegments[0]!;
-        const baseWeekday = replacementWeekday ?? segment.weekday;
-        if (!isActiveLogicalAnchor(segment, override.original_logical_anchor, baseWeekday)) {
-            continue;
-        }
-        const baseDate = occurrenceDate(override.original_logical_anchor, baseWeekday);
-        const replacedDate = occurrenceDate(override.original_logical_anchor, override.weekday!);
-        if (baseDate === null || replacedDate === null) {
-            throw new Error('Meeting override has an invalid physical date');
-        }
-        const baseOutside = baseDate < requestedWindow.startDate || baseDate > requestedWindow.endDate;
-        const replacementOutside = replacedDate < requestedWindow.startDate
-            || replacedDate > requestedWindow.endDate;
-        outsideCount += Number(replacementOutside) - Number(baseOutside);
-    }
-    return outsideCount > 0;
-}
 
-/**
- * Binds a whole-rule confirmation to versions, exact intent, and preview window.
- * @param {string} revision - Workspace revision used by the preview.
- * @param {string} planEntityVersion - PLAN version used by the preview.
- * @param {string} meetingSeriesVersion - Meeting series version used by the preview.
- * @param {object} change - Exact future-change scope, series, anchor, and replacement facts.
- * @param {MeetingOccurrenceWindow} requestedWindow - Bounded preview window.
- * @return {string} Lowercase SHA-256 confirmation token.
- */
-function meetingOccurrenceConfirmationToken(
-    revision: string,
-    planEntityVersion: string,
-    meetingSeriesVersion: string,
-    change: Pick<
-        MeetingOccurrenceImpactDraft,
-        'scope' | 'meetingSeriesId' | 'originalLogicalAnchor' | 'replacement'
-    >,
-    requestedWindow: MeetingOccurrenceWindow,
-): string {
-    const encoded = canonicalJson({
-        encoding: 'courseflow-meeting-impact-v1',
-        revision,
-        planEntityVersion,
-        meetingSeriesVersion,
-        scope: change.scope,
-        meetingSeriesId: change.meetingSeriesId,
-        originalLogicalAnchor: change.originalLogicalAnchor,
-        replacement: change.replacement,
-        requestedWindow,
-    });
-    return createHash('sha256').update(encoded, 'utf8').digest('hex');
-}
 
-/**
- * Binds a Task whole-rule confirmation to the exact versions, action, and preview window.
- * @param {string} revision - Workspace revision used by the preview.
- * @param {string} planEntityVersion - PLAN version used by the preview.
- * @param {string} taskSeriesVersion - Task series version used by the preview.
- * @param {TaskOccurrenceImpactDraft} draft - Exact normalized future change or deletion.
- * @return {string} Lowercase SHA-256 confirmation token.
- */
-function taskOccurrenceConfirmationToken(
-    revision: string,
-    planEntityVersion: string,
-    taskSeriesVersion: string,
-    draft: TaskOccurrenceImpactDraft,
-): string {
-    const encoded = canonicalJson({
-        encoding: 'courseflow-task-impact-v1',
-        revision,
-        planEntityVersion,
-        taskSeriesVersion,
-        scope: draft.scope,
-        taskSeriesId: draft.taskSeriesId,
-        ...(draft.scope === 'whole-series'
-            ? {}
-            : { originalLogicalAnchor: draft.originalLogicalAnchor }),
-        action: draft.action,
-        ...(draft.action === 'change' ? { replacement: draft.replacement } : {}),
-        requestedWindow: draft.requestedWindow,
-    });
-    return createHash('sha256').update(encoded, 'utf8').digest('hex');
-}
 
-/**
- * Materializes the explicit known/TBA location union from validated stored columns.
- * @param {'known' | 'tba'} kind - Stored location discriminant.
- * @param {string | null} value - Known location text, or null for TBA.
- * @return {MeetingLocation} Immutable location DTO.
- */
-function meetingLocation(kind: 'known' | 'tba', value: string | null): MeetingLocation {
-    return kind === 'tba'
-        ? Object.freeze({ kind: 'tba' as const })
-        : Object.freeze({ kind: 'known' as const, value: value! });
-}
 
-type TaskDeadlineColumns = readonly [
-    TaskDeadline['kind'],
-    string | null,
-    string | null,
-    string | null,
-];
 
-type TaskScheduleColumns = readonly [
-    TaskSchedule['kind'],
-    TaskDeadline['kind'] | null,
-    string | null,
-    string | null,
-    string | null,
-    string | null,
-    MeetingWeekday | null,
-    string | null,
-    string | null,
-    0 | 1 | null,
-];
 
-function taskDeadlineColumns(deadline: TaskDeadline): TaskDeadlineColumns {
-    if (deadline.kind === 'date-only') {
-        return Object.freeze(['date-only', deadline.date, null, null]);
-    }
-    if (deadline.kind === 'timed') {
-        return Object.freeze(['timed', null, deadline.instant, deadline.timeZone]);
-    }
-    return Object.freeze(['tba', null, null, null]);
-}
 
-/**
- * Serializes the exact once-or-weekly Task schedule union to level-9 columns.
- * @param {TaskSchedule} schedule - Canonical Task schedule.
- * @return {TaskScheduleColumns} SQLite binding tuple with the inactive union arm cleared.
- */
-function taskScheduleColumns(schedule: TaskSchedule): TaskScheduleColumns {
-    if (schedule.kind === 'once') {
-        return Object.freeze([
-            'once',
-            ...taskDeadlineColumns(schedule.deadline),
-            null,
-            null,
-            null,
-            null,
-            null,
-        ]);
-    }
-    return Object.freeze([
-        'weekly',
-        null,
-        null,
-        null,
-        null,
-        schedule.startDate,
-        schedule.weekday,
-        schedule.localDeadlineTime,
-        schedule.confirmedEndDate,
-        schedule.followTeachingWeek ? 1 : 0,
-    ]);
-}
 
-function taskDeadlineProjection(
-    kind: TaskDeadline['kind'],
-    date: string | null,
-    instant: string | null,
-    displayZone: string | null,
-): TaskDeadline {
-    if (kind === 'date-only') {
-        return Object.freeze({ kind, date: date! });
-    }
-    if (kind === 'timed') {
-        return Object.freeze({ kind, instant: instant!, timeZone: displayZone! });
-    }
-    return Object.freeze({ kind });
-}
 
-type StoredTaskSchedule = Readonly<{
-    schedule_kind: TaskSchedule['kind'];
-    deadline_kind: TaskDeadline['kind'] | null;
-    deadline_date: string | null;
-    deadline_instant: string | null;
-    deadline_display_zone: string | null;
-    weekly_start_date: string | null;
-    weekly_weekday: MeetingWeekday | null;
-    weekly_local_deadline_time: string | null;
-    weekly_confirmed_end_date: string | null;
-    follow_teaching_week: bigint | null;
-}>;
 
-type StoredTaskSegment = StoredTaskSchedule & Readonly<{
-    task_segment_id: string;
-    title: string;
-    task_size: TaskSize;
-    logical_start_anchor: string;
-    logical_end_anchor: string;
-}>;
 
-type StoredTaskOccurrenceState = Readonly<{
-    original_logical_anchor: string;
-    status: TaskOccurrenceStatus;
-    self_reported_progress: bigint | null;
-    entity_version: bigint;
-}>;
 
-type StoredTaskOccurrenceOverride = Readonly<{
-    original_logical_anchor: string;
-    override_kind: 'replaced' | 'deleted';
-    replacement_title: string | null;
-    replacement_task_size: TaskSize | null;
-    replacement_deadline_kind: TaskDeadline['kind'] | null;
-    replacement_deadline_date: string | null;
-    replacement_deadline_instant: string | null;
-    replacement_deadline_display_zone: string | null;
-    entity_version: bigint;
-}>;
 
-/**
- * Projects the independent occurrence state without conflating completion and progress.
- * @param {StoredTaskOccurrenceState | undefined} state - Optional explicit stored state.
- * @param {TaskSize} size - Effective occurrence size after any override.
- * @return {object} Canonical status plus self-reported and displayed progress.
- */
-function taskOccurrenceStateProjection(
-    state: StoredTaskOccurrenceState | undefined,
-    size: TaskSize,
-): Readonly<{
-    status: TaskOccurrenceStatus;
-    reportedProgress: number | null;
-    displayProgress: number | null;
-}> {
-    const status = state?.status ?? 'pending';
-    const reportedProgress = size === 'large' && state?.self_reported_progress !== null
-        && state?.self_reported_progress !== undefined
-        ? Number(state.self_reported_progress)
-        : null;
-    return Object.freeze({
-        status,
-        reportedProgress,
-        displayProgress: size !== 'large'
-            ? null
-            : status === 'completed'
-                ? 100
-                : reportedProgress,
-    });
-}
 
-/**
- * Materializes a replaced Task occurrence from its validated stored override.
- * @param {StoredTaskOccurrenceOverride} override - Stored replaced override.
- * @return {TaskOccurrenceReplacement} Exact effective Task facts.
- */
-function taskOverrideReplacement(
-    override: Omit<StoredTaskOccurrenceOverride, 'original_logical_anchor'>,
-): TaskOccurrenceReplacement {
-    if (override.override_kind !== 'replaced') {
-        throw new Error('Deleted Task override has no replacement facts');
-    }
-    return Object.freeze({
-        title: override.replacement_title!,
-        size: override.replacement_task_size!,
-        deadline: taskDeadlineProjection(
-            override.replacement_deadline_kind!,
-            override.replacement_deadline_date,
-            override.replacement_deadline_instant,
-            override.replacement_deadline_display_zone,
-        ),
-    });
-}
 
-/**
- * Finds the unique current segment owning a stable Task logical anchor.
- * @param {readonly StoredTaskSegment[]} segments - Ordered Task rule segments.
- * @param {string} anchor - Stable once or LocalDate anchor.
- * @return {StoredTaskSegment | undefined} Owning segment, if still active.
- */
-function taskSegmentForAnchor(
-    segments: readonly StoredTaskSegment[],
-    anchor: string,
-): StoredTaskSegment | undefined {
-    if (anchor === 'once') {
-        return segments.find(segment => segment.logical_start_anchor === 'once');
-    }
-    return segments.find(segment => (
-        segment.schedule_kind === 'weekly'
-        && anchor >= segment.logical_start_anchor
-        && anchor <= segment.logical_end_anchor
-        && (localDateMilliseconds(anchor) - localDateMilliseconds(segment.logical_start_anchor))
-            % (7 * MILLISECONDS_PER_DAY) === 0
-    ));
-}
 
-/**
- * Builds the physical deadline of one base occurrence from a stored segment.
- * @param {StoredTaskSegment} segment - Owning current segment.
- * @param {string} anchor - Stable occurrence anchor.
- * @param {string} termZone - Explicit TermZone.
- * @return {TaskDeadline} Effective deadline before an only-this override.
- */
-function taskSegmentOccurrenceDeadline(
-    segment: StoredTaskSegment,
-    anchor: string,
-    termZone: string,
-): TaskDeadline {
-    if (segment.schedule_kind === 'once') {
-        return taskDeadlineProjection(
-            segment.deadline_kind!,
-            segment.deadline_date,
-            segment.deadline_instant,
-            segment.deadline_display_zone,
-        );
-    }
-    const date = occurrenceDate(anchor, segment.weekly_weekday!);
-    if (date === null) {
-        throw new Error('Task occurrence deadline is outside the LocalDate domain');
-    }
-    return Object.freeze({
-        kind: 'timed' as const,
-        instant: INTL_ZONE_RULES.resolveInstant(
-            termZone,
-            date,
-            segment.weekly_local_deadline_time!,
-        ),
-        timeZone: termZone,
-    });
-}
 
-/**
- * Materializes the validated stored Task schedule discriminated union.
- * @param {StoredTaskSchedule} row - Level-9 Task schedule columns.
- * @return {TaskSchedule} Immutable exact Task schedule.
- */
-function taskScheduleProjection(row: StoredTaskSchedule): TaskSchedule {
-    if (row.schedule_kind === 'once') {
-        return Object.freeze({
-            kind: 'once',
-            deadline: taskDeadlineProjection(
-                row.deadline_kind!,
-                row.deadline_date,
-                row.deadline_instant,
-                row.deadline_display_zone,
-            ),
-        });
-    }
-    return Object.freeze({
-        kind: 'weekly',
-        startDate: row.weekly_start_date!,
-        weekday: row.weekly_weekday!,
-        localDeadlineTime: row.weekly_local_deadline_time!,
-        confirmedEndDate: row.weekly_confirmed_end_date!,
-        followTeachingWeek: row.follow_teaching_week === 1n,
-    });
-}
 
-/**
- * Reads the once deadline from either retained v1 facts or a v2 once schedule.
- * @param {CreateTaskCommand['intent']['payload'] | UpdateTaskCommand['intent']['payload']} payload
- *     - Normalized Task facts.
- * @return {TaskDeadline} Exact once deadline.
- */
-function taskSchedule(
-    payload: CreateTaskCommand['intent']['payload'] | UpdateTaskCommand['intent']['payload'],
-): TaskSchedule {
-    if ('deadline' in payload) {
-        return Object.freeze({ kind: 'once', deadline: payload.deadline });
-    }
-    return payload.schedule;
-}
-
-/**
- * Derives the inclusive stable identity range owned by one unsplit Task rule.
- * @param {TaskSchedule} schedule - Canonical once or weekly schedule.
- * @return {readonly [string, string]} Inclusive logical start and end anchors.
- */
-function taskLogicalAnchors(schedule: TaskSchedule): readonly [string, string] {
-    if (schedule.kind === 'once') {
-        return Object.freeze(['once', 'once']);
-    }
-    const first = firstTaskWeeklyAnchor(schedule.startDate, schedule.weekday);
-    if (first === null || first > schedule.confirmedEndDate) {
-        throw new TypeError('Weekly Task schedule has no logical occurrence');
-    }
-    return Object.freeze([
-        first,
-        lastTaskWeeklyAnchor(schedule.confirmedEndDate, schedule.weekday),
-    ]);
-}
 
 function isCourseWithMeetingCommand(
     command: WorkspaceDataCommand,
