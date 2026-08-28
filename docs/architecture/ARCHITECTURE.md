@@ -41,7 +41,7 @@
 - MVP-A：学期、课程、课节、假期、任务、Today/Week/Calendar、离线本地数据、备份与显式恢复；
 - MVP-A-P：默认关闭、可独立降级的课节出席记录；
 - MVP-B：单一受管理根目录的课程文件资料库；
-- MVP-C1：直接权重成绩、等级与绩点模板、当前学期估算 SGPA。
+- MVP-C1：顶层直接项与一层等权分类组成绩、等级与绩点模板、当前学期估算 SGPA。
 
 本文继续描述已批准的 C1 边界、所有权和契约，供其后续实现使用；但首个公开版本的运行时剖面只实例化 MVP-A、MVP-A-P 和 MVP-B。首发实现不得创建 `MOD-GRADE` 运行时或 schema，不能把 C1 以关闭开关、空模块或占位 schema 方式带入首发构建。
 
@@ -87,7 +87,7 @@ flowchart LR
 | `MOD-PLAN` | 学习计划核心 | 核心领域 | 学期、课程、假期、课节/任务系列、规则段、例外、任务实例状态与统一计划实例 | 失败影响核心计划查询或写入，不能伪装为空数据 |
 | `MOD-ATTEND` | 出席记录 | 用户可开关外围模块 | 启用周期、出席事实、出席率与覆盖率 | 降级自身；PLAN 回退到基础时间语义 |
 | `MOD-LIBRARY` | 文件资料库 | 次级模块 | 单一本地根、根/文件身份、磁盘一致索引、标签、冲突、扫描、操作恢复、对账与受验证资源授权 | 普通故障降级自身、结构化模块继续；作为未收敛 Restore 或数据回退对账参与者时进入 recovery |
-| `MOD-GRADE` | 成绩与当前 SGPA | 次级模块 | 评分方案、成绩事实、模板版本、结果来源、覆盖范围与确定性结果 | 降级自身；PLAN 和原始成绩事实不受影响 |
+| `MOD-GRADE` | 成绩与当前 SGPA | 次级模块 | 直接评分项、等权分类组、成绩事实、模板版本、结果来源、覆盖范围与确定性结果 | 降级自身；PLAN 和原始成绩事实不受影响 |
 | `MOD-PROTECT` | 数据保护 | 核心支持 | 备份集、完整不可变快照、发布/保留状态、恢复会话、恢复前安全恢复集、迁移回退会话、ActivityControl 状态与激活编排 | 备份失败不回滚本地成功；激活或回退证据不确定时进入 recovery |
 | `MOD-DATA` | 活动数据协议 | 基础端口 | 修订、幂等提交、一致读取、持久后续动作、导出、schema 迁移/安全副本、暂存与激活协议 | 可读不可写时进入 read-only；完整性或数据切换不确定时进入 recovery |
 | `MOD-PLATFORM` | 平台接缝 | 基础端口 | 时钟/时区、本地位置分类、文件系统、监听、选择器、系统打开及平台能力 | 故障按所影响能力传播，不形成全局“平台失败”布尔值 |
@@ -127,19 +127,19 @@ flowchart LR
 
 | 事实 | 所有者 | 说明 |
 |---|---|---|
-| WorkspaceLifecycle、SetupProgress、持久草稿检查点 | `MOD-WORKSPACE` | 当前最低条件由正式事实派生；曾达标里程碑不因学期归档抹除；草稿与正式事实分层 |
+| WorkspaceLifecycle、SetupProgress、持久草稿检查点 | `MOD-WORKSPACE` | 当前最低条件是 Current Term + 至少一门 Course；曾达标里程碑不因学期归档抹除；草稿与正式事实分层 |
 | Term、HolidayRange、Course | `MOD-PLAN` | 一个 Workspace 可有多个历史学期，最多一个当前学期 |
-| MeetingSeries / TaskSeries 及规则段 | `MOD-PLAN` | “本次及未来”结束旧段并创建新段，不重写历史段 |
-| OccurrenceOverride、TaskOccurrenceState | `MOD-PLAN` | “仅本次”使用实例覆盖；完成、跳过、删除语义分开 |
-| AttendanceWindow、AttendanceRecord | `MOD-ATTEND` | 引用 MeetingOccurrenceId；未标记不是缺席事实 |
-| GradingScheme、GradeResult、GradeScaleVersion、CourseGradeBinding | `MOD-GRADE` | 版本、来源和覆盖范围不可丢失 |
+| MeetingSeries / TaskSeries、TaskCategory 及规则段 | `MOD-PLAN` | “本次及未来”结束旧段并创建新段，不重写历史段；任务组/类型由用户明确选择 |
+| OccurrenceOverride、TaskOccurrenceState | `MOD-PLAN` | “仅本次”使用实例覆盖；完成、跳过、删除和独立可选进度语义分开 |
+| AttendanceWindow、AttendanceRecord | `MOD-ATTEND` | 引用 MeetingOccurrenceId；Unmarked、Present、Absent、Late、Excused 保持不同 |
+| GradingScheme、GradingCategory、GradeResult、GradeScaleVersion、CourseGradeBinding | `MOD-GRADE` | 最多一层分类；版本、来源和覆盖范围不可丢失 |
 | LibraryRootId、RootGeneration、LibraryRecord、CustomTag、FileOperation | `MOD-LIBRARY` | 真实文件内容在磁盘；根 marker 提供逻辑根身份；索引记录对应关系与验证状态 |
 | BackupConfiguration、BackupSet、SnapshotManifest、SnapshotPublication、RestoreSession、RestoreSafetySet、恢复激活协调状态 | `MOD-PROTECT` | 每个备份配置拥有独立 BackupSet；快照在激活前不是活动真相；安全恢复集属于单次恢复会话，不进入 BackupSet 保留计数 |
 | Revision、CommandReceipt、DurableFollowUp 持久记录 | `MOD-DATA` | DATA 拥有原子记录/恢复协议；每个 follow-up 的业务含义与完成策略仍归其命名模块 |
 
 ### 4.2 稳定身份
 
-至少使用 `WorkspaceId`、`TermId`、`CourseId`、`MeetingSeriesId`、`TaskSeriesId`、`MeetingOccurrenceId`、`TaskOccurrenceId`、`GradingItemId`、`LibraryRootId`、`RootGeneration`、`FileId`、`GradeScaleVersionId`、`BackupSetId`、`SnapshotId`、`RestoreSessionId`、`SafetySetId` 和 `OperationId`。
+至少使用 `WorkspaceId`、`TermId`、`CourseId`、`MeetingSeriesId`、`TaskSeriesId`、`MeetingOccurrenceId`、`TaskOccurrenceId`、`GradingCategoryId`、`GradingItemId`、`LibraryRootId`、`RootGeneration`、`FileId`、`GradeScaleVersionId`、`BackupSetId`、`SnapshotId`、`RestoreSessionId`、`SafetySetId` 和 `OperationId`。
 
 - 规则重算、视图切换、应用重启和缓存重建不得改变同一逻辑对象的身份。
 - 出席记录引用 `MeetingOccurrenceId`；任务状态引用 `TaskOccurrenceId`；成绩项关联任务时引用稳定任务身份。
@@ -273,7 +273,7 @@ MVP-A 必须独立通过全部适用 Gate。A-P、B、C1 各自增加模块证�
 |---|---|---|---|
 | `EXT-C2` | 版本化 `GradeProjection` | 目标、假设、可达性和估算结果 | 回写 C1 正式/手工结果；把估算冒充正式结果 |
 | `EXT-C3` | `FinalCourseOutcome` + `GradeScaleVersion` | 历史学年、学期、缺口、最终结果、累计范围 | 把历史缺口当无课程；把 C3 塞入当前 SGPA 模块 |
-| `EXT-WORKLOAD` | `TaskOccurrenceId` 与显式估时/实际用时事实 | 周负荷统计与自己的未知语义 | 从标题或任务规模猜测小时数 |
+| `EXT-WORKLOAD` | `TaskOccurrenceId` 与显式估时/实际用时事实 | 周负荷统计与自己的未知语义 | 从标题或任务分类猜测小时数 |
 | `EXT-TIMER` | `TaskOccurrenceId`、Clock/Platform 接缝 | 计时会话、暂停/恢复/取消与可选历史 | 默认自动完成正式任务；忽略睡眠/重启语义 |
 | `EXT-TASK-RELATIONS` | 稳定 TaskId/OccurrenceId | 子任务或依赖关系 | 重写既有实例身份和历史状态 |
 | `EXT-CANDIDATE-INTAKE` | 候选/Draft → Workspace 确认入口 | 导入来源、候选状态与确认记录 | AI、OCR 或导入器直接写正式事实 |
@@ -282,7 +282,7 @@ MVP-A 必须独立通过全部适用 Gate。A-P、B、C1 各自增加模块证�
 
 每个未来模块在进入实现前必须声明语义所有者、criticality、适用与专属 Q、失败半径、未知/来源规则、重启语义、格式版本、平台/可访问证据和对 G7 基准的增量。
 
-复杂评分规则不是预建空模块：它在产品规则与验收明确后，以新的版本化 `GradingScheme` 变体和 evaluator 扩展 `MOD-GRADE`；既有直接权重方案、历史模板绑定、来源与覆盖语义必须继续可读。若其失败半径或生命周期不再能被 GRADE 隐藏，再通过架构评审决定是否拆出新模块。
+复杂评分规则不是预建空模块：当前 `GradingScheme` 只允许顶层直接项与一层等权分类组。最低/最高 N 次、动态权重、分类内自定义比例、进一步嵌套或条件规则在产品规则与验收明确后，才以新的版本化 scheme 变体和 evaluator 扩展 `MOD-GRADE`；既有方案、历史模板绑定、来源与覆盖语义必须继续可读。若其失败半径或生命周期不再能被 GRADE 隐藏，再通过架构评审决定是否拆出新模块。
 
 ## 11. 需求追溯总览
 

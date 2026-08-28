@@ -2,6 +2,7 @@
 
 - 状态：已接受
 - 日期：2026-08-19
+- 修订：2026-08-28（开发期任务分类、Attendance 状态与一层成绩分类组）
 - 决策主题：`ADR-TOPIC-04`
 - 前置决策：[ADR-01](./ADR-01-desktop-runtime-ui-boundary.md)、[ADR-02](./ADR-02-process-thread-deployment.md)、[ADR-03](./ADR-03-sqlite-active-data-transactions.md)
 - 后续已接受决策：[ADR-05](./ADR-05-library-watching-index-file-operations.md)（补充 LIBRARY root/path/operation 持久字段语义，不改变本 ADR 的 schema level 与迁移政策）
@@ -72,6 +73,8 @@ ASCII hint     = CFLW
 
 公开基线冻结前，开发数据库可以重建；公开基线冻结后，历史 migration 与 fixture 只能追加，不能改写。
 
+2026-08-28 用户明确批准一次首个公开版本前的任务模型破坏性替换。下一开发 schema level 必须在一个受安全副本保护的前向迁移中删除旧 `small/large` TaskSeries、TaskSegment、task occurrence override/state/history 及不兼容 Task DraftCheckpoint，再建立 TaskCategory/progressTracking 新结构；不得据此删除或重建 Term、Course、Meeting、Holiday、共同 receipt/follow-up 或其他模块事实。旧 task command receipt 只用于幂等历史解释，不重新执行，也不形成旧 Task 兼容层。此例外不适用于首个公开库之后的任何数据。
+
 ## 4. Schema 总体形态
 
 ### 4.1 关系模型与事实边界
@@ -114,7 +117,7 @@ PLAN schema 至少由下列关系组成：
 | `courses` | CourseId、TermId、展示字段、归档状态、EntityVersion、教学范围意图（inherit-term 或 explicit）及精确/未知 credits |
 | `holiday_ranges` | HolidayRangeId、TermId、名称、包含首尾的起止 LocalDate、tombstone/EntityVersion |
 | `meeting_series` / `meeting_segments` | 稳定 SeriesId、CourseId、retired/version；不重叠规则段、有效范围意图、LEC/TUT/PRA、weekday、本地起止时刻、跨日 offset、地点 union |
-| `task_series` / `task_segments` | 稳定 SeriesId、CourseId、retired/version；once/weekly 判别式、规模、Deadline union、范围与 followTeachingWeek |
+| `task_series` / `task_segments` | 稳定 SeriesId、CourseId、retired/version；once/weekly 判别式、TaskCategory group/kind/custom-label union、可选 taskNote、Deadline union、范围、followTeachingWeek 与 progressTracking |
 | meeting/task occurrence override | SeriesId + 原始 logical anchor；inherit/replaced/TBA/cancelled 等显式判别式 |
 | `task_occurrence_states` | TaskSeriesId + 原始 anchor 的当前 pending/completed/skipped、可选 progress、EntityVersion |
 | `task_state_history` | 只保存状态/进度更正与 Undo 所需历史，不成为通用 event store |
@@ -125,11 +128,12 @@ PLAN schema 至少由下列关系组成：
 2. Course 与 Series 必须同时保存“继承上级范围”或“显式范围”的意图，不能只保存当时算出的有效日期。
 3. 同一 Series 的 Segment 不得重叠。“本次及未来”在 logical anchor 处分割旧段，旧段在锚点前结束，新段从锚点开始；历史段不被覆盖。
 4. 普通 Occurrence 不落表。其逻辑身份是 `(SeriesId, originalLogicalAnchor)`；Meeting/weekly Task 的 anchor 是原始 LocalDate，once Task 的 anchor 是稳定标记 `once`。物理引用保存这个 typed tuple，不以当前显示日期生成新身份。
-5. Deadline 使用 `TBA | date-only(LocalDate) | timed(Instant + display ZoneId)` 判别联合；Location 的 known/TBA 也显式区分。
-6. 未触碰 TaskOccurrence 没有 state row，等价 pending。显式完成、跳过、进度与恢复保持不同；完成投影为 100%，Undo 恢复完成前进度。
-7. HolidayRange 每个连续范围一行，不展开成每日事实。
-8. Course 只归档；Holiday 删除保留 tombstone/revision，以支持 receipt、影响与历史。被外围记录引用的 Series/Occurrence 不级联删除。
-9. Course/Term/Segment 范围包含关系、Segment 不重叠和跨表 union 由 PLAN 在同一正式事务中验证；数据库以外键与局部 CHECK 作为最后防线。
+5. Deadline 使用 `TBA | date-only(LocalDate) | timed(Instant + display ZoneId)` 判别联合；Location 的 known/TBA 也显式区分。Meeting 本地起止时间与 timed Task 的本地显示分钟必须可被 5 整除。
+6. TaskCategory 保存显式 `coursework | assessment` group。coursework kind 为 homework/assignment/project/research-paper/other，assessment kind 为 quiz/term-test/midterm/final/other；只有 other 必须带非空 custom label，其他 kind 不得带。Midterm/Final 的 Term Test 子类型关系由 PLAN 合法值与投影表达，不从标题推断。
+7. 未触碰 TaskOccurrence 没有 state row，等价 pending。progressTracking 保存在 TaskSegment 并与 category 独立；显式完成、跳过、进度与恢复保持不同，完成投影为 100%，Undo 恢复完成前进度。
+8. HolidayRange 每个连续范围一行，不展开成每日事实。
+9. Course 只归档；Holiday 删除保留 tombstone/revision，以支持 receipt、影响与历史。被外围记录引用的 Series/Occurrence 不级联删除。
+10. Course/Term/Segment 范围包含关系、Segment 不重叠和跨表 union 由 PLAN 在同一正式事务中验证；数据库以外键与局部 CHECK 作为最后防线。
 
 ### 4.4 ATTEND
 
@@ -138,7 +142,7 @@ ATTEND schema 只在 `MVP-A-P` 实际交付的 schema level 出现：
 | 表族 | 必须持久的事实 |
 |---|---|
 | `attendance_windows` | AttendanceWindowId、openedAt Instant、TermZone opening LocalDate、effectiveFrom Instant、可空 closedAt Instant、EntityVersion |
-| `attendance_records` | MeetingSeriesId + original LocalDate anchor、unmarked/attended/missed、changedAt、EntityVersion |
+| `attendance_records` | MeetingSeriesId + original LocalDate anchor、unmarked/present/absent/late/excused、changedAt、EntityVersion |
 
 规则：
 
@@ -176,22 +180,23 @@ GRADE schema 只在 `MVP-C1` 实际交付的 schema level 出现：
 
 | 表族 | 必须持久的事实 |
 |---|---|
-| `grading_schemes` | GradeSchemeId、CourseId、direct-weight kind、active/retired、EntityVersion |
-| `grading_items` | GradingItemId、scheme、名称/顺序、known/unknown weight、score union、可选 typed GradeTaskRef、EntityVersion |
+| `grading_schemes` | GradeSchemeId、CourseId、one-level-weighted kind、active/retired、EntityVersion |
+| `grading_categories` | GradingCategoryId、scheme、自定义名称/顺序、known/unknown 课程总权重、EntityVersion |
+| `grading_items` | GradingItemId、scheme、direct/category-member parent union、名称/顺序、direct 时 known/unknown 课程权重、score union、可选 typed GradeTaskRef、EntityVersion |
 | `grade_scale_versions` / band rows | immutable GradeScaleVersionId、source kind/URL/year/verified date/parent，以及固定 A+…F bands 的 exact minimum/GPA |
 | term default / course binding | Term 的 future-default 选择；Course 对一个确切 immutable GradeScaleVersionId 的显式绑定 |
 | manual final / school record facts | 用户手工 final 与 user-attested school record 分表保存各自时刻、来源和 EntityVersion |
 
 规则：
 
-1. 每个 Course 最多一个 active direct-weight scheme。
-2. Weight 为 known exact decimal 或 unknown。Score 为 `ungraded | points-incomplete | points(earned,max) | direct-percent`；零分是明确 scored fact。
-3. points 的 max 必须大于 0；earned 与 direct-percent 非负并可高于 100，以表达 extra credit。
-4. GradeTaskRef 只能是 `none | task-series | task-occurrence`；occurrence ref 保存 series + anchor，并验证同 Course。
+1. 每个 Course 最多一个 active one-level-weighted scheme。顶层只能是 direct item 或 equal category；category member 不得再引用 category。
+2. direct item weight 与 category total weight 为 known exact decimal 或 unknown；category member 的 weight 列必须 NULL，其有效权重由 GRADE 以 category weight ÷ member count 派生。
+3. Score 为 `ungraded | points-incomplete | points(earned,max) | direct-percent`；零分是明确 scored fact。points 的 max 必须大于 0；earned 与 direct-percent 非负并可高于 100，以表达 extra credit。
+4. GradeTaskRef 只能是 `none | task-series | task-occurrence`；occurrence ref 保存 series + anchor，并验证同 Course。任务分类不存为 GradingCategory 外键，也不触发持续同步。
 5. GradeScaleVersion 不就地编辑；修改创建新 ID。bands 的 code、连续性、minimum 单调和 GPA 对应由 GRADE 验证，数据库约束局部类型/唯一性/范围。
 6. 修改 Term default 只影响未来新建的显式 binding，不重绑既有 Course。
-7. 单科结果、coverage、weighted points 与 SGPA 从同一 ReadSnapshot 派生；不保存 current-result cache 或 Term overall percentage。
-8. 不为 `EXT-C2/C3` 创建字段、表或空入口。
+7. 单科结果、分类平均、coverage、weighted points 与 SGPA 从同一 ReadSnapshot 派生；不保存 effective member weight、current-result cache 或 Term overall percentage。
+8. 不为 `EXT-C2/C3` 或更复杂评分规则创建字段、表或空入口。
 
 ## 5. 物理值、约束与索引
 
@@ -539,9 +544,9 @@ CourseFlow 没有跨语言网络互操作需求。完整 RFC 8785 profile 仍需
 6. `TEST-DATA-006`：每个公开旧 level 到 current、current reopen、future stop、partial chain、migration kill、safety-copy rollback、旧 snapshot staged migration。
 7. `TEST-WORKSPACE-001–006`：new/current/old/future/recovery/read-only/mixed-build 的 mode、capability、epoch 与 next action。
 8. `TEST-PLAN-001–008`：Term/Course 范围意图、Segment split/no-overlap、Occurrence tuple 稳定、sparse override/state、Holiday 与所有窗口投影。
-9. `TEST-ATTEND-001–004`：默认关闭、跨日当天 00:00 开启、即时关闭、关闭前资格保留、同日重开实际时刻、关闭间隙不回填、统计与 PLAN 隔离。
+9. `TEST-ATTEND-001–004`：默认关闭、跨日当天 00:00 开启、即时关闭、关闭前资格保留、同日重开实际时刻、关闭间隙不回填、五状态、Late/Excused 统计与 PLAN 隔离。
 10. `TEST-LIBRARY-001–007`：实际交付 level 的 root/category/mapping/index/tag/tombstone/file-operation schema、verified uniqueness 与跨重启 reconcile。
-11. `TEST-GRADE-001–007`：decimal 18/6 边界、zero/ungraded/unknown、extra credit、immutable scale/binding、manual/attested provenance、精确等级边界与 SGPA。
+11. `TEST-GRADE-001–007`：decimal 18/6 边界、direct item + equal category、成员有效权重、zero/ungraded/unknown、extra credit、immutable scale/binding、manual/attested provenance、精确等级边界与 SGPA。
 12. `TEST-PROTECT-001–006`：actual level/revision manifest、旧/current/future candidate、staging migration、source/post-migration revision、WorkspaceId replacement 与 activation 前不变。
 13. 每个 CourseFlow 自有表的 manifest test：STRICT、列/type、PK/FK、CHECK、UNIQUE、required index、RESTRICT/no trigger/no unexpected object。
 14. canonical encoding property/golden tests：Unicode/key order、lone surrogate、absent/null、dense/sparse array、safe integer、`-0`、NaN/Infinity、64-bit/decimal 边界和 rejected prototypes。

@@ -78,6 +78,7 @@
 | `TaskOccurrenceId` | `MOD-PLAN` | 同一逻辑任务实例在状态变化、重算和应用重启后稳定 |
 | `AttendanceWindowId` | `MOD-ATTEND` | 每次启用形成明确窗口；关闭后窗口历史保留 |
 | `GradeSchemeId` | `MOD-GRADE` | 一门课程评分方案的身份 |
+| `GradingCategoryId` | `MOD-GRADE` | 一个课程内等权评分分类组的身份；跨改名、排序和成员变化稳定 |
 | `GradingItemId` | `MOD-GRADE` | 跨排序、改名和成绩录入稳定；显示顺序或标题不是身份 |
 | `GradeScaleVersionId` | `MOD-GRADE` | 规则版本不可被就地静默改写 |
 | `LibraryRootId` | `MOD-LIBRARY` | 一个逻辑资料库的稳定身份；正常迁移和匹配 marker 的整库重新授权保持不变 |
@@ -128,10 +129,12 @@
 | `MeetingSeries` | 课程的一条周期课节身份；由一个或多个不重叠规则段表达历史演进 |
 | `MeetingSegment` | 在明确生效范围内的类型、星期、当地开始/结束时间、结束日偏移、地点和其他课节字段 |
 | `TaskSeries` | 与 Course 关联的一次性或每周任务身份；由规则段表达未来修改 |
-| `TaskSegment` | 规模、截止语义、重复范围、是否跟随教学周及其他任务字段 |
+| `TaskCategory` | 用户明确选择的 `coursework | assessment` 组及组内预设类型，或带自定义名称的组内 `other`；显示分组不是从标题推断 |
+| `TaskSegment` | TaskCategory、标题/可选 note、截止语义、重复范围、是否跟随教学周、是否启用进度及其他任务字段 |
 | `Occurrence` | 从系列、段、范围、假期和覆盖事实确定性派生的单次实例 |
 | `OccurrenceOverride` | “仅本次”的修改、取消或删除事实；不得修改相邻实例，也不得代替独立的 `TaskOccurrenceState` |
-| `TaskOccurrenceState` | 单个任务实例的 pending/completed/skipped 与 large 可选自报进度事实；删除不属于状态 |
+| `TaskOccurrenceState` | 单个任务实例的 pending/completed/skipped 与明确启用后的可选自报进度事实；删除不属于状态 |
+| `GradingCategory` | Course 评分方案内最多一层的自定义等权分类组；拥有课程总权重和成员顺序，不由 TaskCategory 持续同步 |
 | `GradeTaskRef` | `none`、`task-series(TaskSeriesId)` 或 `task-occurrence(TaskOccurrenceId)`；只能由用户显式建立，标题相同不构成关联 |
 | `GradeProjection` | `CourseGradeProjection` 的版本化只读导出，携带 CourseId、input revision、GradeScaleVersionId、result source、coverage、warnings 与估算标识 |
 | `FinalCourseOutcome` | 仅在存在 calculated-final、manual-final 或 user-attested school-record 时导出其值、来源、provenance、credits 与绑定模板；current-estimate 不能冒充最终结果 |
@@ -164,14 +167,15 @@
 
 - completed 与 skipped 是不同事实；
 - 两者均可通过显式更正恢复为 pending；
-- 大任务 completed 时显示 100%，恢复时还原完成前的自报进度；
+- 明确启用进度的任务 completed 时显示 100%，恢复时还原完成前的自报进度；
 - deleted 不是任务状态，而是带影响范围的领域操作。
 
 #### Attendance
 
-`outside-window | unmarked | attended | missed | cancelled | holiday-suppressed`
+`outside-window | unmarked | present | absent | late | excused | cancelled | holiday-suppressed`
 
 - unmarked 可以是派生义务，不要求存为一条“未知记录”；
+- present、absent、late、excused 是不同的用户自报事实；late 不能被折叠为 present，excused 不能被折叠为 present 或 absent；
 - cancelled、holiday-suppressed、未开始实例不进入已结束出席分母；
 - outside-window 不产生待确认项或统计义务。
 
@@ -544,7 +548,7 @@ Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域�
 3. 所有自动行为（如日期越过 Term end 的归档）仍以可审计 Intent 经 FLOW-01 提交。
 4. 次级/外围模块失败只修改相关 capability/health；不把全 Workspace 无条件设为失败。
 5. Workspace 不吞掉模块 ProblemCode，不把 error 转为空，不改写 dataEffect。
-6. Setup 当前最低条件由正式事实计算：存在 Current Term、至少一门 Course、至少一条 MeetingSeries 或课程 Task；第一次达到时持久推进 `everReachedMinimum`。当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑。
+6. Setup 当前最低条件由正式事实计算：存在 Current Term 与至少一门 Course；MeetingSeries、Task、Holiday 和保护设置均可稍后补充。第一次达到时持久推进 `everReachedMinimum`，当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑。
 7. 从未达标的 Workspace 重启默认回到 setup，但仍可明确提前进入 Today；曾达标的 Workspace 重启默认进入 Today，即使当前无 Current Term，并显示“学期已结束/需要新学期”的真实状态与历史/创建入口。
 8. 应用重启后先恢复持久 Operation/DurableFollowUp，再决定普通路由。
 9. 打开 DATA 或启动 Library watcher 前必须先取得 PROTECT 对 Restore 与 MigrationRollback 的统一启动判定；未终结 handoff、激活未收敛、证据冲突或未知协调版本只能路由 maintenance/recovery，不得让 Workspace、Shell 或 Main 解释物理阶段。
@@ -581,7 +585,7 @@ Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域�
 - Today/Week/Calendar/TBA 所需的计划实例与时间/状态分类；
 - 时间重叠 warning 和删除/归档/分段 ReferenceImpact。
 
-Course 的正式字段为 code、name、可选 section、instructor、color、credits、courseNote 和教学范围；instructor 只有 Course 级一个来源。MeetingSegment 保存规范 type、星期、当地开始/结束时间、地点、可选 meetingNote 和有效范围，不保存独立 instructor。Task 的正式字段至少包含 title、CourseId、用户明确选择的 small/large、Deadline、单次/每周规则、followTeachingWeek 和大任务可选进度。
+Course 的正式字段为 code、name、可选 section、instructor、color、credits、courseNote 和教学范围；instructor 只有 Course 级一个来源。MeetingSegment 保存规范 type、恰好一个星期、五分钟粒度的当地开始/结束时间、地点、可选 meetingNote 和有效范围，不保存独立 instructor。Task 的正式字段至少包含 title、可选 taskNote、CourseId、用户明确选择的 TaskCategory、Deadline、单次/每周规则、followTeachingWeek 和独立的 progressTracking 选择。
 
 Task schedule 只有两种当前变体：
 
@@ -609,14 +613,14 @@ Task schedule 只有两种当前变体：
 
 1. Workspace 最多一个 Current Term；历史 Term 不因切换或归档删除。
 2. Term end 不早于 start；Course 教学范围默认继承 Term 且位于 Term；Meeting/Task 周期范围默认继承 Course 且可明确缩短。
-3. Meeting type 为 LEC、TUT 或 PRA，并向投影提供稳定 code 与可理解全称；星期和当地开始/结束时间必填；结束时刻在 TermZone 中晚于开始，可显式跨至次日；地点可 TBA。Meeting 只引用 Course instructor，不提供课节级覆盖。
+3. Meeting type 为 LEC、TUT 或 PRA，并向投影提供稳定 code 与可理解全称；每条规则恰好一个星期且当地开始/结束时间必填，分钟可被 5 整除；结束时刻在 TermZone 中晚于开始，可显式跨至次日；地点可 TBA。Meeting 只引用 Course instructor，不提供课节级覆盖。
 4. 同一 Series 在任一逻辑日期最多一个有效 Segment；分段不重写此前 Segment。
 5. OccurrenceId 在同一逻辑实例上稳定；override 只影响目标实例。
 6. Reading Week/其他 HolidayRange 抑制周期 Meeting 和明确 followTeachingWeek 的重复 Task；一次性事项保留。
 7. 时间冲突是带对象和时间的 warning，不自动移动、删除或阻止用户明确继续。
-8. 新 Task 必须关联 Current Term 中的 Course，并由用户明确选择 small/large；系统不从标题或截止时间猜测规模。对历史 Term 的修改必须是明确的历史更正路径。
-9. Deadline 的 date-only、timed、TBA 保持不同；TBA 不进入倒计时、逾期或虚构日历格。
-10. TaskOccurrence 的 pending/completed/skipped 分开；大任务进度为可选 0–100%，completed 显示 100%，恢复后还原完成前进度；进度不参与 Grade 计算。
+8. 新 Task 必须关联 Current Term 中的 Course，并由用户明确选择 TaskCategory。Coursework 预设 homework/assignment/project/research-paper，Assessment 预设 quiz/term-test/midterm/final；每组可选 `other(customLabel)`。Midterm/Final 是 Term Test 子类型，通用 term-test 保留。系统不从标题、截止时间或成绩分类猜测；对历史 Term 的修改必须是明确的历史更正路径。
+9. Deadline 的 date-only、timed、TBA 保持不同；timed 的当地分钟可被 5 整除；TBA 不进入倒计时、逾期或虚构日历格。
+10. TaskOccurrence 的 pending/completed/skipped 分开；progressTracking 与 TaskCategory 独立，开启时进度为可选 0–100%，completed 显示 100%，恢复后还原完成前进度；进度不参与 Grade 计算。
 11. 每周 Task 的结束条件默认建议 Course 教学结束日，只有用户确认或明确缩短后才建立；不得静默生成越过 Course 范围的实例。
 12. Course 归档后默认不进入当前投影，历史事实和引用保留；自动 Term 归档只在 TermZone 当前日期超过 end 时发生，修正日期并满足唯一 Current Term 约束后可显式恢复。
 13. 创建新 Term 不自动复制历史 Course、MeetingSeries 或 TaskSeries；任何未来复用能力必须是新的显式 preview/confirm intent。
@@ -626,8 +630,8 @@ Task schedule 只有两种当前变体：
 17. Term progress 使用包含首尾两日的公式 `clamp((applicableDate - start + 1) / (end - start + 1), 0, 1)`；Holiday 不从分母扣除。
 18. HolidayRange 在周日历投影中按每个可见周最多一个连续片段输出，在 Agenda 中输出一个带起止日的范围事项；不得派生成每日假期记录。
 19. 应用内提醒只由 Today/Week、倒计时和临近分类投影构成；应用关闭时不承诺系统通知、邮件或后台推送。
-20. `next-small` 与 `next-large` 分别只从 Current Term 中 pending、未 skipped 且日期已知的对应规模 TaskOccurrence 选择；timed 使用真实截止 Instant，date-only 使用 TermZone 当日结束作为排序边界，TBA 不参与；无候选时返回带原因的真实空状态。并列时使用稳定身份产生确定顺序。
-21. Today/Week/Calendar/Agenda 投影必须携带同一 occurrence identity、文字类型、时间分类和来源引用。Meeting 至少区分 upcoming、in-progress、ended、cancelled、holiday-suppressed；Task 至少区分 overdue、today、near-due、future、completed、skipped、TBA。Today 摘要同时返回 Task/Meeting 的贡献明细以及 skipped、missed、unmarked 等未计入项。
+20. `next-coursework` 与 `next-assessment` 分别只从 Current Term 中 pending、未 skipped 且日期已知的对应 TaskCategory group 选择；`other` 使用其显式 group。timed 使用真实截止 Instant，date-only 使用 TermZone 当日结束作为排序边界，TBA 不参与；无候选时返回带原因的真实空状态。并列时使用稳定身份产生确定顺序。
+21. Today/Week/Calendar/Agenda 投影必须携带同一 occurrence identity、文字类型、时间分类和来源引用。Meeting 至少区分 upcoming、in-progress、ended、cancelled、holiday-suppressed；Task 至少区分 overdue、today、near-due、future、completed、skipped、TBA。Today 摘要同时返回 Task/Meeting 的贡献明细以及 skipped、absent、excused、unmarked 等未计入项。
 22. 投影按照请求窗口计算，不要求扫描所有历史；缓存可删除重建。
 
 **Problems / Degradation**
@@ -651,7 +655,7 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 **Owns**
 
 - AttendanceWindow（以 Instant 表达、半开区间 `[effectiveFrom, closedAt)` 的启用窗口，同时记录开启时的 TermZone LocalDate）；
-- attended/missed 的 AttendanceRecord 与显式更正；
+- present/absent/late/excused 的 AttendanceRecord 与显式更正；
 - unmarked 义务、课程计数、出席率、覆盖率和 Today 覆盖投影。
 
 **Does not own**
@@ -662,7 +666,7 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 
 **Interfaces**
 
-- `IF-ATTEND-COMMAND`：EnableAttendance、DisableAttendance、MarkAttended、MarkMissed、ResetToUnmarked；
+- `IF-ATTEND-COMMAND`：EnableAttendance、DisableAttendance、MarkPresent、MarkAbsent、MarkLate、MarkExcused、ResetToUnmarked；
 - `IF-ATTEND-QUERY`：TodayOverlay、CourseAttendanceProjection、CapabilityState；
 - `IF-ATTEND-IMPACT`：Meeting/Term 变化对记录引用的核对影响。
 
@@ -672,10 +676,10 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 2. Disable 在该命令的 commit Instant 关闭当前窗口；MeetingOccurrence 的开始 Instant 不早于 `closedAt` 时不产生义务。关闭前已经具备资格或已有记录的实例保留。
 3. 再次 Enable 建立新窗口且不补写关闭间隙；若前一窗口在同一 TermZone LocalDate 关闭，`effectiveFrom` 为本次 Enable 的 commit Instant，否则按第 1 条取当天 00:00。窗口不得重叠且最多一个未关闭窗口。
 4. 只有开始 Instant 落入某个有效窗口、已经开始且应上课的 MeetingOccurrence 可标记；取消、假期抑制、窗口外和未来实例不产生记录义务。
-5. unmarked 保持未知，不存成 missed。
-6. `attendanceRate = attended / (attended + missed)`；分母为零则 unknown。
-7. `coverageRate = (attended + missed) / eligibleEndedOccurrencesInWindows`；分母为零则 unknown。
-8. Today 在 capability available 时：attended 计完成，已结束 unmarked 待确认，missed 单列，未来/进行中待完成；disabled/unavailable 时退回 PLAN 时间语义。
+5. unmarked 保持未知，不存成 absent。
+6. `attendanceRate = (present + late) / (present + late + absent)`；excused 不进入该分母，分母为零则 unknown。
+7. `coverageRate = (present + late + absent + excused) / eligibleEndedOccurrencesInWindows`；unmarked 不进入分子，分母为零则 unknown。
+8. Today 在 capability available 时：present 与 late 计完成但保持不同标签，已结束 unmarked 待确认，absent 单列，excused 为 resolved 且不进入完成/缺席/待确认，未来/进行中待完成；disabled/unavailable 时退回 PLAN 时间语义。
 9. ATTEND 失败不得阻止 PLAN query/command。
 
 **Problems / Degradation**
@@ -759,11 +763,11 @@ permission、root-unavailable、root-not-local、root-overlap、root-identity-mi
 
 **Purpose**
 
-保存直接权重评分事实与版本化等级模板，并从一个 ReadSnapshot 产生带来源、覆盖范围和未知原因的单科结果与当前学期估算 SGPA。
+保存顶层直接评分项、一层等权分类组与版本化等级模板，并从一个 ReadSnapshot 产生带来源、覆盖范围和未知原因的单科结果与当前学期估算 SGPA。
 
 **Owns**
 
-- GradingScheme、GradingItem、ScoreResult；
+- GradingScheme、GradingCategory、GradingItem、ScoreResult；
 - GradeScaleVersion、来源、适用年份、核对日期和课程绑定；
 - SGPA 结果来源选择、用户输入的最终成绩及其 provenance；
 - GradeProjection、CurrentTermGradeOverview 和未覆盖清单。
@@ -778,29 +782,33 @@ permission、root-unavailable、root-not-local、root-overlap、root-identity-mi
 
 **Interfaces**
 
-- `IF-GRADE-COMMAND`：方案/评分项、成绩录入、模板复制/编辑、课程绑定、显式任务关联、结果来源；课程学分更新仍使用 PLAN 的 Course intent；
+- `IF-GRADE-COMMAND`：方案/直接评分项/等权分类组、成绩录入、模板复制/编辑、课程绑定、显式任务关联、结果来源；课程学分更新仍使用 PLAN 的 Course intent；
 - `IF-GRADE-QUERY`：CourseGradeProjection、CurrentTermGradeOverview、GradeScaleProjection；
 - `IF-GRADE-EXPORT`：版本化 GradeProjection、FinalCourseOutcome、GradeScaleVersion 只读接缝；
 - `IF-GRADE-IMPACT`：Task/Course/Scale 删除或修改的引用影响。
 
 **Invariants and formulas**
 
-1. MVP 评分方案为直接权重项；每项权重 known 或 unknown。已知权重合计不等于 100% 时 warning，不自动归一化或补足。
-2. 成绩可以由 earned/max 或直接百分比明确录入；max 缺失、ungraded 与 scored-zero 分开。
-3. 对每个已出分且权重已知的项 `i`：`weightedPoints_i = weight_i × scorePercent_i / 100`。
-4. `earnedWeightedPoints = Σ weightedPoints_i`。
-5. `gradedCoverageWeight = Σ weight_i`（只含已出分且权重已知项）。
-6. `gradedPortionPercent = earnedWeightedPoints / gradedCoverageWeight × 100`；coverage 为零时 unknown。
-7. 未出分、max 缺失或权重 unknown 的项不按零计入；必须列入未覆盖/警告。
-8. GradeScaleVersion 包含按顺序的 A+、A、A−、B+、B、B−、C+、C、C−、D+、D、D−、F；分数线连续、单调、无重叠，映射使用未经自动向上取整的原百分比。
-9. 内置 UTM Undergraduate 2026–2027 模板记录来源、适用年份和核对日期，规范 fixture 必须逐档匹配 [PRD §5.1](../product/PRD.md#51-utm-默认模板) 与 [UTM 核对记录](../research/utm-grading-gpa-rules.md)；编辑产生个人副本/新版本，不就地改写历史绑定。
-10. 每门 Course 显式绑定 GradeScaleVersion；更换 Term 默认模板不静默改写已完成课程绑定。
-11. current-estimate 的 percentage 是 `gradedPortionPercent`；calculated-final 只在直接权重方案完整、已知权重合计 100% 且所需成绩全部已知时产生；manual-final 与 user-attested school-record 使用用户明确输入的最终 percentage。任何选择都必须显示 result source；calculated-final 不得标为 school-record。
-12. `SGPA = Σ(courseGradePoint × courseCredits) / Σ(includedCourseCredits)`；F 以 0.0 纳入；缺学分或可用成绩的课程列入未覆盖，不加入分母。
-13. 只称当前学期估算 SGPA，不输出学期总百分比、AGPA 或 CGPA。
-14. CourseGradeProjection 明确输出 percentage、letter grade、grade point、credits、result source/provenance、GradeScaleVersionId、earned weighted points、graded portion percent、coverage、估算标识和 warnings。
-15. CurrentTermGradeOverview 输出 `estimatedSgpa: known|unknown(reason)`、纳入学分、未覆盖 Course/原因清单和估算/学校正式记录说明；对每门 Course 输出 percentage、letter grade、grade point、credits、result source 和 coverage，并与单科读取同一个版本化 GradeProjection。不得分别重算或虚构学期总百分比；没有可纳入课程时 SGPA 为 unknown，不显示 0.00。
-16. GradingItem 的可选关联使用 `GradeTaskRef`，只能指向同一 Course 的现存 TaskSeries/TaskOccurrence。Task 标题、完成/跳过状态和自报进度不得自动建立关联或改变 ScoreResult；删除/分割被引用 Task 时必须预览并显式保留、重绑或解除引用，不得级联删除成绩。
+1. 每门 Course 最多一个 active GradingScheme。顶层 component 只能是 `direct-item` 或 `equal-category`；category 只包含 item，不能继续嵌套。
+2. direct item 的课程权重与 category 的课程总权重分别为 known 或 unknown。顶层已知权重合计不等于 100% 时 warning，不自动归一化或补足；category member 不保存独立权重。
+3. 成绩可以由 earned/max 或直接百分比明确录入；max 缺失、ungraded 与 scored-zero 分开。
+4. direct item 的 `effectiveWeight_i = itemWeight_i`。known weight 为 `W` 且有 `N > 0` 个成员的 equal-category 中，每个 member 的 `effectiveWeight_i = W / N`；空 category 不贡献成绩并产生 warning。
+5. category 当前平均只对已出分成员的 scorePercent 取算术平均；ungraded 不按零。增加、移动或删除成员会改变该 category 全部成员的 effectiveWeight，存在已出分成员时必须通过同 revision ImpactPreview 明确确认。
+6. 对每个已出分且 effectiveWeight 已知的项 `i`：`weightedPoints_i = effectiveWeight_i × scorePercent_i / 100`。
+7. `earnedWeightedPoints = Σ weightedPoints_i`。
+8. `gradedCoverageWeight = Σ effectiveWeight_i`（只含已出分且有效权重已知项）。
+9. `gradedPortionPercent = earnedWeightedPoints / gradedCoverageWeight × 100`；coverage 为零时 unknown。
+10. 未出分、max 缺失、顶层权重 unknown 或空 category 不按零计入；必须列入未覆盖/警告。
+11. GradeScaleVersion 包含按顺序的 A+、A、A−、B+、B、B−、C+、C、C−、D+、D、D−、F；分数线连续、单调、无重叠，映射使用未经自动向上取整的原百分比。
+12. 内置 UTM Undergraduate 2026–2027 模板记录来源、适用年份和核对日期，规范 fixture 必须逐档匹配 [PRD §5.1](../product/PRD.md#51-utm-默认模板) 与 [UTM 核对记录](../research/utm-grading-gpa-rules.md)；编辑产生个人副本/新版本，不就地改写历史绑定。
+13. 每门 Course 显式绑定 GradeScaleVersion；更换 Term 默认模板不静默改写已完成课程绑定。
+14. current-estimate 的 percentage 是 `gradedPortionPercent`；calculated-final 只在所有顶层权重已知且合计 100%、category 非空、所有必需成绩已知时产生；manual-final 与 user-attested school-record 使用用户明确输入的最终 percentage。任何选择都必须显示 result source；calculated-final 不得标为 school-record。
+15. `SGPA = Σ(courseGradePoint × courseCredits) / Σ(includedCourseCredits)`；F 以 0.0 纳入；缺学分或可用成绩的课程列入未覆盖，不加入分母。
+16. 只称当前学期估算 SGPA，不输出学期总百分比、AGPA 或 CGPA。
+17. CourseGradeProjection 明确输出 percentage、letter grade、grade point、credits、result source/provenance、GradeScaleVersionId、earned weighted points、graded portion percent、coverage、category coverage/count、估算标识和 warnings。
+18. CurrentTermGradeOverview 输出 `estimatedSgpa: known|unknown(reason)`、纳入学分、未覆盖 Course/原因清单和估算/学校正式记录说明；对每门 Course 输出 percentage、letter grade、grade point、credits、result source 和 coverage，并与单科读取同一个版本化 GradeProjection。不得分别重算或虚构学期总百分比；没有可纳入课程时 SGPA 为 unknown，不显示 0.00。
+19. GradingItem 的可选关联使用 `GradeTaskRef`，只能指向同一 Course 的现存 TaskSeries/TaskOccurrence。TaskCategory 只可作为 Shell 中的创建建议，用户必须确认；Task 标题、分类、完成/跳过状态和自报进度不得自动建立、移动或改变 Grade 事实。删除/分割被引用 Task 时必须预览并显式保留、重绑或解除引用，不得级联删除成绩。
+20. 对 weekly Task 的“每个 occurrence”关联是一次用户确认的有限 batch：按当时可派生 occurrence 建立独立 GradingItem/GradeTaskRef，显示确切数量；后续范围或 Holiday 变化只产生 impact，不静默增删 Grade 项。选择“整个 series”时只建立一个显式 series ref。
 
 **Problems / Degradation**
 
@@ -1033,18 +1041,18 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 |---|---|
 | Term | `CreateTerm`、`UpdateTerm`、`SetCurrentTerm`、`ArchiveTerm`、`RestoreTermAsCurrent` |
 | Holiday | `CreateHolidayRange`、`UpdateHolidayRange`、`DeleteHolidayRange` |
-| Course | `CreateCourse`、`CreateCourseWithFirstMeeting`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
+| Course | `CreateCourse`、`CreateCourseWithMeetings`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
 | Meeting | `CreateMeetingSeries`、`UpdateMeetingSeries`、`ChangeMeetingOccurrence(scope=only-this|this-and-future)`、`CancelMeetingOccurrence`、`DeleteMeetingSeries` |
 | Task | `CreateTaskSeries`、`UpdateTaskSeries`、`ChangeTaskOccurrence(scope=only-this|this-and-future)`、`DeleteTaskOccurrenceOrSeries` |
 | Task state | `SetTaskOccurrenceStatus(pending|completed|skipped)`、`SetTaskProgress`、`UndoTaskOccurrenceState(UndoToken)` |
 
 Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDetail`、`TaskList/TaskDetail/TaskSeriesDetail`、`TodayProjection`、`WeekProjection`、`CalendarWindowProjection`、`AgendaProjection`、`TbaProjection`、`PlanImpactProjection`。
 
-`CreateCourseWithFirstMeeting` 是 `WP-R2-03` 的原子 setup 变体：在已有 Current Term 中一次创建 Course 与首个 MeetingSeries。当前命令显式携带 `endDayOffset` 和 `overlapDecision=review|continue`；旧 schema 命令只用于持久回执重放。它不表示 Meeting 拥有 instructor override，也不扩展 occurrence、规则分段或多个 meeting 的生命周期语义。
+`CreateCourseWithMeetings` 是当前原子 setup/创建变体：在已有 Current Term 中一次创建 Course 与零至多条 MeetingSeries；空列表表示明确稍后添加，不表示 TBA Meeting。每个 Time Slot 恰好一个 weekday，显式携带 `endDayOffset` 和 `overlapDecision=review|continue`，整批 validation/decision-required/commit 全有或全无。既有 `CreateCourseWithFirstMeeting` schema 只用于持久回执重放。该变体不表示 Meeting 拥有 instructor override，也不改变 occurrence 或规则分段的生命周期语义。
 
 ### 6.3 ATTEND
 
-Intents：`EnableAttendance`、`DisableAttendance`、`MarkAttended`、`MarkMissed`、`ResetAttendanceToUnmarked`。启停时刻由 Workspace 的可信 Clock 在正式 commit 边界确定，不接受 Shell 自报时刻。
+Intents：`EnableAttendance`、`DisableAttendance`、`MarkPresent`、`MarkAbsent`、`MarkLate`、`MarkExcused`、`ResetAttendanceToUnmarked`。启停时刻由 Workspace 的可信 Clock 在正式 commit 边界确定，不接受 Shell 自报时刻。
 
 Queries：`AttendanceCapability`、`TodayAttendanceOverlay`、`CourseAttendanceProjection`、`AttendanceImpactProjection`。
 
@@ -1066,10 +1074,10 @@ Queries：`LibraryRootStatus`、`LibrarySearch`、`LibraryFileDetail`、`FileOpe
 
 | Intent family | 变体 |
 |---|---|
-| Scheme | `CreateGradingScheme`、`UpdateGradingScheme`、`AddGradingItem`、`UpdateGradingItem`、`RemoveGradingItem` |
+| Scheme | `CreateGradingScheme`、`UpdateGradingScheme`、`AddGradingCategory`、`UpdateGradingCategory`、`RemoveGradingCategory`、`AddGradingItem`、`MoveGradingItem`、`UpdateGradingItem`、`RemoveGradingItem` |
 | Result | `RecordScore`、`ClearScoreToUngraded`、`SetFinalResult(source=manual-final|school-record)`、`UseCalculatedResult` |
 | Scale | `CreateGradeScale`、`CopyGradeScaleVersion`、`UpdateGradeScaleAsNewVersion`、`SetTermDefaultScale`、`BindCourseScaleVersion` |
-| References | `LinkGradingItemToTask(GradeTaskRef)`、`UnlinkGradingItemFromTask` |
+| References | `LinkGradingItemToTask(GradeTaskRef)`、`LinkGradingItemsToTaskOccurrences(batch)`、`UnlinkGradingItemFromTask` |
 
 Queries：`CourseGradeProjection`、`CurrentTermGradeOverview`、`GradeScaleList/Detail`、`GradeImpactProjection`。
 
@@ -1279,7 +1287,7 @@ planned -> prepared -> armed -> awaiting-target-build
 1. Workspace 从 Clock/Term 形成 `evaluatedAt + termZone + applicableDate + requestedWindow`。
 2. DATA 提供 ReadSnapshot R。
 3. PLAN 在 R 上选择 Term/Course/Series segments，展开窗口内 occurrences，应用 HolidayRange、OccurrenceOverride 和 Task state。
-4. PLAN 产生统一时间/状态分类、next small/large、Today counts、warnings；所有页面查询复用同一规则实现。
+4. PLAN 产生统一时间/状态分类、next coursework/assessment、Today counts、warnings；所有页面查询复用同一规则实现。
 5. ATTEND available 时读取同一 R 的窗口/记录，产生 Today overlay；disabled/unavailable 时返回 capability 或 problem。
 6. Workspace 组合 Envelope R；不受影响部分可以继续，任何 unavailable/stale 明确标注。
 7. Shell 只排序/布局，不重算领域分类。
@@ -1495,11 +1503,11 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-PLAN-001` | Term/Course/Meeting/Task 范围与最多一个 Current Term 不变量 |
-| `TEST-PLAN-002` | 正常周、LEC/TUT/PRA code+全称、Course instructor 引用、较短课程/规则范围、精确时间边界、TBA 地点仍占时间格、带双方对象/Instant 的重叠 warning，以及明确 continue 后不移动或删除课节 |
+| `TEST-PLAN-002` | 零至多条 MeetingSeries 与 Course 原子创建、每条恰好一个 weekday、五分钟粒度、正常周、LEC/TUT/PRA code+全称、Course instructor 引用、较短课程/规则范围、精确时间边界、TBA 地点仍占时间格、带双方对象/Instant 的重叠 warning，以及明确 continue 后不移动或删除课节 |
 | `TEST-PLAN-003` | HolidayRange 抑制周期课节和 followTeachingWeek 任务，但保留一次性事项 |
 | `TEST-PLAN-004` | only-this override 不影响其他实例；this-and-future 分段保留历史 |
 | `TEST-PLAN-005` | OccurrenceId 在重算、视图、重启与不改变逻辑实例的编辑后稳定 |
-| `TEST-PLAN-006` | date-only/timed/TBA、逾期/今天/未来/完成分类，weekly 确认范围及 next small/large 候选/排序规则 |
+| `TEST-PLAN-006` | TaskCategory/Other group、独立 progressTracking、date-only/timed/TBA、五分钟粒度、逾期/今天/未来/完成分类，weekly 确认范围及 next coursework/assessment 候选/排序规则 |
 | `TEST-PLAN-007` | TermZone 跨日、DST、启用日、date-only 日末和自动归档边界 |
 | `TEST-PLAN-008` | Today/Week/Calendar/Agenda/TBA 对同一 revision 的实例、Today 明细/计数、学期进度与假期连续片段一致 |
 
@@ -1508,8 +1516,8 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-ATTEND-001` | 默认关闭；跨日启用从 TermZone 当天 00:00 生效且不回溯更早日期；关闭在 commit Instant 立即生效并保留关闭前资格/记录；同日重开从重开 Instant 生效；任何重开都不补关闭间隙 |
-| `TEST-ATTEND-002` | attended/missed/unmarked 更正，取消/假期/未来实例资格 |
-| `TEST-ATTEND-003` | 出席率、覆盖率、分母为零 unknown 和 Today overlay 公式 |
+| `TEST-ATTEND-002` | present/absent/late/excused/unmarked 更正，取消/假期/未来实例资格 |
+| `TEST-ATTEND-003` | Late/Excused 的出席率与覆盖率口径、分母为零 unknown 和 Today overlay 公式 |
 | `TEST-ATTEND-004` | ATTEND 保存/统计/整个模块失败时 PLAN 核心旅程继续 |
 
 ### 10.4 LIBRARY
@@ -1529,12 +1537,12 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | ID | 必须证明 |
 |---|---|
 | `TEST-GRADE-001` | earned/max 与 direct percent；ungraded、scored-zero、incomplete 分开 |
-| `TEST-GRADE-002` | unknown weight、合计非 100%、不归一化、weighted points/coverage 公式 |
+| `TEST-GRADE-002` | direct item + 一层 equal-category、unknown weight、空分类、合计非 100%、不归一化、成员有效权重与 weighted points/coverage 公式 |
 | `TEST-GRADE-003` | GradeScale 连续/单调/无重叠、官方 UTM fixture、84.5 不向上取整 |
 | `TEST-GRADE-004` | 模板复制版本、课程绑定、默认模板变化不改历史绑定 |
 | `TEST-GRADE-005` | current/calculated/manual/user-attested-school source、单科与总览共享结果、覆盖/警告，且不伪称学校连接 |
 | `TEST-GRADE-006` | SGPA 学分加权、F=0、缺学分/成绩未覆盖、不输出总百分比/AGPA/CGPA |
-| `TEST-GRADE-007` | GradeTaskRef 只显式关联同 Course 的稳定身份；Task 状态/标题/进度不改成绩，删除/分段不静默级联 |
+| `TEST-GRADE-007` | GradeTaskRef 只显式关联同 Course 的稳定身份；Task 状态/标题/分类/进度不改成绩；weekly occurrence batch 数量固定，删除/分段/Holiday 变化不静默增删或级联 |
 
 ### 10.6 PROTECT 与 DATA
 
@@ -1786,7 +1794,7 @@ ExtensionContract {
 
 - C2 读取版本化 GradeProjection，拥有目标/假设，不写 C1；
 - C3 读取 FinalCourseOutcome + GradeScaleVersion，独立拥有历史/缺口/累计；
-- 复杂评分先作为新的版本化 GradingScheme/evaluator 变体进入 GRADE，不能改变既有直接权重结果；只有出现独立事实、生命周期或失败边界时才重新评审模块拆分；
+- 超出顶层直接项与一层等权分类组的复杂评分，先作为新的版本化 GradingScheme/evaluator 变体进入 GRADE，不能改变既有结果；只有出现独立事实、生命周期或失败边界时才重新评审模块拆分；
 - Workload/Timer 引用 TaskOccurrenceId 并拥有明确估时/计时事实；
 - AI/import 先产生 Candidate/Draft，经用户确认后才进入 FLOW-01；
 - Collaboration 不使用此轻量模板直接接入，必须先重做身份、远程隐私、一致性与冲突质量模型。
