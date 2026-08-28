@@ -162,7 +162,7 @@ export function commitHolidayRangeSynchronously(ctx: StoreContext,
                 });
                 const beforeWarnings = meetingScheduleOverlapWarnings(
                     command.commandId,
-                    readConflictMeetingOccurrences(ctx.database, 
+                    readConflictMeetingOccurrences(ctx.database,
                         conflictWindow,
                         termId,
                         activeHolidayRanges,
@@ -171,7 +171,7 @@ export function commitHolidayRangeSynchronously(ctx: StoreContext,
                 const existingWarningKeys = new Set(beforeWarnings.map(meetingOverlapWarningKey));
                 const introducedWarnings = meetingScheduleOverlapWarnings(
                     command.commandId,
-                    readConflictMeetingOccurrences(ctx.database, 
+                    readConflictMeetingOccurrences(ctx.database,
                         conflictWindow,
                         termId,
                         candidateHolidayRanges,

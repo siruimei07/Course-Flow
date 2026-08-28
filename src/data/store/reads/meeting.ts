@@ -289,7 +289,7 @@ export function previewMeetingOccurrenceChange(ctx: StoreContext,
     if (!target) {
         throw new TypeError('Meeting occurrence impact target is outside the requested window');
     }
-    const afterChangeDetail = readMeetingSeriesDetailProjection(ctx, 
+    const afterChangeDetail = readMeetingSeriesDetailProjection(ctx,
         draft.meetingSeriesId,
         draft.requestedWindow,
         draft,

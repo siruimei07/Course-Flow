@@ -572,7 +572,7 @@ export function commitMeetingOccurrenceMutationSynchronously(ctx: StoreContext,
                     3,
                 ),
             });
-            const existingOccurrences = readConflictMeetingOccurrences(ctx.database, 
+            const existingOccurrences = readConflictMeetingOccurrences(ctx.database,
                 conflictWindow,
                 series.term_id,
             ).filter(

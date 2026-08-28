@@ -1,8 +1,8 @@
 /**
  * @file Aggregates Workspace mode, route, capabilities, health, and durable work.
  */
-
 import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
+
 import {
     isWorkspaceLifecycleProjection,
     type CapabilityState,
