@@ -77,6 +77,8 @@ CourseFlow 是面向大学生的跨平台、本地优先桌面应用。当前仓
 ## Skills for Designers and Engineers 前端门禁
 
 - 所有涉及前端界面、交互、样式、动效或前端代码的编写、修改、重构与修复，必须在首次实质性操作前调用并参考 `emilkowalski/skills` 中与任务匹配的 skill；默认从 `emil-design-eng` 开始，动画、原型、UI 库等场景再调用对应专项 skill。
+- 前端视觉质量检查中，Taste 系列 skills（默认使用 `design-taste-frontend`）负责判断页面哪里不好看、失衡或显得模板化；`impeccable` 负责把这些判断转化为 agent 可执行的具体修改方案。
+- Taste 系列 skills 与 `impeccable` 的优先级均略低于 `emilkowalski/skills`；发生冲突时先遵循匹配的 `emilkowalski/skills`，再由前两者补充视觉诊断与实施细节。
 - 这些 skills 只在 CourseFlow 已批准的产品、架构、FECS、可访问性与跨平台约束内提供设计和实现参考；发生冲突时以本仓库规范来源为准。
 
 ## Baidu FECS 全仓规范
