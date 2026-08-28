@@ -442,6 +442,7 @@ body {
 | 2026-08-28 | `WP-RF-01` | `— → Ready` | 本行所在提交；[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md) | 计划经用户逐项确认（动机、全物理架构深度、全区域范围、main + Backlog 证据工作流）后批准 | 行为保持重构；不实施 `WP-GA-01` 与 2026-08-28 新模型；验证协议与环境边界见计划 §6。 |
 | 2026-08-28 | `WP-RF-01` | `Ready → In Progress` | 本行所在提交 | Linux x64 / Node `v22.22.2` 容器基线：`tsc --noEmit`（主/测试配置）通过；78 文件 676 用例 = 667 通过 / 5 跳过 / 4 环境性失败（2 个 packaged-smoke 后代进程清理、1 个大小写不敏感文件系统假设、1 个 `ApplicationBuildStatus` darwin/win32 平台守卫按设计在 Linux 抛出） | 重构全程要求失败集合 ⊆ 该 4 项且用例总数不减；Windows x64 / Node 24 复验留给用户，登记为未验证项。 |
 | 2026-08-28 | `WP-RF-01` | `In Progress`（Stage B） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 用例 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合与基线一致）；`git diff --check` | 计划 Stage B：从 `sqlite-data-store.ts` 抽出模块级纯领域函数 932 行入 `src/plan/`（local-date、anchors、meeting-occurrences、meeting-overlap、confirmation-tokens、task-schedule 六个文件，含新增导入合计 1,046 行），store 改为从 `../plan/*` 导入；实际抽取行数低于计划 §5 预估（2.3–2.5k 行），其余部分属于 Stage C 的类内拆分，不影响范围。 |
+| 2026-08-28 | `WP-RF-01` | `In Progress`（Stage C1） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage C1：`sqlite-data-store.ts` 模块级辅助（公共类型与错误、行映射、结果/冲突构造器、命令守卫、数据库/failpoint 辅助，共约 1,600 行）拆入 `src/data/store/{types,guards,rows,results,database}.ts`，facade 显式聚合导出，公共导出集合不变；`runtime-boundaries` 的 `node:sqlite` 导入者断言由精确三文件改为"仅限 `src/data/` 数据层（含 `store/`、`schema/` 子目录）且必含 `sqlite-data-store.ts`"，语义（sqlite 只属于 DATA 层）不变。 |
 
 ## 7. 拆包与变更规则
 

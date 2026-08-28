@@ -204,6 +204,44 @@ import {
     type MigrationSafetyCopyBuildBindingV1,
     type MigrationSafetyCopyFailpoint,
 } from './migration-safety-copy';
+export {
+    CommittedCommandOutcomeUnknownError,
+    SetupDraftCheckpointOutcomeUnknownError,
+    type InitializeFailpoint,
+    type InitializeWorkspaceDataOptions,
+    type OpenWorkspaceDataOptions,
+    type RestoreActivationCloseFailpoint,
+    type RestoreDataSlotFacts,
+    type MigrationFailpoint,
+    type DataOpenProblem,
+    type WorkspaceDataStatus,
+    type WorkspaceSetupSnapshot,
+    type ReadSnapshotOptions,
+    type CommitFailpoint,
+    type CommitOptions,
+    type StoredBackupDestination,
+    type CommandReceiptOutcome,
+    type DurableFollowUp,
+    type BackupOperationPhase,
+    type BackupOperation,
+    type SuccessfulBackupSnapshot,
+    type RestoreDatabaseFacts,
+    type PreparedRestoreDatabaseFacts,
+    type StoredRestoreSession,
+    type StoredRestoreCommandReceipt,
+    type RestoreCompletionReceiptInput,
+    type RestoreCompletionReceipt,
+    type BackupCleanupOperation,
+    type BackupDatabaseFacts,
+    type BackupConfigurationForProtection,
+    type DataCommitResult,
+    type SetupDraftCheckpointWriteResult,
+} from './store/types';
+export {
+    workspaceDataRuntimeVersion,
+    classifySqliteFailure,
+    type SqliteFailureDisposition,
+} from './store/database';
 
 export {
     consumeMigrationSafetyCopyAfterRollback,
@@ -275,97 +313,22 @@ import type {
     StoredTaskSchedule,
     StoredTaskSegment,
 } from '../plan/task-schedule';
+import { DATABASE_FILE_NAME, SQLITE_VERSION, activeDirectory, classifySqliteFailure, closeBestEffort, databasePath, decimalFromCoefficient, decimalToCoefficient, fireCommitFailpoint, hasSchemaObjects, normalizeBackupDatabaseCopy, openDatabase, readDatabaseIdentity, readRestoreImpactCounts, readRestoreSourceBackup, throwFailpoint, validateSupportedRestoreSchema } from './store/database';
+import { isChangeMeetingOccurrenceCommand, isConfigureBackupDestinationCommand, isCourseWithMeetingCommand, isCreateCourseCommand, isCreateMeetingSeriesCommand, isCurrentChangeMeetingOccurrenceCommand, isCurrentCourseWithMeetingCommand, isHolidayRangeCommand, isMeetingOccurrenceMutationCommand, isTaskCommand, isTaskOccurrenceRuleMutationCommand, isTaskOccurrenceStateMutationCommand, isTermMutationCommand } from './store/guards';
+import type { CurrentVersions, MeetingOccurrenceMutationCommand, TaskOccurrenceRuleMutationCommand, TaskOccurrenceStateMutationCommand, TaskSeriesMutationCommand, TermMutationCommand, WorkspaceDataCommand } from './store/guards';
+import { committedOutcome, committedPairOutcome, conflictResult, databaseUnreadableProblem, decisionRequiredResult, freezeEmptyTuple, freezeTuple, holidayRangeConflictResult, incompatibleVersionProblem, integrityProblem, meetingOverlapDecisionRequiredResult, meetingSeriesConflictResult, migrationSafetyUnavailableProblem, permissionCommitResult, permissionProblem, planConflictResult, protectionConflictResult, recoveryResult, setupDraftConflictResult, setupDraftPermissionResult, setupDraftWriterBusyResult, successfulCommit, taskSeriesConflictResult, unreadableOpenProblem, validationProblem, writerBusyResult } from './store/results';
+import { BACKUP_PHASE_SUCCESSORS, backupCleanupOperationFromRow, backupOperationFromRow, requireRestoreCompletionReceiptInput, restoreCompletionReceiptFromRow, restoreSessionFromRow } from './store/rows';
+import type { BackupCleanupOperationRow, BackupOperationRow, RestoreCompletionReceiptRow, RestoreSessionRow } from './store/rows';
+import { COMMIT_QUEUE_CAPACITY, CommittedCommandOutcomeUnknownError, SQLITE_INTEGER_MAX, SetupDraftCheckpointOutcomeUnknownError } from './store/types';
+import type { BackupCleanupOperation, BackupConfigurationForProtection, BackupDatabaseFacts, BackupOperation, BackupOperationPhase, CommandReceiptOutcome, CommitOptions, DataCommitResult, DataOpenProblem, DurableFollowUp, InitializeWorkspaceDataOptions, OpenWorkspaceDataOptions, PreparedRestoreDatabaseFacts, ReadSnapshotOptions, ReceiptEffect, RestoreActivationCloseFailpoint, RestoreCompletionReceipt, RestoreCompletionReceiptInput, RestoreDataSlotFacts, RestoreDatabaseFacts, SetupDraftCheckpointWriteResult, SetupDraftWork, StoreWriteWork, StoredBackupDestination, StoredRestoreCommandReceipt, StoredRestoreSession, SuccessfulBackupSnapshot, WorkspaceDataStatus, WorkspaceSetupSnapshot } from './store/types';
 
-const ACTIVE_DIRECTORY_NAME = 'active';
-const DATABASE_FILE_NAME = 'workspace.sqlite';
-const DATABASE_OPTIONS: DatabaseSyncOptions = {
-    enableForeignKeyConstraints: true,
-    enableDoubleQuotedStringLiterals: false,
-    allowExtension: false,
-    allowUnknownNamedParameters: false,
-    defensive: true,
-    timeout: 5_000,
-};
 
-export type InitializeFailpoint =
-    | 'initialize.after-schema'
-    | 'initialize.after-bootstrap'
-    | 'initialize.after-user-version'
-    | 'initialize.after-validation';
 
-export type InitializeWorkspaceDataOptions = Readonly<{
-    failpoint?: InitializeFailpoint;
-}>;
 
-export type OpenWorkspaceDataOptions = Readonly<{
-    readOnly?: boolean;
-    migrationFailpoint?: (point: MigrationFailpoint) => void;
-    migrationSafetyCopy?: MigrationSafetyCopyBuildBindingV1;
-}>;
 
-export type RestoreActivationCloseFailpoint =
-    | 'activation-close.before-wal-checkpoint'
-    | 'activation-close.after-wal-checkpoint';
 
-export type RestoreDataSlotFacts = Readonly<{
-    workspaceId: string;
-    schemaLevel: string;
-    revision: string;
-}>;
 
-export type MigrationFailpoint =
-    | 'migration.after-safety-copy'
-    | 'migration.before-level-commit'
-    | MigrationSafetyCopyFailpoint;
 
-export type DataOpenProblem =
-    | Readonly<{
-        code: 'permission';
-        scope: 'workspace';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.write'];
-        allowedActions: readonly [];
-        context: Readonly<Record<never, never>>;
-        details: Readonly<{ reason: 'read-only' }>;
-    }>
-    | Readonly<{
-        code: 'incompatible-version';
-        scope: 'workspace';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
-        allowedActions: readonly [];
-        context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 16 }>;
-    }>
-    | Readonly<{
-        code: 'integrity';
-        scope: 'workspace';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
-        allowedActions: readonly [];
-        context: Readonly<Record<never, never>>;
-        details: Readonly<{
-            reason: 'wrong-application-id' | 'nonempty-level-zero' | 'schema-mismatch' | 'database-corrupt';
-        }>;
-    }>
-    | Readonly<{
-        code: 'recovery-required';
-        scope: 'workspace';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
-        allowedActions: readonly [];
-        context: Readonly<Record<never, never>>;
-        details: Readonly<{ reason: 'database-unreadable' }>;
-    }>
-    | Readonly<{
-        code: 'migration-safety-unavailable';
-        scope: 'workspace';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
-        allowedActions: readonly [];
-        context: Readonly<Record<never, never>>;
-        details: Readonly<{reason: 'build-binding-missing'}>;
-    }>;
 
 export type DataOpenResult =
     | Readonly<{ kind: 'absent'; sqliteVersion: string }>
@@ -373,1453 +336,153 @@ export type DataOpenResult =
     | Readonly<{ kind: 'read-only'; sqliteVersion: string; store: SqliteDataStore }>
     | Readonly<{ kind: 'recovery'; sqliteVersion: string; problem: DataOpenProblem }>;
 
-export type WorkspaceDataStatus =
-    | Readonly<{
-        kind: 'ready';
-        workspaceId: string;
-        schemaLevel: 16;
-        revision: string;
-    }>
-    | Readonly<{
-        kind: 'read-only';
-        workspaceId: string;
-        schemaLevel: 16;
-        revision: string;
-        problem: DataOpenProblem;
-    }>;
-
-export type WorkspaceSetupSnapshot = Readonly<{
-    revision: string;
-    setup: Readonly<{
-        workspaceId: string;
-        lastDecision: 'later' | 'skip' | null;
-        entityVersion: string;
-    }>;
-}>;
-
-export type ReadSnapshotOptions = Readonly<{
-    failpoint?: (point: 'read.after-revision') => void;
-}>;
-
-export type CommitFailpoint =
-    | 'commit.after-begin'
-    | 'commit.after-receipt-read'
-    | 'commit.after-expected-versions'
-    | 'commit.after-facts'
-    | 'commit.after-revision'
-    | 'commit.after-receipt'
-    | 'commit.after-followup'
-    | 'commit.after-watermark'
-    | 'commit.before-sqlite-commit'
-    | 'setup-draft.commit-attempted'
-    | 'commit.after-sqlite-commit';
-
-export type CommitOptions = Readonly<{
-    failpoint?: (point: CommitFailpoint) => void;
-}>;
-
-export type StoredBackupDestination = AcceptedConfigureBackupDestinationCommand['destination'];
-
-export class CommittedCommandOutcomeUnknownError extends Error {
-    public constructor(public readonly commandId: string) {
-        super('Committed command outcome requires receipt recovery');
-        this.name = 'CommittedCommandOutcomeUnknownError';
-    }
-}
-
-export class SetupDraftCheckpointOutcomeUnknownError extends Error {
-    public constructor() {
-        super('Setup draft checkpoint outcome requires projection reconciliation');
-        this.name = 'SetupDraftCheckpointOutcomeUnknownError';
-    }
-}
-
-type ReceiptEffect = Readonly<{
-    code:
-        | 'workspace.setup-decision-recorded'
-        | 'plan.term-created-current'
-        | 'plan.term-auto-archived'
-        | 'plan.term-end-date-updated'
-        | 'plan.term-restored-current'
-        | 'plan.course-created'
-        | 'plan.meeting-series-created'
-        | 'plan.meeting-occurrence-changed'
-        | 'plan.meeting-occurrence-cancelled'
-        | 'plan.holiday-range-created'
-        | 'plan.holiday-range-updated'
-        | 'plan.holiday-range-deleted'
-        | 'plan.task-series-created'
-        | 'plan.task-series-updated'
-        | 'plan.task-series-deleted'
-        | 'plan.task-occurrence-completed'
-        | 'plan.task-occurrence-status-set'
-        | 'plan.task-progress-set'
-        | 'plan.task-occurrence-changed'
-        | 'plan.task-occurrence-deleted'
-        | 'plan.task-occurrence-state-undone'
-        | 'protect.backup-destination-configured';
-    entity: Readonly<{
-        kind:
-            | 'workspace-setup'
-            | 'term'
-            | 'course'
-            | 'meeting-series'
-            | 'holiday-range'
-            | 'task-series'
-            | 'backup-configuration';
-        id: string;
-        version: string;
-    }>;
-}>;
-
-export type CommandReceiptOutcome = Readonly<{
-    kind: 'committed';
-    revision: string;
-    effects: readonly [ReceiptEffect, ...ReceiptEffect[]];
-    pendingFollowUps: readonly [string];
-    undoCapability?: TaskUndoCapability | null;
-}>;
-
-export type DurableFollowUp = Readonly<{
-    followUpId: string;
-    originatingCommandId: string;
-    owner: 'protect';
-    kind: 'backup-needed-through';
-    prerequisiteRevision: string;
-    state: 'pending';
-    version: '0';
-}>;
-
-export type BackupOperationPhase =
-    | 'queued'
-    | 'database-checkpoint'
-    | 'library-copy'
-    | 'staging-validation'
-    | 'publishing'
-    | 'published-pending-record'
-    | 'succeeded';
-
-export type BackupOperation = Readonly<{
-    operationId: string;
-    backupSetId: string;
-    backupSequence: string;
-    snapshotId: string;
-    targetRevision: string;
-    actualRevision: string | null;
-    stagingDirectoryName: string;
-    createdAt: string;
-    phase: BackupOperationPhase;
-    version: string;
-}>;
-
-export type SuccessfulBackupSnapshot = Readonly<{
-    snapshotId: string;
-    backupSetId: string;
-    backupSequence: string;
-    actualRevision: string;
-    rootDigest: string;
-    succeededAt: string;
-}>;
-
-export type RestoreDatabaseFacts = BackupDatabaseFacts & Readonly<{
-    termCount: string;
-    courseCount: string;
-    taskSeriesCount: string;
-    sourceBackup: Readonly<{
-        backupSetId: string;
-        backupSequence: string;
-        snapshotId: string;
-        targetRevision: string;
-    }>;
-}>;
-
-export type PreparedRestoreDatabaseFacts = RestoreDatabaseFacts & Readonly<{
-    sourceSchemaLevel: string;
-    preparedSchemaLevel: string;
-    validationCopy: 'copied' | 'migrated';
-}>;
-
-export type StoredRestoreSession = Readonly<{
-    restoreSessionId: string;
-    operationId: string;
-    candidateRef: string;
-    snapshotId: string;
-    candidateRootDigest: string;
-    candidateDatabaseDigest: string;
-    sourceSchemaLevel: string;
-    preparedSchemaLevel: string;
-    candidateRevision: string;
-    validationCopy: 'copied' | 'migrated';
-    currentWorkspaceId: string;
-    currentRevision: string;
-    currentLibrary: Readonly<{kind: 'absent'}> | Readonly<{
-        kind: 'present';
-        libraryRootId: string;
-        rootGeneration: string;
-    }>;
-    targetBindingVersion: string;
-    termCount: string;
-    courseCount: string;
-    taskSeriesCount: string;
-    impactDigest: string;
-    bindingDigest: string;
-    previewToken: string | null;
-    phase: 'previewed' | 'waiting-decision' | 'protection-established' | 'cancelled';
-    sessionVersion: string;
-    problemCode: 'impact-changed' | null;
-    safetySetId: string | null;
-    safetyProtectedRevision: string | null;
-    safetyRootDigest: string | null;
-}>;
-
-export type StoredRestoreCommandReceipt = Readonly<{
-    commandId: string;
-    commandKind: 'start' | 'confirm' | 'cancel';
-    payloadDigest: string;
-    restoreSessionId: string;
-    resultSessionVersion: string;
-}>;
-
-export type RestoreCompletionReceiptInput = Readonly<{
-    operationId: string;
-    restoreSessionId: string;
-    outcome: 'succeeded' | 'rolled-back';
-    sessionVersion: string;
-    sourceSnapshotId: string;
-    sourceRootDigest: string;
-    sourceSchemaLevel: string;
-    postMigrationSchemaLevel: string;
-    activeWorkspaceId: string;
-    activeRevision: string;
-    library: Readonly<{state: 'absent'}>;
-    protection: Readonly<{mode: 'required'; safetySetId: string}>;
-    planDigest: string;
-    precommit: Readonly<{sequence: string; recordDigest: string}>;
-    route: 'setup' | 'today';
-    receiptFormatVersion: '1';
-}>;
-
-export type RestoreCompletionReceipt = RestoreCompletionReceiptInput & Readonly<{
-    receiptDigest: string;
-}>;
-
-export type BackupCleanupOperation = Readonly<{
-    operationId: string;
-    backupSetId: string;
-    snapshotId: string;
-    backupSequence: string;
-    rootDigest: string;
-    snapshotDirectoryName: string;
-    quarantineDirectoryName: string;
-    phase: 'planned' | 'quarantined' | 'deleting';
-    version: string;
-}>;
-
-export type BackupDatabaseFacts = Readonly<{
-    workspaceId: string;
-    applicationId: string;
-    schemaLevel: string;
-    actualRevision: string;
-}>;
-
-export type BackupConfigurationForProtection = StoredBackupDestination & Readonly<{
-    workspaceId: string;
-}>;
-
-type BackupOperationRow = {
-    operation_id: string;
-    backup_set_id: string;
-    backup_sequence: bigint;
-    snapshot_id: string;
-    target_revision: bigint;
-    actual_revision: bigint | null;
-    staging_directory_name: string;
-    created_at: string;
-    phase: BackupOperationPhase;
-    operation_version: bigint;
-};
-
-type BackupCleanupOperationRow = {
-    operation_id: string;
-    backup_set_id: string;
-    snapshot_id: string;
-    backup_sequence: bigint;
-    root_digest: string;
-    snapshot_directory_name: string;
-    quarantine_directory_name: string;
-    phase: 'planned' | 'quarantined' | 'deleting';
-    operation_version: bigint;
-};
-
-type RestoreSessionRow = {
-    restore_session_id: string;
-    operation_id: string;
-    candidate_ref: string;
-    snapshot_id: string;
-    candidate_root_digest: string;
-    candidate_database_digest: string;
-    source_schema_level: bigint;
-    prepared_schema_level: bigint;
-    candidate_revision: bigint;
-    validation_copy: 'copied' | 'migrated';
-    current_workspace_id: string;
-    current_revision: bigint;
-    current_library_kind: 'absent' | 'present';
-    current_library_root_id: string | null;
-    current_root_generation: string | null;
-    target_binding_version: bigint;
-    term_count: bigint;
-    course_count: bigint;
-    task_series_count: bigint;
-    impact_digest: string;
-    binding_digest: string;
-    preview_token: string | null;
-    phase: 'previewed' | 'waiting-decision' | 'protection-established' | 'cancelled';
-    session_version: bigint;
-    problem_code: 'impact-changed' | null;
-    safety_set_id: string | null;
-    safety_protected_revision: bigint | null;
-    safety_root_digest: string | null;
-};
-
-type RestoreCompletionReceiptRow = {
-    operation_id: string;
-    restore_session_id: string;
-    outcome: 'succeeded' | 'rolled-back';
-    session_version: bigint;
-    source_snapshot_id: string;
-    source_root_digest: string;
-    source_schema_level: bigint;
-    post_migration_schema_level: bigint;
-    active_workspace_id: string;
-    active_revision: bigint;
-    library_state: 'absent';
-    protection_mode: 'required';
-    safety_set_id: string;
-    plan_digest: string;
-    precommit_sequence: bigint;
-    precommit_record_digest: string;
-    route: 'setup' | 'today';
-    receipt_format_version: '1';
-    receipt_digest: string;
-};
-
-/**
- * Converts one validated storage row into the path-safe PROTECT operation contract.
- * @param {BackupOperationRow} row - Typed SQLite operation row.
- * @return {BackupOperation} Immutable public operation facts.
- */
-function backupOperationFromRow(row: BackupOperationRow): BackupOperation {
-    return Object.freeze({
-        operationId: row.operation_id,
-        backupSetId: row.backup_set_id,
-        backupSequence: row.backup_sequence.toString(),
-        snapshotId: row.snapshot_id,
-        targetRevision: row.target_revision.toString(),
-        actualRevision: row.actual_revision?.toString() ?? null,
-        stagingDirectoryName: row.staging_directory_name,
-        createdAt: row.created_at,
-        phase: row.phase,
-        version: row.operation_version.toString(),
-    });
-}
-
-/**
- * Converts one validated cleanup journal row into the path-safe PROTECT contract.
- * @param {BackupCleanupOperationRow} row - Typed SQLite cleanup row.
- * @return {BackupCleanupOperation} Immutable cleanup operation facts.
- */
-function backupCleanupOperationFromRow(row: BackupCleanupOperationRow): BackupCleanupOperation {
-    return Object.freeze({
-        operationId: row.operation_id,
-        backupSetId: row.backup_set_id,
-        snapshotId: row.snapshot_id,
-        backupSequence: row.backup_sequence.toString(),
-        rootDigest: row.root_digest,
-        snapshotDirectoryName: row.snapshot_directory_name,
-        quarantineDirectoryName: row.quarantine_directory_name,
-        phase: row.phase,
-        version: row.operation_version.toString(),
-    });
-}
-
-function restoreSessionFromRow(row: RestoreSessionRow): StoredRestoreSession {
-    return Object.freeze({
-        restoreSessionId: row.restore_session_id,
-        operationId: row.operation_id,
-        candidateRef: row.candidate_ref,
-        snapshotId: row.snapshot_id,
-        candidateRootDigest: row.candidate_root_digest,
-        candidateDatabaseDigest: row.candidate_database_digest,
-        sourceSchemaLevel: row.source_schema_level.toString(),
-        preparedSchemaLevel: row.prepared_schema_level.toString(),
-        candidateRevision: row.candidate_revision.toString(),
-        validationCopy: row.validation_copy,
-        currentWorkspaceId: row.current_workspace_id,
-        currentRevision: row.current_revision.toString(),
-        currentLibrary: row.current_library_kind === 'absent'
-            ? Object.freeze({kind: 'absent' as const})
-            : Object.freeze({
-                kind: 'present' as const,
-                libraryRootId: row.current_library_root_id!,
-                rootGeneration: row.current_root_generation!,
-            }),
-        targetBindingVersion: row.target_binding_version.toString(),
-        termCount: row.term_count.toString(),
-        courseCount: row.course_count.toString(),
-        taskSeriesCount: row.task_series_count.toString(),
-        impactDigest: row.impact_digest,
-        bindingDigest: row.binding_digest,
-        previewToken: row.preview_token,
-        phase: row.phase,
-        sessionVersion: row.session_version.toString(),
-        problemCode: row.problem_code,
-        safetySetId: row.safety_set_id,
-        safetyProtectedRevision: row.safety_protected_revision?.toString() ?? null,
-        safetyRootDigest: row.safety_root_digest,
-    });
-}
-
-/**
- * Materializes one path-free completion receipt from its strict storage row.
- * @param {RestoreCompletionReceiptRow} row - Validated schema-level receipt row.
- * @return {RestoreCompletionReceipt} Immutable public receipt facts.
- */
-function restoreCompletionReceiptFromRow(
-    row: RestoreCompletionReceiptRow,
-): RestoreCompletionReceipt {
-    return Object.freeze({
-        operationId: row.operation_id,
-        restoreSessionId: row.restore_session_id,
-        outcome: row.outcome,
-        sessionVersion: row.session_version.toString(),
-        sourceSnapshotId: row.source_snapshot_id,
-        sourceRootDigest: row.source_root_digest,
-        sourceSchemaLevel: row.source_schema_level.toString(),
-        postMigrationSchemaLevel: row.post_migration_schema_level.toString(),
-        activeWorkspaceId: row.active_workspace_id,
-        activeRevision: row.active_revision.toString(),
-        library: Object.freeze({state: 'absent' as const}),
-        protection: Object.freeze({
-            mode: 'required' as const,
-            safetySetId: row.safety_set_id,
-        }),
-        planDigest: row.plan_digest,
-        precommit: Object.freeze({
-            sequence: row.precommit_sequence.toString(),
-            recordDigest: row.precommit_record_digest,
-        }),
-        route: row.route,
-        receiptFormatVersion: row.receipt_format_version,
-        receiptDigest: row.receipt_digest,
-    });
-}
-
-/**
- * Requires an object to expose exactly the named enumerable data properties.
- * @param {unknown} value - Candidate value.
- * @param {readonly string[]} keys - Complete allowed key set.
- * @return {boolean} Whether the object has the exact plain shape.
- */
-function hasExactPlainKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-    if (typeof value !== 'object'
-        || value === null
-        || Array.isArray(value)
-        || Object.getPrototypeOf(value) !== Object.prototype) {
-        return false;
-    }
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    const actualKeys = Reflect.ownKeys(descriptors);
-    return actualKeys.length === keys.length
-        && actualKeys.every(key => typeof key === 'string' && keys.includes(key))
-        && keys.every(key => {
-            const descriptor = descriptors[key];
-            return descriptor !== undefined && descriptor.enumerable && 'value' in descriptor;
-        });
-}
-
-/**
- * Validates the closed Restore receipt shape before DATA commits it.
- * @param {RestoreCompletionReceiptInput} input - Candidate receipt facts.
- * @return {void}
- */
-function requireRestoreCompletionReceiptInput(input: RestoreCompletionReceiptInput): void {
-    if (!hasExactPlainKeys(input, [
-        'operationId',
-        'restoreSessionId',
-        'outcome',
-        'sessionVersion',
-        'sourceSnapshotId',
-        'sourceRootDigest',
-        'sourceSchemaLevel',
-        'postMigrationSchemaLevel',
-        'activeWorkspaceId',
-        'activeRevision',
-        'library',
-        'protection',
-        'planDigest',
-        'precommit',
-        'route',
-        'receiptFormatVersion',
-    ])
-        || !isCanonicalUuid(input.operationId)
-        || !isCanonicalUuid(input.restoreSessionId)
-        || (input.outcome !== 'succeeded' && input.outcome !== 'rolled-back')
-        || !isCanonicalUnsignedSqliteInteger(input.sessionVersion)
-        || input.sessionVersion !== '3'
-        || !isCanonicalUuid(input.sourceSnapshotId)
-        || !/^[0-9a-f]{64}$/.test(input.sourceRootDigest)
-        || !isCanonicalUnsignedSqliteInteger(input.sourceSchemaLevel)
-        || BigInt(input.sourceSchemaLevel) < 13n
-        || BigInt(input.sourceSchemaLevel) > BigInt(CURRENT_SCHEMA_LEVEL)
-        || input.postMigrationSchemaLevel !== CURRENT_SCHEMA_LEVEL.toString()
-        || !isCanonicalUuid(input.activeWorkspaceId)
-        || !isCanonicalUnsignedSqliteInteger(input.activeRevision)
-        || !hasExactPlainKeys(input.library, ['state'])
-        || input.library.state !== 'absent'
-        || !hasExactPlainKeys(input.protection, ['mode', 'safetySetId'])
-        || input.protection.mode !== 'required'
-        || !isCanonicalUuid(input.protection.safetySetId)
-        || !/^[0-9a-f]{64}$/.test(input.planDigest)
-        || !hasExactPlainKeys(input.precommit, ['sequence', 'recordDigest'])
-        || !isCanonicalUnsignedSqliteInteger(input.precommit.sequence)
-        || input.precommit.sequence === '0'
-        || !/^[0-9a-f]{64}$/.test(input.precommit.recordDigest)
-        || (input.route !== 'setup' && input.route !== 'today')
-        || input.receiptFormatVersion !== '1') {
-        throw new TypeError('Restore completion receipt is invalid');
-    }
-}
-
-const BACKUP_PHASE_SUCCESSORS: Readonly<Partial<Record<BackupOperationPhase, BackupOperationPhase>>> = {
-    'database-checkpoint': 'library-copy',
-    'library-copy': 'staging-validation',
-    'staging-validation': 'publishing',
-    publishing: 'published-pending-record',
-};
-
-type ConflictReason = 'command-id-reused' | 'expected-revision' | 'expected-entity-version';
-
-type ConflictProblem = Readonly<{
-    code: 'conflict';
-    scope: 'operation';
-    dataEffect: 'unchanged';
-    affectedCapabilities: readonly ['workspace.write'];
-    allowedActions: readonly ['requery'];
-    context: Readonly<{
-        revision: string;
-        entityVersions: readonly [Readonly<{
-            kind:
-                | 'workspace-setup'
-                | 'plan-state'
-                | 'meeting-series'
-                | 'holiday-range'
-                | 'task-series'
-                | 'backup-configuration';
-            id: string;
-            version: string;
-        }>];
-    }>;
-    details: Readonly<{ reason: ConflictReason }>;
-}>;
-
-type WriterBusyProblem = Readonly<{
-    code: 'operation-in-progress';
-    scope: 'operation';
-    dataEffect: 'unchanged';
-    affectedCapabilities: readonly ['workspace.write'];
-    allowedActions: readonly ['retry'];
-    context: Readonly<{ revision: string }>;
-    details: Readonly<{ reason: 'writer-busy' }>;
-}>;
-
-type PermissionCommitProblem = Readonly<{
-    code: 'permission';
-    scope: 'workspace';
-    dataEffect: 'unchanged';
-    affectedCapabilities: readonly ['workspace.write'];
-    allowedActions: readonly [];
-    context: Readonly<{ revision: string }>;
-    details: Readonly<{ reason: 'read-only' }>;
-}>;
-
-type DecisionRequiredProblem =
-    | Readonly<{
-        code: 'decision-required';
-        scope: 'operation';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.write'];
-        allowedActions: readonly ['preview'];
-        context: Readonly<{ revision: string }>;
-        details: Readonly<{ reason: 'impact-confirmation-required' }>;
-    }>
-    | Readonly<{
-        code: 'decision-required';
-        scope: 'operation';
-        dataEffect: 'unchanged';
-        affectedCapabilities: readonly ['workspace.write'];
-        allowedActions: readonly ['continue'];
-        context: Readonly<{ revision: string }>;
-        details: Readonly<{
-            reason: 'meeting-time-overlap';
-            warnings: readonly MeetingOverlapWarning[];
-        }>;
-    }>;
-
-export type DataCommitResult =
-    | Readonly<{ ok: true; value: CommandReceiptOutcome }>
-    | Readonly<{
-        ok: false;
-        problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem | DecisionRequiredProblem;
-    }>;
-
-export type SetupDraftCheckpointWriteResult =
-    | Readonly<{
-        ok: true;
-        value: Readonly<{ draftCheckpointVersion: string }>;
-    }>
-    | Readonly<{
-        ok: false;
-        problem: ConflictProblem | WriterBusyProblem | PermissionCommitProblem;
-    }>;
-
-type CommitWork = {
-    kind: 'commit';
-    command: WorkspaceDataCommand;
-    options: CommitOptions;
-    resolve: (result: DataCommitResult) => void;
-    reject: (error: unknown) => void;
-};
-
-type SetupDraftWork = {
-    kind: 'setup-draft';
-    mutation:
-        | Readonly<{
-            kind: 'save';
-            expectedVersion: string;
-            schemaVersion: 1;
-            updatedAt: string;
-            opaquePayload: string;
-        }>
-        | Readonly<{
-            kind: 'discard';
-            expectedVersion: string;
-        }>;
-    options: CommitOptions;
-    resolve: (result: SetupDraftCheckpointWriteResult) => void;
-    reject: (error: unknown) => void;
-};
-
-type StoreWriteWork = CommitWork | SetupDraftWork;
-
-type TermMutationCommand =
-    | ReconcileWorkspaceLifecycleCommand
-    | UpdateTermEndDateCommand
-    | RestoreTermAsCurrentCommand;
-
-type MeetingOccurrenceMutationCommand =
-    | AcceptedChangeMeetingOccurrenceCommand
-    | CancelMeetingOccurrenceCommand;
-
-type TaskSeriesMutationCommand =
-    | CreateTaskCommand
-    | UpdateTaskCommand
-    | DeleteTaskCommand;
-
-type TaskOccurrenceStateMutationCommand =
-    | CompleteTaskCommand
-    | SetTaskOccurrenceStatusCommand
-    | SetTaskProgressCommand
-    | UndoTaskOccurrenceStateCommand;
-
-type TaskOccurrenceRuleMutationCommand =
-    | ChangeTaskOccurrenceCommand
-    | DeleteTaskOccurrenceOrSeriesCommand;
-
-type WorkspaceDataCommand =
-    | RecordSetupDecisionCommand
-    | CreateTermCommand
-    | CreateCourseCommand
-    | CreateMeetingSeriesCommand
-    | AcceptedCreateCourseWithMeetingCommand
-    | MeetingOccurrenceMutationCommand
-    | HolidayRangeCommand
-    | TaskCommand
-    | TermMutationCommand
-    | AcceptedConfigureBackupDestinationCommand;
-
-type CurrentVersions = Readonly<{
-    revision: bigint;
-    setupVersion: bigint;
-    planVersion: bigint;
-    protectionVersion: bigint;
-}>;
-
-const COMMIT_QUEUE_CAPACITY = 64;
-const SQLITE_INTEGER_MAX = 9223372036854775807n;
-const runtimeSqliteVersion = process.versions.sqlite;
-if (typeof runtimeSqliteVersion !== 'string') {
-    throw new Error('SQLite runtime version is unavailable');
-}
-const SQLITE_VERSION = runtimeSqliteVersion;
-
-/**
- * Returns the SQLite runtime version without opening an activity DATA slot.
- * @return {string} Bundled SQLite runtime version.
- */
-export function workspaceDataRuntimeVersion(): string {
-    return SQLITE_VERSION;
-}
-
-function activeDirectory(dataSlotsRoot: string): string {
-    return join(dataSlotsRoot, ACTIVE_DIRECTORY_NAME);
-}
-
-function databasePath(dataSlotsRoot: string): string {
-    return join(activeDirectory(dataSlotsRoot), DATABASE_FILE_NAME);
-}
-
-function configureDatabase(database: DatabaseSync): void {
-    const journalMode = database.prepare('PRAGMA journal_mode = WAL').get() as { journal_mode: unknown };
-    database.exec('PRAGMA synchronous = FULL');
-    database.exec('PRAGMA foreign_keys = ON');
-    database.exec('PRAGMA trusted_schema = OFF');
-
-    const synchronous = database.prepare('PRAGMA synchronous').get() as { synchronous: unknown };
-    const foreignKeys = database.prepare('PRAGMA foreign_keys').get() as { foreign_keys: unknown };
-    const trustedSchema = database.prepare('PRAGMA trusted_schema').get() as { trusted_schema: unknown };
-    if (journalMode.journal_mode !== 'wal'
-        || synchronous.synchronous !== 2
-        || foreignKeys.foreign_keys !== 1
-        || trustedSchema.trusted_schema !== 0) {
-        throw new Error('Workspace database configuration failed');
-    }
-}
-
-function configureReadOnlyDatabase(database: DatabaseSync): void {
-    database.exec('PRAGMA foreign_keys = ON');
-    database.exec('PRAGMA trusted_schema = OFF');
-    database.exec('PRAGMA query_only = ON');
-
-    const foreignKeys = database.prepare('PRAGMA foreign_keys').get() as { foreign_keys: unknown };
-    const trustedSchema = database.prepare('PRAGMA trusted_schema').get() as { trusted_schema: unknown };
-    const queryOnly = database.prepare('PRAGMA query_only').get() as { query_only: unknown };
-    if (foreignKeys.foreign_keys !== 1
-        || trustedSchema.trusted_schema !== 0
-        || queryOnly.query_only !== 1) {
-        throw new Error('Workspace read-only database configuration failed');
-    }
-}
-
-function openDatabase(path: string, readOnly: boolean): DatabaseSync {
-    const database = new DatabaseSync(path, { ...DATABASE_OPTIONS, readOnly });
-    try {
-        if (readOnly) {
-            configureReadOnlyDatabase(database);
-        } else {
-            configureDatabase(database);
-        }
-        return database;
-    } catch (error) {
-        database.close();
-        throw error;
-    }
-}
-
-function throwFailpoint(failpoint: InitializeFailpoint | undefined, expected: InitializeFailpoint): void {
-    if (failpoint === expected) {
-        throw new Error(expected);
-    }
-}
-
-function fireCommitFailpoint(options: CommitOptions, point: CommitFailpoint): void {
-    options.failpoint?.(point);
-}
-
-/**
- * Closes a copied database into standalone DELETE-journal form for one snapshot member.
- * @param {string} path - Exact operation-owned database copy path.
- * @return {void}
- */
-function normalizeBackupDatabaseCopy(path: string): void {
-    const database = new DatabaseSync(path, DATABASE_OPTIONS);
-    try {
-        database.exec('PRAGMA foreign_keys = ON');
-        database.exec('PRAGMA trusted_schema = OFF');
-        const journalMode = database.prepare('PRAGMA journal_mode = DELETE').get() as {
-            journal_mode: unknown;
-        };
-        database.exec('PRAGMA synchronous = FULL');
-        if (journalMode.journal_mode !== 'delete') {
-            throw new Error('Backup database could not become a standalone member');
-        }
-    }
-    finally {
-        database.close();
-    }
-}
-
-/**
- * Validates a supported restore candidate schema without changing its bytes.
- * @param {DatabaseSync} database - Read-only candidate database.
- * @param {number} schemaLevel - Fresh application schema level.
- * @return {SchemaFacts | null} Validated identity or null for an unsupported level.
- */
-function validateSupportedRestoreSchema(
-    database: DatabaseSync,
-    schemaLevel: number,
-): Readonly<{workspaceId: string; revision: bigint}> | null {
-    if (schemaLevel === 13) {
-        return validateSchemaLevel13(database);
-    }
-    if (schemaLevel === 14) {
-        return validateSchemaLevel14(database);
-    }
-    if (schemaLevel === 15) {
-        return validateSchemaLevel15(database);
-    }
-    if (schemaLevel === 16) {
-        return validateSchemaLevel16(database);
-    }
-    return null;
-}
-
-/**
- * Reads the bounded whole-replacement counts from one already validated database.
- * @param {DatabaseSync} database - Validated candidate or safety database.
- * @return {object} Exact DATA impact counts.
- */
-function readRestoreImpactCounts(database: DatabaseSync): Readonly<{
-    termCount: string;
-    courseCount: string;
-    taskSeriesCount: string;
-}> {
-    const statement = database.prepare(`
-        SELECT
-            (SELECT count(*) FROM terms) AS term_count,
-            (SELECT count(*) FROM courses) AS course_count,
-            (SELECT count(*) FROM task_series) AS task_series_count
-    `);
-    statement.setReadBigInts(true);
-    const row = statement.get() as {
-        term_count: bigint;
-        course_count: bigint;
-        task_series_count: bigint;
-    };
-    return Object.freeze({
-        termCount: row.term_count.toString(),
-        courseCount: row.course_count.toString(),
-        taskSeriesCount: row.task_series_count.toString(),
-    });
-}
-
-/**
- * Reads the one queued source operation frozen into an ADR-07 snapshot database.
- * @param {DatabaseSync} database - Validated candidate database.
- * @return {object} Manifest-binding source snapshot facts.
- */
-function readRestoreSourceBackup(database: DatabaseSync): RestoreDatabaseFacts['sourceBackup'] {
-    const statement = database.prepare(`
-        SELECT backup_set_id, backup_sequence, snapshot_id, target_revision, phase
-        FROM backup_operations
-        WHERE phase <> 'succeeded'
-    `);
-    statement.setReadBigInts(true);
-    const rows = statement.all() as Array<{
-        backup_set_id: string;
-        backup_sequence: bigint;
-        snapshot_id: string;
-        target_revision: bigint;
-        phase: string;
-    }>;
-    if (rows.length !== 1 || rows[0]!.phase !== 'queued') {
-        throw new Error('Restore candidate lacks its queued source backup operation');
-    }
-    const row = rows[0]!;
-    return Object.freeze({
-        backupSetId: row.backup_set_id,
-        backupSequence: row.backup_sequence.toString(),
-        snapshotId: row.snapshot_id,
-        targetRevision: row.target_revision.toString(),
-    });
-}
-
-function decimalFromCoefficient(coefficient: bigint, scale: bigint): string {
-    if (scale === 0n) {
-        return coefficient.toString();
-    }
-    const scaleNumber = Number(scale);
-    const digits = coefficient.toString().padStart(scaleNumber + 1, '0');
-    return `${digits.slice(0, -scaleNumber)}.${digits.slice(-scaleNumber)}`;
-}
-
-function decimalToCoefficient(value: string | null): readonly [bigint | null, bigint | null] {
-    if (value === null) {
-        return freezePair([null, null]);
-    }
-    const [integer, fraction = ''] = value.split('.');
-    return freezePair([BigInt(integer + fraction), BigInt(fraction.length)]);
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-function isCourseWithMeetingCommand(
-    command: WorkspaceDataCommand,
-): command is AcceptedCreateCourseWithMeetingCommand {
-    return command.intent.kind === 'plan.create-course-with-first-meeting';
-}
-
-function isCreateCourseCommand(command: WorkspaceDataCommand): command is CreateCourseCommand {
-    return command.intent.kind === 'plan.create-course';
-}
-
-function isCreateMeetingSeriesCommand(
-    command: WorkspaceDataCommand,
-): command is CreateMeetingSeriesCommand {
-    return command.intent.kind === 'plan.create-meeting-series';
-}
-
-/**
- * Narrows an accepted Course creation to the current writable schema.
- * @param {AcceptedCreateCourseWithMeetingCommand} command - Accepted creation command.
- * @return {boolean} Whether the command carries current overlap and day-offset semantics.
- */
-function isCurrentCourseWithMeetingCommand(
-    command: AcceptedCreateCourseWithMeetingCommand,
-): command is CreateCourseWithMeetingCommand {
-    return 'overlapDecision' in command;
-}
-
-/**
- * Narrows a Workspace DATA command to a Meeting occurrence mutation.
- * @param {WorkspaceDataCommand} command - Normalized DATA command.
- * @return {boolean} Whether the command mutates one occurrence or a future rule segment.
- */
-function isMeetingOccurrenceMutationCommand(
-    command: WorkspaceDataCommand,
-): command is MeetingOccurrenceMutationCommand {
-    return command.intent.kind === 'plan.change-meeting-occurrence'
-        || command.intent.kind === 'plan.cancel-meeting-occurrence';
-}
-
-/**
- * Narrows an occurrence mutation to its change variant.
- * @param {MeetingOccurrenceMutationCommand} command - Normalized occurrence mutation.
- * @return {boolean} Whether the command carries a replacement rule.
- */
-function isChangeMeetingOccurrenceCommand(
-    command: MeetingOccurrenceMutationCommand,
-): command is AcceptedChangeMeetingOccurrenceCommand {
-    return command.intent.kind === 'plan.change-meeting-occurrence';
-}
-
-/**
- * Narrows an accepted occurrence change to the current writable schema.
- * @param {AcceptedChangeMeetingOccurrenceCommand} command - Accepted change command.
- * @return {boolean} Whether the command carries current overlap and day-offset semantics.
- */
-function isCurrentChangeMeetingOccurrenceCommand(
-    command: AcceptedChangeMeetingOccurrenceCommand,
-): command is ChangeMeetingOccurrenceCommand {
-    return 'overlapDecision' in command;
-}
-
-function isTermMutationCommand(command: WorkspaceDataCommand): command is TermMutationCommand {
-    return command.intent.kind === 'workspace.reconcile-lifecycle'
-        || command.intent.kind === 'plan.update-term-end-date'
-        || command.intent.kind === 'plan.restore-term-as-current';
-}
-
-function isHolidayRangeCommand(command: WorkspaceDataCommand): command is HolidayRangeCommand {
-    return command.intent.kind === 'plan.create-holiday-range'
-        || command.intent.kind === 'plan.update-holiday-range'
-        || command.intent.kind === 'plan.delete-holiday-range';
-}
-
-function isTaskCommand(command: WorkspaceDataCommand): command is TaskCommand {
-    return command.intent.kind === 'plan.create-task-series'
-        || command.intent.kind === 'plan.update-task-series'
-        || command.intent.kind === 'plan.delete-task-series'
-        || command.intent.kind === 'plan.set-task-occurrence-status'
-        || command.intent.kind === 'plan.set-task-progress'
-        || command.intent.kind === 'plan.change-task-occurrence'
-        || command.intent.kind === 'plan.delete-task-occurrence-or-series'
-        || command.intent.kind === 'plan.undo-task-occurrence-state';
-}
-
-function isTaskOccurrenceStateMutationCommand(
-    command: TaskCommand,
-): command is TaskOccurrenceStateMutationCommand {
-    return command.intent.kind === 'plan.set-task-occurrence-status'
-        || command.intent.kind === 'plan.set-task-progress'
-        || command.intent.kind === 'plan.undo-task-occurrence-state';
-}
-
-function isTaskOccurrenceRuleMutationCommand(
-    command: TaskCommand,
-): command is TaskOccurrenceRuleMutationCommand {
-    return command.intent.kind === 'plan.change-task-occurrence'
-        || command.intent.kind === 'plan.delete-task-occurrence-or-series';
-}
-
-function isConfigureBackupDestinationCommand(
-    command: WorkspaceDataCommand,
-): command is AcceptedConfigureBackupDestinationCommand {
-    return command.intent.kind === 'protect.configure-backup-destination';
-}
-
-function freezeTuple<T>(value: [T]): readonly [T] {
-    return Object.freeze(value);
-}
-
-function freezeEmptyTuple(): readonly [] {
-    return Object.freeze([]);
-}
-
-function freezePair<T, U>(value: [T, U]): readonly [T, U] {
-    return Object.freeze(value);
-}
-
-function committedOutcome(
-    revision: bigint,
-    effectCode: ReceiptEffect['code'],
-    entityKind: ReceiptEffect['entity']['kind'],
-    entityId: string,
-    entityVersion: bigint,
-    followUpId: string,
-): CommandReceiptOutcome {
-    const entity = Object.freeze({
-        kind: entityKind,
-        id: entityId,
-        version: entityVersion.toString(),
-    });
-    const effect = Object.freeze({
-        code: effectCode,
-        entity,
-    });
-    return Object.freeze({
-        kind: 'committed' as const,
-        revision: revision.toString(),
-        effects: freezeTuple([effect]),
-        pendingFollowUps: freezeTuple([followUpId]),
-    });
-}
-
-function successfulCommit(value: CommandReceiptOutcome): DataCommitResult {
-    return Object.freeze({ ok: true as const, value });
-}
-
-function conflictResult(
-    reason: ConflictReason,
-    workspaceId: string,
-    versions: CurrentVersions,
-): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'workspace-setup' as const,
-        id: workspaceId,
-        version: versions.setupVersion.toString(),
-    });
-    const context = Object.freeze({
-        revision: versions.revision.toString(),
-        entityVersions: freezeTuple([entityVersion]),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context,
-        details: Object.freeze({ reason }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-function committedPairOutcome(
-    revision: bigint,
-    first: ReceiptEffect,
-    second: ReceiptEffect,
-    followUpId: string,
-): CommandReceiptOutcome {
-    return Object.freeze({
-        kind: 'committed' as const,
-        revision: revision.toString(),
-        effects: freezePair([first, second]),
-        pendingFollowUps: freezeTuple([followUpId]),
-    });
-}
-
-function planConflictResult(reason: ConflictReason, versions: CurrentVersions): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'plan-state' as const,
-        id: 'singleton',
-        version: versions.planVersion.toString(),
-    });
-    const context = Object.freeze({
-        revision: versions.revision.toString(),
-        entityVersions: freezeTuple([entityVersion]),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context,
-        details: Object.freeze({ reason }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-function protectionConflictResult(
-    reason: ConflictReason,
-    workspaceId: string,
-    versions: CurrentVersions,
-): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'backup-configuration' as const,
-        id: workspaceId,
-        version: versions.protectionVersion.toString(),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context: Object.freeze({
-            revision: versions.revision.toString(),
-            entityVersions: freezeTuple([entityVersion]),
-        }),
-        details: Object.freeze({ reason }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Builds a conflict problem carrying the authoritative Meeting series version.
- * @param {ConflictReason} reason - Stable conflict reason.
- * @param {CurrentVersions} versions - Current Workspace and PLAN versions.
- * @param {string} meetingSeriesId - Conflicted Meeting series identity.
- * @param {bigint} meetingSeriesVersion - Current Meeting series version.
- * @return {DataCommitResult} Unchanged conflict result.
- */
-function meetingSeriesConflictResult(
-    reason: ConflictReason,
-    versions: CurrentVersions,
-    meetingSeriesId: string,
-    meetingSeriesVersion: bigint,
-): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'meeting-series' as const,
-        id: meetingSeriesId,
-        version: meetingSeriesVersion.toString(),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context: Object.freeze({
-            revision: versions.revision.toString(),
-            entityVersions: freezeTuple([entityVersion]),
-        }),
-        details: Object.freeze({ reason }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Builds a stale-version conflict carrying the authoritative HolidayRange revision.
- * @param {CurrentVersions} versions - Current Workspace and PLAN versions.
- * @param {string} holidayRangeId - Conflicted HolidayRange identity.
- * @param {bigint} holidayRangeVersion - Current HolidayRange entity version.
- * @return {DataCommitResult} Unchanged conflict result.
- */
-function holidayRangeConflictResult(
-    versions: CurrentVersions,
-    holidayRangeId: string,
-    holidayRangeVersion: bigint,
-): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'holiday-range' as const,
-        id: holidayRangeId,
-        version: holidayRangeVersion.toString(),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context: Object.freeze({
-            revision: versions.revision.toString(),
-            entityVersions: freezeTuple([entityVersion]),
-        }),
-        details: Object.freeze({ reason: 'expected-entity-version' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-function taskSeriesConflictResult(
-    versions: CurrentVersions,
-    taskSeriesId: string,
-    taskSeriesVersion: bigint,
-): DataCommitResult {
-    const entityVersion = Object.freeze({
-        kind: 'task-series' as const,
-        id: taskSeriesId,
-        version: taskSeriesVersion.toString(),
-    });
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context: Object.freeze({
-            revision: versions.revision.toString(),
-            entityVersions: freezeTuple([entityVersion]),
-        }),
-        details: Object.freeze({ reason: 'expected-entity-version' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-function writerBusyResult(revision: bigint): DataCommitResult {
-    const problem = Object.freeze({
-        code: 'operation-in-progress' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['retry' as const]),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({ reason: 'writer-busy' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-function permissionProblem(): DataOpenProblem {
-    return Object.freeze({
-        code: 'permission' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({}),
-        details: Object.freeze({ reason: 'read-only' as const }),
-    });
-}
-
-function permissionCommitResult(revision: bigint): DataCommitResult {
-    const problem = Object.freeze({
-        code: 'permission' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({ reason: 'read-only' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Reports the authoritative draft-stream version after an optimistic conflict.
- * @param {string} workspaceId - Stable Workspace identity.
- * @param {bigint} revision - Unchanged formal Workspace revision.
- * @param {bigint} draftVersion - Current setup draft version.
- * @return {SetupDraftCheckpointWriteResult} Unchanged conflict result.
- */
-function setupDraftConflictResult(
-    workspaceId: string,
-    revision: bigint,
-    draftVersion: bigint,
-): SetupDraftCheckpointWriteResult {
-    const problem = Object.freeze({
-        code: 'conflict' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['requery' as const]),
-        context: Object.freeze({
-            revision: revision.toString(),
-            entityVersions: freezeTuple([Object.freeze({
-                kind: 'workspace-setup' as const,
-                id: workspaceId,
-                version: draftVersion.toString(),
-            })]),
-        }),
-        details: Object.freeze({ reason: 'expected-entity-version' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Reports a saturated Workspace write queue without changing the draft.
- * @param {bigint} revision - Unchanged formal Workspace revision.
- * @return {SetupDraftCheckpointWriteResult} Retryable unchanged result.
- */
-function setupDraftWriterBusyResult(revision: bigint): SetupDraftCheckpointWriteResult {
-    const problem = Object.freeze({
-        code: 'operation-in-progress' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['retry' as const]),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({ reason: 'writer-busy' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Reports that the open Workspace mode cannot persist a setup draft.
- * @param {bigint} revision - Unchanged formal Workspace revision.
- * @return {SetupDraftCheckpointWriteResult} Permission result.
- */
-function setupDraftPermissionResult(revision: bigint): SetupDraftCheckpointWriteResult {
-    const problem = Object.freeze({
-        code: 'permission' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({ reason: 'read-only' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Builds an unchanged result requiring a fresh whole-rule impact preview.
- * @param {bigint} revision - Current Workspace revision.
- * @return {DataCommitResult} Decision-required result.
- */
-function decisionRequiredResult(revision: bigint): DataCommitResult {
-    const problem = Object.freeze({
-        code: 'decision-required' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['preview' as const]),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({ reason: 'impact-confirmation-required' as const }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-/**
- * Builds an unchanged warning result that can be explicitly continued.
- * @param {bigint} revision - Current Workspace revision.
- * @param {readonly MeetingOverlapWarning[]} warnings - Exact overlapping occurrences and windows.
- * @return {DataCommitResult} Non-blocking overlap decision result.
- */
-function meetingOverlapDecisionRequiredResult(
-    revision: bigint,
-    warnings: readonly MeetingOverlapWarning[],
-): DataCommitResult {
-    const problem = Object.freeze({
-        code: 'decision-required' as const,
-        scope: 'operation' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezeTuple(['workspace.write' as const]),
-        allowedActions: freezeTuple(['continue' as const]),
-        context: Object.freeze({ revision: revision.toString() }),
-        details: Object.freeze({
-            reason: 'meeting-time-overlap' as const,
-            warnings: Object.freeze([...warnings]),
-        }),
-    });
-    return Object.freeze({ ok: false as const, problem });
-}
-
-type SqliteOperationStage = 'pre-commit' | 'commit-outcome-unknown';
-
-export type SqliteFailureDisposition =
-    | Readonly<{ kind: 'retryable-unchanged'; reason: 'writer-busy' }>
-    | Readonly<{ kind: 'read-only'; reason: 'permission' }>
-    | Readonly<{ kind: 'failed-unchanged'; reason: 'storage-full' | 'recovery-required' }>
-    | Readonly<{ kind: 'reopen-required' }>
-    | Readonly<{ kind: 'unmapped' }>;
-
-export function classifySqliteFailure(
-    error: unknown,
-    stage: SqliteOperationStage,
-): SqliteFailureDisposition {
-    let primaryCode: number | undefined;
-    let systemCode: unknown;
-    if (typeof error === 'object' && error !== null) {
-        if ('errcode' in error && typeof error.errcode === 'number') {
-            primaryCode = error.errcode & 0xFF;
-        }
-        if ('code' in error) {
-            systemCode = error.code;
-        }
-    }
-
-    if (stage === 'commit-outcome-unknown' && (primaryCode === 10 || primaryCode === 13)) {
-        return Object.freeze({ kind: 'reopen-required' as const });
-    }
-    if (primaryCode === 5 || primaryCode === 6) {
-        return Object.freeze({ kind: 'retryable-unchanged' as const, reason: 'writer-busy' as const });
-    }
-    if (primaryCode === 8 || systemCode === 'EACCES' || systemCode === 'EPERM') {
-        return Object.freeze({ kind: 'read-only' as const, reason: 'permission' as const });
-    }
-    if (primaryCode === 13) {
-        return Object.freeze({ kind: 'failed-unchanged' as const, reason: 'storage-full' as const });
-    }
-    if (primaryCode === 10) {
-        return Object.freeze({ kind: 'failed-unchanged' as const, reason: 'recovery-required' as const });
-    }
-    return Object.freeze({ kind: 'unmapped' as const });
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 class SqliteDataStoreImplementation {
     private accepting = true;
@@ -9697,120 +8360,16 @@ class SqliteDataStoreImplementation {
 
 export type SqliteDataStore = InstanceType<typeof SqliteDataStoreImplementation>;
 
-function incompatibleVersionProblem(actualSchemaLevel: number): DataOpenProblem {
-    return Object.freeze({
-        code: 'incompatible-version' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezePair(['workspace.read' as const, 'workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({}),
-        details: Object.freeze({
-            actualSchemaLevel,
-            requiredSchemaLevel: CURRENT_SCHEMA_LEVEL,
-        }),
-    });
-}
 
-function integrityProblem(
-    reason: 'wrong-application-id' | 'nonempty-level-zero' | 'schema-mismatch' | 'database-corrupt',
-): DataOpenProblem {
-    return Object.freeze({
-        code: 'integrity' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezePair(['workspace.read' as const, 'workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({}),
-        details: Object.freeze({ reason }),
-    });
-}
 
-function databaseUnreadableProblem(): DataOpenProblem {
-    return Object.freeze({
-        code: 'recovery-required' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezePair(['workspace.read' as const, 'workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({}),
-        details: Object.freeze({ reason: 'database-unreadable' as const }),
-    });
-}
 
-function migrationSafetyUnavailableProblem(): DataOpenProblem {
-    return Object.freeze({
-        code: 'migration-safety-unavailable' as const,
-        scope: 'workspace' as const,
-        dataEffect: 'unchanged' as const,
-        affectedCapabilities: freezePair(['workspace.read' as const, 'workspace.write' as const]),
-        allowedActions: freezeEmptyTuple(),
-        context: Object.freeze({}),
-        details: Object.freeze({reason: 'build-binding-missing' as const}),
-    });
-}
 
-function recoveryResult(problem: DataOpenProblem): DataOpenResult {
-    return Object.freeze({
-        kind: 'recovery' as const,
-        sqliteVersion: SQLITE_VERSION,
-        problem,
-    });
-}
 
-function closeBestEffort(database: DatabaseSync | undefined): void {
-    try {
-        database?.close();
-    } catch {
-        // The stable open classification does not depend on a second close failure.
-    }
-}
 
-function primarySqliteCode(error: unknown): number | undefined {
-    if (typeof error !== 'object'
-        || error === null
-        || !('errcode' in error)
-        || typeof error.errcode !== 'number') {
-        return undefined;
-    }
-    return error.errcode & 0xFF;
-}
 
-function unreadableOpenProblem(error: unknown): DataOpenProblem {
-    const primaryCode = primarySqliteCode(error);
-    if (primaryCode === 11 || primaryCode === 26) {
-        return integrityProblem('database-corrupt');
-    }
-    return databaseUnreadableProblem();
-}
 
-function validationProblem(error: unknown): DataOpenProblem {
-    if (error instanceof SchemaValidationError) {
-        return integrityProblem(error.reason);
-    }
-    return unreadableOpenProblem(error);
-}
 
-function readDatabaseIdentity(database: DatabaseSync): Readonly<{
-    applicationId: number;
-    schemaLevel: number;
-}> {
-    const applicationId = database.prepare('PRAGMA application_id').get() as { application_id: number };
-    const userVersion = database.prepare('PRAGMA user_version').get() as { user_version: number };
-    return {
-        applicationId: applicationId.application_id,
-        schemaLevel: userVersion.user_version,
-    };
-}
 
-function hasSchemaObjects(database: DatabaseSync): boolean {
-    const row = database.prepare(`
-        SELECT count(*) AS count
-        FROM sqlite_schema
-        WHERE name NOT LIKE 'sqlite_%'
-    `).get() as { count: number };
-    return row.count !== 0;
-}
 
 /**
  * Reopens and fully validates one closed operation-owned DATA sibling without making it active.
