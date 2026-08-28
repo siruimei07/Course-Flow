@@ -89,6 +89,6 @@
 - [x] Run targeted compiled tests for shared contracts, lifecycle, restore, migration, Renderer, architecture/preload boundaries, and packaged-smoke cleanup.
 - [x] Run fresh `pnpm test` and `pnpm typecheck` with the bundled Node/pnpm runtime.
 - [x] Run applicable FECS checks for every changed TypeScript/TSX/JavaScript/HTML-bearing path, documenting project overrides for historical AMD/default-export rules; run `git diff --check` and review the final diff/status.
-- [ ] Commit implementation and tests using only task files. From that clean source, run `pnpm package` and `pnpm smoke:packaged` without changing timeout constants.
-- [ ] Update the Backlog evidence ledger and Roadmap pointer with exact commands, counts, Windows packaged identity, root-cause evidence, FECS result, and honest unverified platform/physical-failure items. Mark only `WP-R6-05` `Done`; leave `WP-GA-01`, R7, R11, and R12 unentered.
-- [ ] Commit the evidence update, confirm a clean worktree, and report both the implementation source hash and final evidence commit hash.
+- [x] Commit implementation and tests using only task files. From that clean source, run `pnpm package` and `pnpm smoke:packaged` without changing timeout constants.
+- [x] Update the Backlog evidence ledger and Roadmap pointer with exact commands, counts, Windows packaged identity, root-cause evidence, FECS result, and honest unverified platform/physical-failure items. Mark only `WP-R6-05` `Done`; leave `WP-GA-01`, R7, R11, and R12 unentered.
+- [x] Commit the evidence update, confirm a clean worktree, and report both the implementation source hash and final evidence commit hash.
