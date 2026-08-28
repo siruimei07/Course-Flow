@@ -284,6 +284,14 @@ body {
 | `WP-R12-05` | 签名的 Windows x64 WiX 原生制品通过 per-machine 安装、升级、卸载与 Gate | `WP-R12-03` | Windows x64 主机、Windows 代码签名 | — | `TEST-RELEASE-003` | — |
 | `WP-R12-06` | GitHub Release manifest、双平台资产、重新下载验证和 G8 全部通过 | `WP-R12-04`, `WP-R12-05` | GitHub Releases 发布权限与干净下载环境 | `A-PLATFORM-004` | `TEST-RELEASE-001`, `TEST-RELEASE-005` | — |
 
+### RF — 维护性重构（非首发交付链）
+
+本节工作包不属于 §1 所述 53 个首发工作包，不拥有任何 Requirement/TEST 主所有权，也不改变首发剖面；它只登记行为保持的仓库结构维护，遵守与主链相同的状态与证据规则。
+
+| WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
+|---|---|---|---|---|---|---|
+| `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `In Progress` |
+
 ## 3. 首发 TEST 主所有权校验
 
 注册表必须满足：
@@ -431,6 +439,8 @@ body {
 | 2026-08-27 | `WP-R6-05` | `— → In Progress` | baseline `10b4349729e9ee4f098ee5068955595293dc47da`；用户确认的 `WP-R6-05` change 合同；[`WP-R6-05 implementation plan`](../superpowers/plans/2026-08-27-wp-r6-05-implementation.md) | 已定位 `FLOW-00`、`TEST-WORKSPACE-003/004/005`、`TEST-FLOW-00-LIFECYCLE` 及 Shell → Workspace → PROTECT/DATA 调用链。基线 `pnpm test` 为 660 项中 657 PASS、2 FAIL、1 skip；两处失败均来自 Windows packaged-smoke timeout 清理在根进程退出后同步启动 PowerShell descendant discovery，满载时 discovery 耗尽既有 grace，实际 `pnpm package` 与 `pnpm smoke:packaged` happy path 均 PASS | 开始 TDD 纵向切片：统一 pre-DATA PROTECT 判定、DATA/Operation/follow-up 恢复、mode/capability/health/route 聚合、显式 welcome 初始化及事件驱动 smoke 清理。Stop That Shit Guard 为 `OBSERVING / unconfirmed`；不新增依赖，不进入 `WP-GA-01`、R7、R11/R12，不放宽 timeout 或省略 residue postcondition。 |
 | 2026-08-27 | `WP-R6-05` | `In Progress → Verification` | clean implementation source `c6c7a351cc2771998a1085e8b6a68b05cff54d1f`；本次证据提交 | TDD RED/GREEN 覆盖 protocol 3 与 path-free lifecycle DTO、统一 pre-DATA PROTECT 分类、welcome/setup/today/maintenance/recovery、自动归档后再次重启、read-only、peripheral unavailable/degraded/recovering、pending follow-up、Restore/MigrationRollback 中间态与终态 Operation；显式 source cancel 终态曾先暴露旧 `waiting-decision`，ApplicationBuildStatus 曾仍报告 protocol 2，均以失败测试定位后修正。最终目标集合 100/100 PASS；fresh `pnpm test` 676 项中 675 PASS、0 FAIL、1 个既有 Windows file-link 权限 skip；`pnpm typecheck` 与 `git diff --check` PASS | packaged-smoke 根因为 timeout 回调才同步启动 PowerShell descendant discovery，阻塞 libuv root-exit 回调并耗尽既有 grace；改为 root `exit` 时异步启动并缓存 WMI discovery，所有 helper 共享绝对 deadline，异步 taskkill 后轮询 exact PID 无残留。生产 `20_000/1_000 ms` 及所有测试 timeout/grace 均未放宽，单测与全量负载下五个真实进程树场景均 PASS。FECS 逐路径路由 34 个改动文件中的 32 个 JS/TS/TSX：tab、尾随空白、120 字符、松散等号、动态执行均 0 违规，7 个新增代码文件均有 `@file`；历史 AMD/default-export 条款与已批准 ESM/TypeScript 及既有最小 diff 冲突时按项目约束优先。无新增依赖。 |
 | 2026-08-27 | `WP-R6-05` | `Verification → Done` | clean implementation source `c6c7a351cc2771998a1085e8b6a68b05cff54d1f`；Windows x64 package `out/CourseFlow Dev-win32-x64`；本行所在证据提交 | Windows `10.0.26200.0` / AMD64；Node `v24.19.0`、pnpm `11.19.0`、Electron `43.4.1`、packaged SQLite `3.53.1`。clean `pnpm package` PASS；`pnpm smoke:packaged` 报 `PASS packaged smoke win32/x64 development:c6c7a351cc2771998a1085e8b6a68b05cff54d1f SQLite 3.53.1 verified-local` | `FLOW-00`、`TEST-WORKSPACE-003/004/005` 与 `TEST-FLOW-00-LIFECYCLE` 的 A-only 切片关闭：PROTECT 统一判定先于 DATA open，普通路由后才唤醒 backup；启动不执行物理 resume/rollback/continue/cancel；Shell 只消费 Workspace lifecycle，仍经 preload/Main/单一 Workspace utility，DTO 不含路径。package 仅有既有 Vite native config 与 `inlineDynamicImports` warning。macOS arm64、真实 OS 强杀/掉电、真实跨卷、packaged 生命周期人工交互、签名、安装与公开发布未验证；当前没有 Library watcher，故 watcher 前置顺序只有架构边界而无 R11/R12 运行时证据。`WP-GA-01`、R7、R11/R12 均未进入。 |
+| 2026-08-28 | `WP-RF-01` | `— → Ready` | 本行所在提交；[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md) | 计划经用户逐项确认（动机、全物理架构深度、全区域范围、main + Backlog 证据工作流）后批准 | 行为保持重构；不实施 `WP-GA-01` 与 2026-08-28 新模型；验证协议与环境边界见计划 §6。 |
+| 2026-08-28 | `WP-RF-01` | `Ready → In Progress` | 本行所在提交 | Linux x64 / Node `v22.22.2` 容器基线：`tsc --noEmit`（主/测试配置）通过；78 文件 676 用例 = 667 通过 / 5 跳过 / 4 环境性失败（2 个 packaged-smoke 后代进程清理、1 个大小写不敏感文件系统假设、1 个 `ApplicationBuildStatus` darwin/win32 平台守卫按设计在 Linux 抛出） | 重构全程要求失败集合 ⊆ 该 4 项且用例总数不减；Windows x64 / Node 24 复验留给用户，登记为未验证项。 |
 
 ## 7. 拆包与变更规则
 
