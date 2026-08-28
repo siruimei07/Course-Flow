@@ -26,9 +26,9 @@ import {
     type OpenWorkspaceDataOptions,
     type ReadSnapshotOptions,
     type SqliteDataStore,
-} from './data/sqlite-data-store';
-import {CURRENT_SCHEMA_LEVEL} from './data/schema';
-import {observeRestoreDataSlot} from './platform/restore-activation-files';
+} from '../data/sqlite-data-store';
+import {CURRENT_SCHEMA_LEVEL} from '../data/schema';
+import {observeRestoreDataSlot} from '../platform/restore-activation-files';
 import {
     BOOTSTRAP_PROTOCOL_VERSION,
     isWorkspaceProbeRequest,
@@ -36,12 +36,12 @@ import {
     type WorkspaceDataStatus,
     type DataOpenProblem,
     type WorkspaceProbeRequest,
-} from './shared/bootstrap-contract';
+} from '../shared/bootstrap-contract';
 import type {
     WorkspaceLifecycleProjection,
     WorkspaceOperationProjection,
     WorkspacePendingFollowUpProjection,
-} from './shared/workspace-lifecycle-contract';
+} from '../shared/workspace-lifecycle-contract';
 import {
     isWorkspaceProcessRequest,
     type CancelMeetingOccurrenceRequest,
@@ -83,7 +83,7 @@ import {
     type WorkspaceSetupProblem,
     type WorkspaceSetupProblemCode,
     type WorkspaceProcessRequest,
-} from './shared/workspace-setup-contract';
+} from '../shared/workspace-setup-contract';
 import {
     isMigrationRollbackSessionView,
     WORKSPACE_PROTOCOL_VERSION,
@@ -95,21 +95,21 @@ import {
     type MigrationRollbackSessionView,
     type MigrationSafetyCopyProjection,
     type WorkspaceMigrationSuccessValue,
-} from './shared/workspace-migration-contract';
+} from '../shared/workspace-migration-contract';
 import {
     configureBackupDestination,
-} from './protect/backup-configuration';
-import { BackupDestinationPreparationError } from './protect/backup-repository';
+} from '../protect/backup-configuration';
+import { BackupDestinationPreparationError } from '../protect/backup-repository';
 import {
     DurableBackupCoordinator,
     inspectRestoreBeforeWorkspaceOpen,
     readVerifiedDataProtectionProjection,
     type DurableBackupPassOptions,
-} from './protect/durable-backup';
+} from '../protect/durable-backup';
 import {
     RestoreCoordinator,
     RestoreSessionError,
-} from './protect/restore-session';
+} from '../protect/restore-session';
 import {
     armMigrationRollbackHandoff,
     cancelMigrationRollbackHandoff,
@@ -122,33 +122,33 @@ import {
     prepareMigrationRollbackHandoff,
     type MigrationRollbackBootState,
     type MigrationRollbackDataIdentity,
-} from './protect/migration-rollback-handoff';
+} from '../protect/migration-rollback-handoff';
 import {
     bindMigrationRollbackConfirmation,
     createMigrationRollbackPreview,
     migrationRollbackConfirmationDigest,
     type MigrationRollbackPreviewFacts,
     type PreparedMigrationRollbackPreview,
-} from './protect/migration-rollback-session';
+} from '../protect/migration-rollback-session';
 import {
     inspectBeforeWorkspaceOpen,
     type WorkspaceStartupInspection,
-} from './protect/workspace-startup';
+} from '../protect/workspace-startup';
 import {
     buildPlanProjection,
     createPlanEvaluationContext,
-} from './shared/workspace-plan-contract';
+} from '../shared/workspace-plan-contract';
 import {
     localDateInTermZone,
     normalizeReconcileWorkspaceLifecycleCommand,
     normalizeRestoreTermAsCurrentCommand,
     type RestoreTermAsCurrentCommand,
     type SetupProjection,
-} from './shared/workspace-term-contract';
+} from '../shared/workspace-term-contract';
 import {
     workspaceLifecycleFrom,
     type WorkspaceLifecycleInput,
-} from './workspace-lifecycle';
+} from './lifecycle';
 
 export interface ClockPort {
     now(): string;

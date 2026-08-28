@@ -375,7 +375,7 @@ test('backup directory selection stays in Main and only the adapted request reac
 
 test('FLOW-00 inspects PROTECT before DATA open and never starts physical recovery on boot', () => {
   const application = readFileSync(
-    path.join(repositoryRoot, 'src/workspace-application.ts'),
+    path.join(repositoryRoot, 'src/workspace/application.ts'),
     'utf8',
   );
   const startup = readFileSync(

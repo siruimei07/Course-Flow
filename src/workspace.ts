@@ -4,7 +4,7 @@
 
 import { makeBootstrapProblem } from './shared/bootstrap-contract';
 import type { WorkspaceSetupOutcome } from './shared/workspace-setup-contract';
-import { WorkspaceApplication } from './workspace-application';
+import { WorkspaceApplication } from './workspace/application';
 
 const parentPort = process.parentPort;
 

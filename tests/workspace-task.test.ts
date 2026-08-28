@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { WorkspaceApplication } from '../src/workspace-application';
+import { WorkspaceApplication } from '../src/workspace/application';
 import { makeBootstrapRequest } from '../src/shared/bootstrap-contract';
 import {
     makeChangeTaskOccurrenceRequest,

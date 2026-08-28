@@ -50,7 +50,7 @@ import {
     makeInitializeWorkspaceRequest,
     makeRestoreSessionQueryRequest,
 } from '../src/shared/workspace-setup-contract';
-import {WorkspaceApplication} from '../src/workspace-application';
+import {WorkspaceApplication} from '../src/workspace/application';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
 const SOURCE_APP_BUILD_ID = 'development:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

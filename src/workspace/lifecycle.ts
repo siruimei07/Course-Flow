@@ -2,7 +2,7 @@
  * @file Aggregates Workspace mode, route, capabilities, health, and durable work.
  */
 
-import type {WorkspaceDataStatus} from './shared/bootstrap-contract';
+import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
 import {
     isWorkspaceLifecycleProjection,
     type CapabilityState,
@@ -10,7 +10,7 @@ import {
     type WorkspaceLifecycleProjection,
     type WorkspaceOperationProjection,
     type WorkspacePendingFollowUpProjection,
-} from './shared/workspace-lifecycle-contract';
+} from '../shared/workspace-lifecycle-contract';
 
 export type WorkspaceModuleStatus = Readonly<{
     health: ModuleHealth;

@@ -10,7 +10,7 @@ import test from 'node:test';
 
 import { openWorkspaceData } from '../src/data/sqlite-data-store';
 import { BOOTSTRAP_PROTOCOL_VERSION } from '../src/shared/bootstrap-contract';
-import { WorkspaceApplication, type ClockPort } from '../src/workspace-application';
+import { WorkspaceApplication, type ClockPort } from '../src/workspace/application';
 import {
     normalizeCreateTermCommand,
     normalizeUpdateTermEndDateCommand,
