@@ -17,6 +17,7 @@ export type StoreContext = Readonly<{
     enterTerminalState(error?: Error): Error;
     rollbackOrRequireReopen(): void;
     requireOpen(): void;
+    requireBackupMutationAllowed(): void;
 }>;
 
 export function currentVersions(database: DatabaseSync): CurrentVersions {

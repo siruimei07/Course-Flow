@@ -509,7 +509,7 @@ test('production keeps one utility process and Renderer imports no privileged ru
     .map((sourcePath) => path.relative(repositoryRoot, sourcePath).replaceAll('\\', '/'))
     .sort();
   const outsideDataLayer = nodeSqliteImporters.filter(
-    (importer) => !/^src\/data\/(?:store\/|schema\/)?[^/]+\.ts$/.test(importer),
+    (importer) => !/^src\/data\/(?:[^/]+|(?:store|schema)\/.+)\.ts$/.test(importer),
   );
   assert.deepEqual(outsideDataLayer, []);
   assert.ok(nodeSqliteImporters.includes('src/data/sqlite-data-store.ts'));

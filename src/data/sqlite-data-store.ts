@@ -1,6 +1,12 @@
 /**
  * @file Implements the transactional SQLite owner for Workspace facts and receipts.
  */
+import { receipt as receiptUnit, readPendingFollowUps as readPendingFollowUpsUnit, readProtectionWatermark as readProtectionWatermarkUnit, readProtectionWatermarks as readProtectionWatermarksUnit } from './store/protection/follow-ups';
+import { claimBackupOperation as claimBackupOperationUnit, readBackupOperation as readBackupOperationUnit, readBackupOperationForSnapshot as readBackupOperationForSnapshotUnit, recordBackupCheckpoint as recordBackupCheckpointUnit, advanceBackupOperation as advanceBackupOperationUnit, recordBackupSuccess as recordBackupSuccessUnit, readSuccessfulBackupSnapshots as readSuccessfulBackupSnapshotsUnit } from './store/protection/backup-operations';
+import { claimBackupCleanupOperation as claimBackupCleanupOperationUnit, readBackupCleanupOperation as readBackupCleanupOperationUnit, releasePlannedBackupCleanup as releasePlannedBackupCleanupUnit, markBackupCleanupQuarantined as markBackupCleanupQuarantinedUnit, markBackupCleanupDeleting as markBackupCleanupDeletingUnit, completeBackupCleanup as completeBackupCleanupUnit } from './store/protection/backup-cleanup';
+import { readDataProtectionProjection as readDataProtectionProjectionUnit, readBackupConfigurationForProtection as readBackupConfigurationForProtectionUnit, readBackupConfigurationForCommand as readBackupConfigurationForCommandUnit } from './store/protection/projection';
+import { readRestoreSessions as readRestoreSessionsUnit, readRestoreCommandReceipt as readRestoreCommandReceiptUnit, readRestoreCompletionReceipt as readRestoreCompletionReceiptUnit, recordRestoreCompletionReceipt as recordRestoreCompletionReceiptUnit, createRestoreSession as createRestoreSessionUnit, advanceRestoreSession as advanceRestoreSessionUnit, cancelRestoreSession as cancelRestoreSessionUnit } from './store/protection/restore-store';
+import { inspectRestoreCandidateDatabase as inspectRestoreCandidateDatabaseUnit, prepareRestoreCandidateDatabaseCopy as prepareRestoreCandidateDatabaseCopyUnit, writeRestoreSafetyDatabaseCopy as writeRestoreSafetyDatabaseCopyUnit, validateRestoreSafetyDatabaseCopy as validateRestoreSafetyDatabaseCopyUnit, writeBackupDatabaseCopy as writeBackupDatabaseCopyUnit, validateBackupDatabaseCopy as validateBackupDatabaseCopyUnit } from './store/protection/restore-candidates';
 import { readSetupProjection as readSetupProjectionUnit, readWorkspaceSetupSnapshot as readWorkspaceSetupSnapshotUnit } from './store/reads/setup';
 import { readPlanProjectionSource as readPlanProjectionSourceUnit } from './store/reads/plan';
 import { previewTaskOccurrenceChange as previewTaskOccurrenceChangeUnit, readTaskSeriesDetail as readTaskSeriesDetailUnit } from './store/reads/task';
@@ -524,6 +530,7 @@ class SqliteDataStoreImplementation {
             enterTerminalState: (error?: Error) => error === undefined ? this.enterTerminalState() : this.enterTerminalState(error),
             rollbackOrRequireReopen: () => this.rollbackOrRequireReopen(),
             requireOpen: () => this.requireOpen(),
+            requireBackupMutationAllowed: () => this.requireBackupMutationAllowed(),
         });
     }
 
@@ -825,618 +832,200 @@ class SqliteDataStoreImplementation {
     }
 
     public receipt(commandId: string): CommandReceiptOutcome | null {
-        this.requireOpen();
-        return readReceiptOutcome(this.database, commandId);
+        return receiptUnit(this.storeContext, commandId);
     }
 
     public readPendingFollowUps(): readonly DurableFollowUp[] {
-        this.requireOpen();
-        const statement = this.database.prepare(`
-            SELECT
-                follow_up_id,
-                originating_command_id,
-                prerequisite_revision,
-                follow_up_version
-            FROM durable_followups
-            WHERE state = 'pending'
-            ORDER BY prerequisite_revision, follow_up_id
-        `);
-        statement.setReadBigInts(true);
-        const rows = statement.all() as Array<{
-            follow_up_id: string;
-            originating_command_id: string;
-            prerequisite_revision: bigint;
-            follow_up_version: bigint;
-        }>;
-        return Object.freeze(rows.map(row => Object.freeze({
-            followUpId: row.follow_up_id,
-            originatingCommandId: row.originating_command_id,
-            owner: 'protect' as const,
-            kind: 'backup-needed-through' as const,
-            prerequisiteRevision: row.prerequisite_revision.toString(),
-            state: 'pending' as const,
-            version: row.follow_up_version.toString() as '0',
-        })));
+        return readPendingFollowUpsUnit(this.storeContext);
     }
 
     public readProtectionWatermark(): string {
-        return this.readProtectionWatermarks().neededThrough;
+        return readProtectionWatermarkUnit(this.storeContext);
     }
 
-    /**
-     * Reads both durable backup watermarks from their singleton DATA owner.
-     * @return {{neededThrough: string; succeededThrough: string}} Current watermark pair.
-     */
     public readProtectionWatermarks(): Readonly<{
         neededThrough: string;
         succeededThrough: string;
     }> {
-        this.requireOpen();
-        const statement = this.database.prepare(`
-            SELECT backup_needed_through, backup_succeeded_through
-            FROM protection_watermarks
-            WHERE singleton = 1
-        `);
-        statement.setReadBigInts(true);
-        const row = statement.get() as {
-            backup_needed_through: bigint;
-            backup_succeeded_through: bigint;
-        };
-        return Object.freeze({
-            neededThrough: row.backup_needed_through.toString(),
-            succeededThrough: row.backup_succeeded_through.toString(),
-        });
+        return readProtectionWatermarksUnit(this.storeContext);
     }
 
-    /**
-     * Claims or resumes the one durable backup operation for the current merged watermark.
-     * @param {object} input - Identities generated by the PROTECT coordinator for a new claim.
-     * @return {BackupOperation | null} Resumable work, or null when DATA is already protected.
-     */
     public claimBackupOperation(input: Readonly<{
         operationId: string;
         snapshotId: string;
         stagingDirectoryName: string;
         createdAt: string;
     }>): BackupOperation | null {
-        this.requireBackupMutationAllowed();
-        const expectedStagingName = new RegExp(`^\\.staging-${input.operationId}-[0-9a-f]{16}$`);
-        if (!isCanonicalUuid(input.operationId)
-            || !isCanonicalUuid(input.snapshotId)
-            || !isCanonicalInstant(input.createdAt)
-            || !expectedStagingName.test(input.stagingDirectoryName)) {
-            throw new TypeError('Backup operation claim is invalid');
-        }
-
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const active = this.readBackupOperationRow(`phase <> 'succeeded'`);
-            if (active) {
-                this.database.exec('COMMIT');
-                return backupOperationFromRow(active);
-            }
-            const watermarks = this.readProtectionWatermarksInsideTransaction();
-            if (watermarks.backup_succeeded_through >= watermarks.backup_needed_through) {
-                this.database.exec('COMMIT');
-                return null;
-            }
-            const configuration = this.database.prepare(`
-                SELECT backup_set_id
-                FROM backup_configuration
-                WHERE singleton = 1
-            `).get() as {backup_set_id: string | null};
-            if (configuration.backup_set_id === null) {
-                this.database.exec('COMMIT');
-                return null;
-            }
-            const sequenceStatement = this.database.prepare(`
-                SELECT coalesce(max(backup_sequence), 0) + 1 AS next_sequence
-                FROM backup_operations
-                WHERE backup_set_id = ?
-            `);
-            sequenceStatement.setReadBigInts(true);
-            const sequence = (sequenceStatement.get(configuration.backup_set_id) as {
-                next_sequence: bigint;
-            }).next_sequence;
-            this.database.prepare(`
-                INSERT INTO backup_operations (
-                    operation_id,
-                    backup_set_id,
-                    backup_sequence,
-                    snapshot_id,
-                    target_revision,
-                    actual_revision,
-                    staging_directory_name,
-                    created_at,
-                    phase,
-                    operation_version
-                ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?, 'queued', 0)
-            `).run(
-                input.operationId,
-                configuration.backup_set_id,
-                sequence,
-                input.snapshotId,
-                watermarks.backup_needed_through,
-                input.stagingDirectoryName,
-                input.createdAt,
-            );
-            const claimed = this.readBackupOperationRow('operation_id = ?', input.operationId);
-            this.database.exec('COMMIT');
-            return backupOperationFromRow(claimed!);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return claimBackupOperationUnit(this.storeContext, input);
     }
 
-    /**
-     * Reads the latest operation, including the most recently succeeded operation.
-     * @return {BackupOperation | null} Latest durable operation.
-     */
     public readBackupOperation(): BackupOperation | null {
-        this.requireOpen();
-        const row = this.readBackupOperationRow('1 = 1');
-        return row ? backupOperationFromRow(row) : null;
+        return readBackupOperationUnit(this.storeContext);
     }
 
-    /**
-     * Reads the durable operation that owns one registered or in-progress snapshot identity.
-     * @param {string} snapshotId - Canonical snapshot UUID.
-     * @return {BackupOperation | null} Matching durable operation when registered.
-     */
     public readBackupOperationForSnapshot(snapshotId: string): BackupOperation | null {
-        this.requireOpen();
-        if (!isCanonicalUuid(snapshotId)) {
-            throw new TypeError('Snapshot identity is invalid');
-        }
-        const row = this.readBackupOperationRow('snapshot_id = ?', snapshotId);
-        return row ? backupOperationFromRow(row) : null;
+        return readBackupOperationForSnapshotUnit(this.storeContext, snapshotId);
     }
 
-    /**
-     * Records the actual revision observed in the validated SQLite backup member.
-     * @param {string} operationId - Claimed operation identity.
-     * @param {string} actualRevision - Revision read from the checkpoint copy.
-     * @return {BackupOperation} Updated durable operation.
-     */
     public recordBackupCheckpoint(operationId: string, actualRevision: string): BackupOperation {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId)
-            || !isCanonicalUnsignedSqliteInteger(actualRevision)
-            || actualRevision === '0') {
-            throw new TypeError('Backup checkpoint facts are invalid');
-        }
-        return this.mutateBackupOperation(operationId, operation => {
-            if (operation.phase === 'database-checkpoint'
-                && operation.actual_revision === BigInt(actualRevision)) {
-                return false;
-            }
-            if (operation.phase !== 'queued'
-                || BigInt(actualRevision) < operation.target_revision) {
-                throw new Error('Backup checkpoint does not match the claimed target');
-            }
-            this.database.prepare(`
-                UPDATE backup_operations
-                SET actual_revision = ?, phase = 'database-checkpoint',
-                    operation_version = operation_version + 1
-                WHERE operation_id = ?
-            `).run(BigInt(actualRevision), operationId);
-            return true;
-        });
+        return recordBackupCheckpointUnit(this.storeContext, operationId, actualRevision);
     }
 
-    /**
-     * Advances one validated filesystem phase without skipping protocol stages.
-     * @param {string} operationId - Claimed operation identity.
-     * @param {BackupOperationPhase} expectedPhase - Durable source phase.
-     * @param {BackupOperationPhase} nextPhase - Required immediate successor.
-     * @return {BackupOperation} Updated durable operation.
-     */
     public advanceBackupOperation(
         operationId: string,
         expectedPhase: BackupOperationPhase,
         nextPhase: BackupOperationPhase,
     ): BackupOperation {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId) || BACKUP_PHASE_SUCCESSORS[expectedPhase] !== nextPhase) {
-            throw new TypeError('Backup phase transition is invalid');
-        }
-        return this.mutateBackupOperation(operationId, operation => {
-            if (operation.phase === nextPhase) {
-                return false;
-            }
-            if (operation.phase !== expectedPhase) {
-                throw new Error('Backup phase transition is stale');
-            }
-            this.database.prepare(`
-                UPDATE backup_operations
-                SET phase = ?, operation_version = operation_version + 1
-                WHERE operation_id = ?
-            `).run(nextPhase, operationId);
-            return true;
-        });
+        return advanceBackupOperationUnit(this.storeContext, operationId, expectedPhase, nextPhase);
     }
 
-    /**
-     * Registers an immutable published snapshot and completes covered follow-ups atomically.
-     * @param {object} input - Final verified snapshot facts.
-     * @return {BackupOperation} Idempotently succeeded operation.
-     */
     public recordBackupSuccess(input: Readonly<{
         operationId: string;
         actualRevision: string;
         rootDigest: string;
         succeededAt: string;
     }>): BackupOperation {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(input.operationId)
-            || !isCanonicalUnsignedSqliteInteger(input.actualRevision)
-            || input.actualRevision === '0'
-            || !/^[0-9a-f]{64}$/.test(input.rootDigest)
-            || !isCanonicalInstant(input.succeededAt)) {
-            throw new TypeError('Backup success facts are invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const operation = this.requireBackupOperationRow(input.operationId);
-            if (operation.phase === 'succeeded') {
-                const stored = this.readSuccessfulBackupSnapshot(input.operationId);
-                if (stored.actualRevision !== input.actualRevision
-                    || stored.rootDigest !== input.rootDigest
-                    || stored.succeededAt !== input.succeededAt) {
-                    throw new Error('Backup success replay does not match immutable facts');
-                }
-                this.database.exec('COMMIT');
-                return backupOperationFromRow(operation);
-            }
-            if (operation.phase !== 'published-pending-record'
-                || operation.actual_revision !== BigInt(input.actualRevision)) {
-                throw new Error('Backup success is not ready to record');
-            }
-            const watermarks = this.readProtectionWatermarksInsideTransaction();
-            if (operation.actual_revision > watermarks.backup_needed_through) {
-                throw new Error('Backup success revision exceeds the durable watermark');
-            }
-            this.database.prepare(`
-                INSERT INTO backup_snapshots (
-                    snapshot_id,
-                    operation_id,
-                    backup_set_id,
-                    backup_sequence,
-                    actual_revision,
-                    root_digest,
-                    succeeded_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                operation.snapshot_id,
-                operation.operation_id,
-                operation.backup_set_id,
-                operation.backup_sequence,
-                operation.actual_revision,
-                input.rootDigest,
-                input.succeededAt,
-            );
-            this.database.prepare(`
-                UPDATE protection_watermarks
-                SET backup_succeeded_through = ?
-                WHERE singleton = 1
-            `).run(operation.actual_revision);
-            this.database.prepare(`
-                UPDATE durable_followups
-                SET state = 'completed', follow_up_version = 1
-                WHERE state = 'pending' AND prerequisite_revision <= ?
-            `).run(operation.actual_revision);
-            this.database.prepare(`
-                UPDATE backup_operations
-                SET phase = 'succeeded', operation_version = operation_version + 1
-                WHERE operation_id = ?
-            `).run(operation.operation_id);
-            const succeeded = this.requireBackupOperationRow(operation.operation_id);
-            this.database.exec('COMMIT');
-            return backupOperationFromRow(succeeded);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return recordBackupSuccessUnit(this.storeContext, input);
     }
 
-    /**
-     * Lists immutable success records in BackupSequence order.
-     * @return {readonly SuccessfulBackupSnapshot[]} Registered snapshot facts.
-     */
     public readSuccessfulBackupSnapshots(): readonly SuccessfulBackupSnapshot[] {
-        this.requireOpen();
-        const statement = this.database.prepare(`
-            SELECT
-                snapshot_id,
-                backup_set_id,
-                backup_sequence,
-                actual_revision,
-                root_digest,
-                succeeded_at
-            FROM backup_snapshots
-            ORDER BY backup_sequence
-        `);
-        statement.setReadBigInts(true);
-        const rows = statement.all() as Array<{
-            snapshot_id: string;
-            backup_set_id: string;
-            backup_sequence: bigint;
-            actual_revision: bigint;
-            root_digest: string;
-            succeeded_at: string;
-        }>;
-        return Object.freeze(rows.map(row => Object.freeze({
-            snapshotId: row.snapshot_id,
-            backupSetId: row.backup_set_id,
-            backupSequence: row.backup_sequence.toString(),
-            actualRevision: row.actual_revision.toString(),
-            rootDigest: row.root_digest,
-            succeededAt: row.succeeded_at,
-        })));
+        return readSuccessfulBackupSnapshotsUnit(this.storeContext);
     }
 
-    /**
-     * Claims one PROTECT-selected registration when two newer successes are still recorded.
-     * @param {string} operationId - Fresh cleanup operation UUID.
-     * @param {string} snapshotId - Freshly selected registered Snapshot UUID.
-     * @return {BackupCleanupOperation | null} Resumable cleanup, or null when ineligible.
-     */
     public claimBackupCleanupOperation(
         operationId: string,
         snapshotId: string,
     ): BackupCleanupOperation | null {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId) || !isCanonicalUuid(snapshotId)) {
-            throw new TypeError('Backup cleanup identity is invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const active = this.readBackupCleanupOperationRow();
-            if (active) {
-                this.database.exec('COMMIT');
-                return backupCleanupOperationFromRow(active);
-            }
-            const candidateStatement = this.database.prepare(`
-                SELECT
-                    snapshot.backup_set_id,
-                    snapshot.snapshot_id,
-                    snapshot.backup_sequence,
-                    snapshot.root_digest
-                FROM backup_snapshots AS snapshot
-                JOIN backup_configuration AS configuration ON configuration.singleton = 1
-                WHERE snapshot.backup_set_id = configuration.backup_set_id
-                    AND snapshot.snapshot_id = ?
-                    AND (
-                        SELECT count(*)
-                        FROM backup_snapshots AS newer
-                        WHERE newer.backup_set_id = snapshot.backup_set_id
-                            AND newer.backup_sequence > snapshot.backup_sequence
-                    ) >= 2
-                LIMIT 1
-            `);
-            candidateStatement.setReadBigInts(true);
-            const candidate = candidateStatement.get(snapshotId) as {
-                backup_set_id: string;
-                snapshot_id: string;
-                backup_sequence: bigint;
-                root_digest: string;
-            } | undefined;
-            if (!candidate) {
-                this.database.exec('COMMIT');
-                return null;
-            }
-            this.database.prepare(`
-                INSERT INTO backup_cleanup_operations (
-                    singleton,
-                    operation_id,
-                    backup_set_id,
-                    snapshot_id,
-                    backup_sequence,
-                    root_digest,
-                    snapshot_directory_name,
-                    quarantine_directory_name,
-                    phase,
-                    operation_version
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, 'planned', 0)
-            `).run(
-                operationId,
-                candidate.backup_set_id,
-                candidate.snapshot_id,
-                candidate.backup_sequence,
-                candidate.root_digest,
-                `snapshot-${candidate.snapshot_id}`,
-                `.quarantine-${operationId}-${candidate.snapshot_id}`,
-            );
-            const claimed = this.readBackupCleanupOperationRow();
-            this.database.exec('COMMIT');
-            return backupCleanupOperationFromRow(claimed!);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return claimBackupCleanupOperationUnit(this.storeContext, operationId, snapshotId);
     }
 
-    /**
-     * Reads the one durable retention cleanup journal entry.
-     * @return {BackupCleanupOperation | null} Active cleanup when one exists.
-     */
     public readBackupCleanupOperation(): BackupCleanupOperation | null {
-        this.requireOpen();
-        const row = this.readBackupCleanupOperationRow();
-        return row ? backupCleanupOperationFromRow(row) : null;
+        return readBackupCleanupOperationUnit(this.storeContext);
     }
 
-    /**
-     * Releases a planned cleanup only after PROTECT proves no quarantine rename occurred.
-     * @param {string} operationId - Persisted cleanup operation UUID.
-     * @return {void}
-     */
     public releasePlannedBackupCleanup(operationId: string): void {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId)) {
-            throw new TypeError('Backup cleanup operation identity is invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const cleanup = this.readBackupCleanupOperationRow();
-            if (!cleanup) {
-                this.database.exec('COMMIT');
-                return;
-            }
-            if (cleanup.operation_id !== operationId || cleanup.phase !== 'planned') {
-                throw new Error('Backup cleanup operation cannot be released');
-            }
-            this.database.prepare(`
-                DELETE FROM backup_cleanup_operations
-                WHERE singleton = 1 AND operation_id = ? AND phase = 'planned'
-            `).run(operationId);
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return releasePlannedBackupCleanupUnit(this.storeContext, operationId);
     }
 
-    /**
-     * Records that same-parent quarantine rename has completed.
-     * @param {string} operationId - Persisted cleanup operation UUID.
-     * @return {BackupCleanupOperation} Idempotently quarantined cleanup facts.
-     */
     public markBackupCleanupQuarantined(operationId: string): BackupCleanupOperation {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId)) {
-            throw new TypeError('Backup cleanup operation identity is invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const cleanup = this.readBackupCleanupOperationRow();
-            if (!cleanup || cleanup.operation_id !== operationId) {
-                throw new Error('Backup cleanup operation does not exist');
-            }
-            if (cleanup.phase === 'planned') {
-                this.database.prepare(`
-                    UPDATE backup_cleanup_operations
-                    SET phase = 'quarantined', operation_version = 1
-                    WHERE singleton = 1
-                `).run();
-            }
-            const updated = this.readBackupCleanupOperationRow();
-            this.database.exec('COMMIT');
-            return backupCleanupOperationFromRow(updated!);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return markBackupCleanupQuarantinedUnit(this.storeContext, operationId);
     }
 
-    /**
-     * Records the fully revalidated checkpoint that authorizes exact physical deletion.
-     * @param {string} operationId - Persisted cleanup operation UUID.
-     * @return {BackupCleanupOperation} Idempotently deletion-authorized cleanup facts.
-     */
     public markBackupCleanupDeleting(operationId: string): BackupCleanupOperation {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId)) {
-            throw new TypeError('Backup cleanup operation identity is invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const cleanup = this.readBackupCleanupOperationRow();
-            if (!cleanup || cleanup.operation_id !== operationId || cleanup.phase === 'planned') {
-                throw new Error('Backup cleanup operation is not quarantined');
-            }
-            if (cleanup.phase === 'quarantined') {
-                this.database.prepare(`
-                    UPDATE backup_cleanup_operations
-                    SET phase = 'deleting', operation_version = 2
-                    WHERE singleton = 1
-                `).run();
-            }
-            const updated = this.readBackupCleanupOperationRow();
-            this.database.exec('COMMIT');
-            return backupCleanupOperationFromRow(updated!);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return markBackupCleanupDeletingUnit(this.storeContext, operationId);
     }
 
-    /**
-     * Forgets one physically deleted quarantined snapshot and its succeeded operation atomically.
-     * @param {string} operationId - Persisted cleanup operation UUID.
-     * @return {void}
-     */
     public completeBackupCleanup(operationId: string): void {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUuid(operationId)) {
-            throw new TypeError('Backup cleanup operation identity is invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const cleanup = this.readBackupCleanupOperationRow();
-            if (!cleanup) {
-                this.database.exec('COMMIT');
-                return;
-            }
-            if (cleanup.operation_id !== operationId || cleanup.phase !== 'deleting') {
-                throw new Error('Backup cleanup operation is not ready to complete');
-            }
-            const snapshotStatement = this.database.prepare(`
-                SELECT snapshot.operation_id, count(newer.snapshot_id) AS newer_snapshot_count
-                FROM backup_snapshots AS snapshot
-                LEFT JOIN backup_snapshots AS newer
-                    ON newer.backup_set_id = snapshot.backup_set_id
-                    AND newer.backup_sequence > snapshot.backup_sequence
-                WHERE snapshot.snapshot_id = ?
-                    AND snapshot.backup_set_id = ?
-                    AND snapshot.backup_sequence = ?
-                    AND snapshot.root_digest = ?
-                GROUP BY snapshot.operation_id
-            `);
-            snapshotStatement.setReadBigInts(true);
-            const snapshot = snapshotStatement.get(
-                cleanup.snapshot_id,
-                cleanup.backup_set_id,
-                cleanup.backup_sequence,
-                cleanup.root_digest,
-            ) as {operation_id: string; newer_snapshot_count: bigint} | undefined;
-            if (!snapshot || snapshot.newer_snapshot_count < 2n) {
-                throw new Error('Backup cleanup would violate retention');
-            }
-            this.database.prepare('DELETE FROM backup_snapshots WHERE snapshot_id = ?')
-                .run(cleanup.snapshot_id);
-            this.database.prepare('DELETE FROM backup_operations WHERE operation_id = ?')
-                .run(snapshot.operation_id);
-            this.database.prepare('DELETE FROM backup_cleanup_operations WHERE singleton = 1')
-                .run();
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
+        return completeBackupCleanupUnit(this.storeContext, operationId);
     }
+
+    public readDataProtectionProjection(): DataProtectionProjection {
+        return readDataProtectionProjectionUnit(this.storeContext);
+    }
+
+    public readBackupConfigurationForProtection(): BackupConfigurationForProtection | null {
+        return readBackupConfigurationForProtectionUnit(this.storeContext);
+    }
+
+    public readBackupConfigurationForCommand(commandId: string): StoredBackupDestination | null {
+        return readBackupConfigurationForCommandUnit(this.storeContext, commandId);
+    }
+
+    public readRestoreSessions(): readonly StoredRestoreSession[] {
+        return readRestoreSessionsUnit(this.storeContext);
+    }
+
+    public readRestoreCommandReceipt(commandId: string): StoredRestoreCommandReceipt | null {
+        return readRestoreCommandReceiptUnit(this.storeContext, commandId);
+    }
+
+    public readRestoreCompletionReceipt(operationId: string): RestoreCompletionReceipt | null {
+        return readRestoreCompletionReceiptUnit(this.storeContext, operationId);
+    }
+
+    public recordRestoreCompletionReceipt(
+        input: RestoreCompletionReceiptInput,
+    ): RestoreCompletionReceipt {
+        return recordRestoreCompletionReceiptUnit(this.storeContext, input);
+    }
+
+    public createRestoreSession(
+        session: StoredRestoreSession,
+        receipt: StoredRestoreCommandReceipt,
+    ): void {
+        return createRestoreSessionUnit(this.storeContext, session, receipt);
+    }
+
+    public advanceRestoreSession(
+        session: StoredRestoreSession,
+        expectedVersion: string,
+        receipt: StoredRestoreCommandReceipt,
+    ): void {
+        return advanceRestoreSessionUnit(this.storeContext, session, expectedVersion, receipt);
+    }
+
+    public cancelRestoreSession(
+        session: StoredRestoreSession,
+        expectedVersion: string,
+        receipt: StoredRestoreCommandReceipt,
+    ): void {
+        return cancelRestoreSessionUnit(this.storeContext, session, expectedVersion, receipt);
+    }
+
+    public inspectRestoreCandidateDatabase(candidatePath: string): RestoreDatabaseFacts {
+        return inspectRestoreCandidateDatabaseUnit(this.storeContext, candidatePath);
+    }
+
+    public prepareRestoreCandidateDatabaseCopy(
+        sourcePath: string,
+        destinationPath: string,
+    ): PreparedRestoreDatabaseFacts {
+        return prepareRestoreCandidateDatabaseCopyUnit(this.storeContext, sourcePath, destinationPath);
+    }
+
+    public async writeRestoreSafetyDatabaseCopy(
+        destinationPath: string,
+        expectedRevision: string,
+    ): Promise<BackupDatabaseFacts> {
+        return writeRestoreSafetyDatabaseCopyUnit(this.storeContext, destinationPath, expectedRevision);
+    }
+
+    public validateRestoreSafetyDatabaseCopy(
+        copyPath: string,
+        minimumRevision: string,
+    ): BackupDatabaseFacts {
+        return validateRestoreSafetyDatabaseCopyUnit(this.storeContext, copyPath, minimumRevision);
+    }
+
+    public async writeBackupDatabaseCopy(
+        destinationPath: string,
+        targetRevision: string,
+    ): Promise<BackupDatabaseFacts> {
+        return writeBackupDatabaseCopyUnit(this.storeContext, destinationPath, targetRevision);
+    }
+
+    public validateBackupDatabaseCopy(
+        copyPath: string,
+        targetRevision: string,
+    ): BackupDatabaseFacts {
+        return validateBackupDatabaseCopyUnit(this.storeContext, copyPath, targetRevision);
+    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     /**
      * Requires a writable, nonterminal DATA connection for protection bookkeeping.
@@ -1449,962 +1038,28 @@ class SqliteDataStoreImplementation {
         }
     }
 
-    /**
-     * Reads both protection watermarks inside the caller-owned DATA transaction.
-     * @return {object} Authoritative needed and succeeded revisions.
-     */
-    private readProtectionWatermarksInsideTransaction(): {
-        backup_needed_through: bigint;
-        backup_succeeded_through: bigint;
-    } {
-        const statement = this.database.prepare(`
-            SELECT backup_needed_through, backup_succeeded_through
-            FROM protection_watermarks
-            WHERE singleton = 1
-        `);
-        statement.setReadBigInts(true);
-        return statement.get() as {
-            backup_needed_through: bigint;
-            backup_succeeded_through: bigint;
-        };
-    }
-
-    /**
-     * Reads the latest operation matching one internal fixed SQL predicate.
-     * @param {string} predicate - DATA-owned SQL predicate fragment.
-     * @param {...Array<string | bigint>} parameters - Bound predicate parameters.
-     * @return {BackupOperationRow | undefined} Matching row when present.
-     */
-    private readBackupOperationRow(
-        predicate: string,
-        ...parameters: Array<string | bigint>
-    ): BackupOperationRow | undefined {
-        const statement = this.database.prepare(`
-            SELECT
-                operation_id,
-                backup_set_id,
-                backup_sequence,
-                snapshot_id,
-                target_revision,
-                actual_revision,
-                staging_directory_name,
-                created_at,
-                phase,
-                operation_version
-            FROM backup_operations
-            WHERE ${predicate}
-            ORDER BY backup_sequence DESC
-            LIMIT 1
-        `);
-        statement.setReadBigInts(true);
-        return statement.get(...parameters) as BackupOperationRow | undefined;
-    }
-
-    /**
-     * Reads the singleton cleanup journal row inside or outside a caller-owned transaction.
-     * @return {BackupCleanupOperationRow | undefined} Active cleanup storage row.
-     */
-    private readBackupCleanupOperationRow(): BackupCleanupOperationRow | undefined {
-        const statement = this.database.prepare(`
-            SELECT
-                operation_id,
-                backup_set_id,
-                snapshot_id,
-                backup_sequence,
-                root_digest,
-                snapshot_directory_name,
-                quarantine_directory_name,
-                phase,
-                operation_version
-            FROM backup_cleanup_operations
-            WHERE singleton = 1
-        `);
-        statement.setReadBigInts(true);
-        return statement.get() as BackupCleanupOperationRow | undefined;
-    }
-
-    /**
-     * Requires one persisted operation identity.
-     * @param {string} operationId - Canonical operation UUID.
-     * @return {BackupOperationRow} Matching typed storage row.
-     */
-    private requireBackupOperationRow(operationId: string): BackupOperationRow {
-        const operation = this.readBackupOperationRow('operation_id = ?', operationId);
-        if (!operation) {
-            throw new Error('Backup operation does not exist');
-        }
-        return operation;
-    }
-
-    /**
-     * Applies one synchronous phase mutation inside an immediate transaction.
-     * @param {string} operationId - Canonical operation UUID.
-     * @param {function(BackupOperationRow): boolean} mutation - Validated row mutation.
-     * @return {BackupOperation} Re-read immutable operation facts.
-     */
-    private mutateBackupOperation(
-        operationId: string,
-        mutation: (operation: BackupOperationRow) => boolean,
-    ): BackupOperation {
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const operation = this.requireBackupOperationRow(operationId);
-            mutation(operation);
-            const updated = this.requireBackupOperationRow(operationId);
-            this.database.exec('COMMIT');
-            return backupOperationFromRow(updated);
-        }
-        catch (error) {
-            if (this.database.isTransaction) {
-                this.database.exec('ROLLBACK');
-            }
-            throw error;
-        }
-    }
-
-    /**
-     * Reads one immutable success record for idempotent replay comparison.
-     * @param {string} operationId - Canonical succeeded operation UUID.
-     * @return {SuccessfulBackupSnapshot} Registered snapshot facts.
-     */
-    private readSuccessfulBackupSnapshot(operationId: string): SuccessfulBackupSnapshot {
-        const statement = this.database.prepare(`
-            SELECT
-                snapshot_id,
-                backup_set_id,
-                backup_sequence,
-                actual_revision,
-                root_digest,
-                succeeded_at
-            FROM backup_snapshots
-            WHERE operation_id = ?
-        `);
-        statement.setReadBigInts(true);
-        const row = statement.get(operationId) as {
-            snapshot_id: string;
-            backup_set_id: string;
-            backup_sequence: bigint;
-            actual_revision: bigint;
-            root_digest: string;
-            succeeded_at: string;
-        } | undefined;
-        if (!row) {
-            throw new Error('Succeeded backup operation has no snapshot record');
-        }
-        return Object.freeze({
-            snapshotId: row.snapshot_id,
-            backupSetId: row.backup_set_id,
-            backupSequence: row.backup_sequence.toString(),
-            actualRevision: row.actual_revision.toString(),
-            rootDigest: row.root_digest,
-            succeededAt: row.succeeded_at,
-        });
-    }
-
-    /**
-     * Reads the path-free PROTECT projection from one authoritative row.
-     * @return {DataProtectionProjection} Legal unconfigured or configured state.
-     */
-    public readDataProtectionProjection(): DataProtectionProjection {
-        this.requireOpen();
-        const statement = this.database.prepare(`
-            SELECT
-                workspace_state.revision,
-                backup_configuration.configuration_version,
-                backup_configuration.backup_set_id,
-                backup_configuration.repository_schema,
-                backup_configuration.destination_display_name,
-                protection_watermarks.backup_needed_through,
-                protection_watermarks.backup_succeeded_through,
-                backup_cleanup_operations.operation_id AS cleanup_operation_id,
-                (
-                    SELECT count(*)
-                    FROM backup_snapshots
-                    WHERE backup_snapshots.backup_set_id = backup_configuration.backup_set_id
-                ) AS registered_snapshot_count
-            FROM workspace_state
-            JOIN backup_configuration
-                ON backup_configuration.singleton = workspace_state.singleton
-            JOIN protection_watermarks
-                ON protection_watermarks.singleton = workspace_state.singleton
-            LEFT JOIN backup_cleanup_operations
-                ON backup_cleanup_operations.singleton = workspace_state.singleton
-            WHERE workspace_state.singleton = 1
-        `);
-        statement.setReadBigInts(true);
-        const row = statement.get() as {
-            revision: bigint;
-            configuration_version: bigint;
-            backup_set_id: string | null;
-            repository_schema: typeof BACKUP_REPOSITORY_SCHEMA | null;
-            destination_display_name: string | null;
-            backup_needed_through: bigint;
-            backup_succeeded_through: bigint;
-            cleanup_operation_id: string | null;
-            registered_snapshot_count: bigint;
-        };
-        if (row.backup_set_id === null) {
-            return Object.freeze({
-                workspaceRevision: row.revision.toString(),
-                protectionEntityVersion: row.configuration_version.toString(),
-                configuration: Object.freeze({kind: 'unconfigured' as const}),
-            });
-        }
-        const snapshots = this.readSuccessfulBackupSnapshots()
-            .slice(-2)
-            .reverse()
-            .map(snapshot => Object.freeze({
-                snapshotId: snapshot.snapshotId,
-                backupSequence: snapshot.backupSequence,
-                actualRevision: snapshot.actualRevision,
-                succeededAt: snapshot.succeededAt,
-                snapshotFormatVersion: '1' as const,
-                integrity: 'verified' as const,
-            }));
-        const latest = snapshots[0];
-        return Object.freeze({
-            workspaceRevision: row.revision.toString(),
-            protectionEntityVersion: row.configuration_version.toString(),
-            configuration: Object.freeze({
-                kind: 'configured' as const,
-                backupSetId: row.backup_set_id,
-                repositorySchema: row.repository_schema!,
-                destinationDisplayName: row.destination_display_name!,
-            }),
-            backup: Object.freeze({
-                state: row.backup_needed_through === row.backup_succeeded_through
-                    ? 'current' as const
-                    : 'pending' as const,
-                neededThrough: row.backup_needed_through.toString(),
-                succeededThrough: row.backup_succeeded_through.toString(),
-                lastSuccess: latest
-                    ? Object.freeze({
-                        snapshotId: latest.snapshotId,
-                        protectedThrough: latest.actualRevision,
-                        succeededAt: latest.succeededAt,
-                    })
-                    : null,
-                recentVerifiedSnapshots: Object.freeze(snapshots),
-                restoreCandidates: Object.freeze([]),
-                cleanup: row.cleanup_operation_id === null
-                    && row.registered_snapshot_count <= 2n
-                    ? 'idle' as const
-                    : 'pending' as const,
-            }),
-        });
-    }
-
-    /**
-     * Reads the path-bearing internal configuration used only by the PROTECT worker.
-     * @return {BackupConfigurationForProtection | null} Current configured BackupSet facts.
-     */
-    public readBackupConfigurationForProtection(): BackupConfigurationForProtection | null {
-        this.requireOpen();
-        const row = this.database.prepare(`
-            SELECT
-                workspace_state.workspace_id,
-                backup_configuration.backup_set_id,
-                backup_configuration.canonical_destination_path,
-                backup_configuration.destination_display_name,
-                backup_configuration.repository_schema
-            FROM workspace_state
-            JOIN backup_configuration
-                ON backup_configuration.singleton = workspace_state.singleton
-            WHERE workspace_state.singleton = 1
-        `).get() as {
-            workspace_id: string;
-            backup_set_id: string | null;
-            canonical_destination_path: string | null;
-            destination_display_name: string | null;
-            repository_schema: typeof BACKUP_REPOSITORY_SCHEMA | null;
-        };
-        if (row.backup_set_id === null) {
-            return null;
-        }
-        return Object.freeze({
-            workspaceId: row.workspace_id,
-            backupSetId: row.backup_set_id,
-            canonicalPath: row.canonical_destination_path!,
-            displayName: row.destination_display_name!,
-            repositorySchema: row.repository_schema!,
-        });
-    }
-
-    /**
-     * Reads every typed pre-checkpoint RestoreSession for restart reconstruction.
-     * @return {readonly StoredRestoreSession[]} Sessions ordered by stable identity.
-     */
-    public readRestoreSessions(): readonly StoredRestoreSession[] {
-        this.requireOpen();
-        const statement = this.database.prepare(`
-            SELECT *
-            FROM restore_sessions
-            ORDER BY restore_session_id
-        `);
-        statement.setReadBigInts(true);
-        return Object.freeze((statement.all() as RestoreSessionRow[]).map(restoreSessionFromRow));
-    }
-
-    /**
-     * Reads one durable restore command receipt for exact CommandId replay.
-     * @param {string} commandId - Canonical command identity.
-     * @return {StoredRestoreCommandReceipt | null} Matching receipt or null.
-     */
-    public readRestoreCommandReceipt(commandId: string): StoredRestoreCommandReceipt | null {
-        this.requireOpen();
-        if (!isCanonicalUuid(commandId)) {
-            throw new TypeError('Restore CommandId is invalid');
-        }
-        const row = this.database.prepare(`
-            SELECT
-                command_id,
-                command_kind,
-                payload_digest,
-                restore_session_id,
-                result_session_version
-            FROM restore_command_receipts
-            WHERE command_id = ?
-        `).get(commandId) as {
-            command_id: string;
-            command_kind: 'start' | 'confirm' | 'cancel';
-            payload_digest: Uint8Array;
-            restore_session_id: string;
-            result_session_version: bigint;
-        } | undefined;
-        return row
-            ? Object.freeze({
-                commandId: row.command_id,
-                commandKind: row.command_kind,
-                payloadDigest: Buffer.from(row.payload_digest).toString('hex'),
-                restoreSessionId: row.restore_session_id,
-                resultSessionVersion: row.result_session_version.toString(),
-            })
-            : null;
-    }
-
-    /**
-     * Reads and verifies the typed receipt for one completed Restore activation.
-     * @param {string} operationId - Stable Restore operation identity.
-     * @return {RestoreCompletionReceipt | null} Exact receipt or null.
-     */
-    public readRestoreCompletionReceipt(operationId: string): RestoreCompletionReceipt | null {
-        this.requireOpen();
-        if (!isCanonicalUuid(operationId)) {
-            throw new TypeError('Restore OperationId is invalid');
-        }
-        const row = this.database.prepare(`
-            SELECT *
-            FROM restore_completion_receipts
-            WHERE operation_id = ?
-        `).get(operationId) as RestoreCompletionReceiptRow | undefined;
-        if (!row) {
-            return null;
-        }
-        const receipt = restoreCompletionReceiptFromRow(row);
-        const {receiptDigest, ...input} = receipt;
-        const observedDigest = createHash('sha256')
-            .update(canonicalJson(input), 'utf8')
-            .digest('hex');
-        if (observedDigest !== receiptDigest) {
-            throw new Error('Restore completion receipt digest is invalid');
-        }
-        return receipt;
-    }
-
-    /**
-     * Commits a path-free success or rollback receipt against this exact reopened DATA.
-     * @param {RestoreCompletionReceiptInput} input - Reopen-validated completion facts.
-     * @return {RestoreCompletionReceipt} New or idempotently replayed receipt.
-     */
-    public recordRestoreCompletionReceipt(
-        input: RestoreCompletionReceiptInput,
-    ): RestoreCompletionReceipt {
-        this.requireBackupMutationAllowed();
-        requireRestoreCompletionReceiptInput(input);
-        if (input.activeWorkspaceId !== this.workspaceId
-            || input.activeRevision !== this.revision.toString()) {
-            throw new Error('Restore receipt does not match active DATA');
-        }
-        const receiptDigest = createHash('sha256')
-            .update(canonicalJson(input), 'utf8')
-            .digest('hex');
-        const existing = this.readRestoreCompletionReceipt(input.operationId);
-        if (existing) {
-            if (existing.receiptDigest !== receiptDigest) {
-                throw new Error('Restore completion receipt conflict');
-            }
-            return existing;
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const sessionRows = this.database.prepare(`
-                SELECT
-                    restore_session_id,
-                    operation_id,
-                    phase,
-                    session_version,
-                    safety_set_id
-                FROM restore_sessions
-                WHERE restore_session_id = ? OR operation_id = ?
-            `).all(input.restoreSessionId, input.operationId) as Array<{
-                restore_session_id: string;
-                operation_id: string;
-                phase: StoredRestoreSession['phase'];
-                session_version: number;
-                safety_set_id: string | null;
-            }>;
-            if (sessionRows.length > 1
-                || (sessionRows.length === 1
-                    && (sessionRows[0]!.restore_session_id !== input.restoreSessionId
-                        || sessionRows[0]!.operation_id !== input.operationId
-                        || sessionRows[0]!.phase !== 'protection-established'
-                        || sessionRows[0]!.session_version !== 1
-                        || sessionRows[0]!.safety_set_id !== input.protection.safetySetId))) {
-                throw new Error('Restore completion conflicts with pre-checkpoint DATA facts');
-            }
-            if (sessionRows.length === 1) {
-                this.database.prepare(`
-                    DELETE FROM restore_command_receipts
-                    WHERE restore_session_id = ?
-                `).run(input.restoreSessionId);
-                this.database.prepare(`
-                    DELETE FROM restore_sessions
-                    WHERE restore_session_id = ? AND operation_id = ?
-                `).run(input.restoreSessionId, input.operationId);
-            }
-            this.database.prepare(`
-                INSERT INTO restore_completion_receipts (
-                    operation_id,
-                    restore_session_id,
-                    outcome,
-                    session_version,
-                    source_snapshot_id,
-                    source_root_digest,
-                    source_schema_level,
-                    post_migration_schema_level,
-                    active_workspace_id,
-                    active_revision,
-                    library_state,
-                    protection_mode,
-                    safety_set_id,
-                    plan_digest,
-                    precommit_sequence,
-                    precommit_record_digest,
-                    route,
-                    receipt_format_version,
-                    receipt_digest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'absent', 'required', ?, ?, ?, ?, ?, '1', ?)
-            `).run(
-                input.operationId,
-                input.restoreSessionId,
-                input.outcome,
-                BigInt(input.sessionVersion),
-                input.sourceSnapshotId,
-                input.sourceRootDigest,
-                BigInt(input.sourceSchemaLevel),
-                BigInt(input.postMigrationSchemaLevel),
-                input.activeWorkspaceId,
-                BigInt(input.activeRevision),
-                input.protection.safetySetId,
-                input.planDigest,
-                BigInt(input.precommit.sequence),
-                input.precommit.recordDigest,
-                input.route,
-                receiptDigest,
-            );
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            this.rollbackOrRequireReopen();
-            throw error;
-        }
-        const stored = this.readRestoreCompletionReceipt(input.operationId);
-        if (!stored) {
-            throw new Error('Restore completion receipt is missing after commit');
-        }
-        return stored;
-    }
-
-    /**
-     * Atomically stores a previewed RestoreSession and its start receipt.
-     * @param {StoredRestoreSession} session - Complete preview-bound typed facts.
-     * @param {StoredRestoreCommandReceipt} receipt - Matching start receipt.
-     * @return {void}
-     */
-    public createRestoreSession(
-        session: StoredRestoreSession,
-        receipt: StoredRestoreCommandReceipt,
-    ): void {
-        this.requireBackupMutationAllowed();
-        if (session.phase !== 'previewed'
-            || session.sessionVersion !== '0'
-            || receipt.commandKind !== 'start'
-            || receipt.restoreSessionId !== session.restoreSessionId
-            || receipt.resultSessionVersion !== '0'
-            || !/^[0-9a-f]{64}$/.test(receipt.payloadDigest)) {
-            throw new TypeError('RestoreSession start facts are invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            this.database.prepare(`
-                INSERT INTO restore_sessions (
-                    restore_session_id,
-                    operation_id,
-                    candidate_ref,
-                    snapshot_id,
-                    candidate_root_digest,
-                    candidate_database_digest,
-                    source_schema_level,
-                    prepared_schema_level,
-                    candidate_revision,
-                    validation_copy,
-                    current_workspace_id,
-                    current_revision,
-                    current_library_kind,
-                    current_library_root_id,
-                    current_root_generation,
-                    target_binding_version,
-                    term_count,
-                    course_count,
-                    task_series_count,
-                    impact_digest,
-                    binding_digest,
-                    preview_token,
-                    phase,
-                    session_version,
-                    problem_code,
-                    safety_set_id,
-                    safety_protected_revision,
-                    safety_root_digest
-                ) VALUES (
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?
-                )
-            `).run(
-                session.restoreSessionId,
-                session.operationId,
-                session.candidateRef,
-                session.snapshotId,
-                session.candidateRootDigest,
-                session.candidateDatabaseDigest,
-                BigInt(session.sourceSchemaLevel),
-                BigInt(session.preparedSchemaLevel),
-                BigInt(session.candidateRevision),
-                session.validationCopy,
-                session.currentWorkspaceId,
-                BigInt(session.currentRevision),
-                session.currentLibrary.kind,
-                session.currentLibrary.kind === 'present'
-                    ? session.currentLibrary.libraryRootId
-                    : null,
-                session.currentLibrary.kind === 'present'
-                    ? session.currentLibrary.rootGeneration
-                    : null,
-                BigInt(session.targetBindingVersion),
-                BigInt(session.termCount),
-                BigInt(session.courseCount),
-                BigInt(session.taskSeriesCount),
-                session.impactDigest,
-                session.bindingDigest,
-                session.previewToken,
-                session.phase,
-                BigInt(session.sessionVersion),
-                session.problemCode,
-                session.safetySetId,
-                session.safetyProtectedRevision === null
-                    ? null
-                    : BigInt(session.safetyProtectedRevision),
-                session.safetyRootDigest,
-            );
-            insertRestoreCommandReceipt(this.database, receipt);
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            this.rollbackOrRequireReopen();
-            throw error;
-        }
-    }
-
-    /**
-     * Atomically advances one preview and records its exact confirm receipt.
-     * @param {StoredRestoreSession} session - Complete next typed state.
-     * @param {string} expectedVersion - Required current session version.
-     * @param {StoredRestoreCommandReceipt} receipt - Matching confirmation receipt.
-     * @return {void}
-     */
-    public advanceRestoreSession(
-        session: StoredRestoreSession,
-        expectedVersion: string,
-        receipt: StoredRestoreCommandReceipt,
-    ): void {
-        this.requireBackupMutationAllowed();
-        if (expectedVersion !== '0'
-            || session.sessionVersion !== '1'
-            || session.phase === 'previewed'
-            || receipt.commandKind !== 'confirm'
-            || receipt.restoreSessionId !== session.restoreSessionId
-            || receipt.resultSessionVersion !== '1'
-            || !/^[0-9a-f]{64}$/.test(receipt.payloadDigest)) {
-            throw new TypeError('RestoreSession transition facts are invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const result = this.database.prepare(`
-                UPDATE restore_sessions
-                SET
-                    preview_token = ?,
-                    phase = ?,
-                    session_version = ?,
-                    problem_code = ?,
-                    safety_set_id = ?,
-                    safety_protected_revision = ?,
-                    safety_root_digest = ?
-                WHERE restore_session_id = ? AND session_version = ?
-            `).run(
-                session.previewToken,
-                session.phase,
-                BigInt(session.sessionVersion),
-                session.problemCode,
-                session.safetySetId,
-                session.safetyProtectedRevision === null
-                    ? null
-                    : BigInt(session.safetyProtectedRevision),
-                session.safetyRootDigest,
-                session.restoreSessionId,
-                BigInt(expectedVersion),
-            );
-            if (BigInt(result.changes) !== 1n) {
-                throw new Error('RestoreSession version changed');
-            }
-            insertRestoreCommandReceipt(this.database, receipt);
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            this.rollbackOrRequireReopen();
-            throw error;
-        }
-    }
-
-    /**
-     * Atomically cancels one pre-checkpoint RestoreSession and records its command receipt.
-     * @param {StoredRestoreSession} session - Exact cancelled typed state.
-     * @param {string} expectedVersion - Required current session version.
-     * @param {StoredRestoreCommandReceipt} receipt - Matching cancellation receipt.
-     * @return {void}
-     */
-    public cancelRestoreSession(
-        session: StoredRestoreSession,
-        expectedVersion: string,
-        receipt: StoredRestoreCommandReceipt,
-    ): void {
-        this.requireBackupMutationAllowed();
-        if (!isCanonicalUnsignedSqliteInteger(expectedVersion)
-            || (expectedVersion !== '0' && expectedVersion !== '1')
-            || session.sessionVersion !== (BigInt(expectedVersion) + 1n).toString()
-            || session.phase !== 'cancelled'
-            || session.previewToken !== null
-            || session.problemCode !== null
-            || receipt.commandKind !== 'cancel'
-            || receipt.restoreSessionId !== session.restoreSessionId
-            || receipt.resultSessionVersion !== session.sessionVersion
-            || !/^[0-9a-f]{64}$/.test(receipt.payloadDigest)) {
-            throw new TypeError('RestoreSession cancellation facts are invalid');
-        }
-        try {
-            this.database.exec('BEGIN IMMEDIATE');
-            const result = this.database.prepare(`
-                UPDATE restore_sessions
-                SET
-                    preview_token = NULL,
-                    phase = 'cancelled',
-                    session_version = ?,
-                    problem_code = NULL
-                WHERE restore_session_id = ?
-                    AND session_version = ?
-                    AND phase <> 'cancelled'
-            `).run(
-                BigInt(session.sessionVersion),
-                session.restoreSessionId,
-                BigInt(expectedVersion),
-            );
-            if (BigInt(result.changes) !== 1n) {
-                throw new Error('RestoreSession version changed');
-            }
-            insertRestoreCommandReceipt(this.database, receipt);
-            this.database.exec('COMMIT');
-        }
-        catch (error) {
-            this.rollbackOrRequireReopen();
-            throw error;
-        }
-    }
 
 
-    /**
-     * Revalidates one raw snapshot database as a supported restore candidate.
-     * @param {string} candidatePath - Exact immutable snapshot member path.
-     * @return {RestoreDatabaseFacts} Fresh identity, revision, schema, and impact facts.
-     */
-    public inspectRestoreCandidateDatabase(candidatePath: string): RestoreDatabaseFacts {
-        this.requireOpen();
-        if (!isAbsolute(candidatePath) || candidatePath.includes('\0')) {
-            throw new TypeError('Restore candidate database path is invalid');
-        }
-        const candidate = openDatabase(candidatePath, true);
-        try {
-            const identity = readDatabaseIdentity(candidate);
-            const facts = validateSupportedRestoreSchema(candidate, identity.schemaLevel);
-            if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-                || facts === null
-                || facts.workspaceId !== this.workspaceId
-                || facts.revision <= 0n) {
-                throw new Error('Restore candidate database identity is invalid');
-            }
-            return Object.freeze({
-                workspaceId: facts.workspaceId,
-                applicationId: identity.applicationId.toString(),
-                schemaLevel: identity.schemaLevel.toString(),
-                actualRevision: facts.revision.toString(),
-                ...readRestoreImpactCounts(candidate),
-                sourceBackup: readRestoreSourceBackup(candidate),
-            });
-        }
-        finally {
-            candidate.close();
-        }
-    }
 
-    /**
-     * Copies and migrates one verified candidate in an isolated validation directory.
-     * @param {string} sourcePath - Immutable raw snapshot database member.
-     * @param {string} destinationPath - Absent operation-owned validation copy path.
-     * @return {PreparedRestoreDatabaseFacts} Validated prepared copy facts.
-     */
-    public prepareRestoreCandidateDatabaseCopy(
-        sourcePath: string,
-        destinationPath: string,
-    ): PreparedRestoreDatabaseFacts {
-        this.requireOpen();
-        if (!isAbsolute(sourcePath)
-            || sourcePath.includes('\0')
-            || !isAbsolute(destinationPath)
-            || destinationPath.includes('\0')) {
-            throw new TypeError('Restore candidate copy paths are invalid');
-        }
-        const sourceFacts = this.inspectRestoreCandidateDatabase(sourcePath);
-        copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
-        const prepared = openDatabase(destinationPath, false);
-        try {
-            let schemaLevel = Number(sourceFacts.schemaLevel);
-            while (schemaLevel < CURRENT_SCHEMA_LEVEL) {
-                prepared.exec('BEGIN IMMEDIATE');
-                try {
-                    if (schemaLevel === 13) {
-                        validateSchemaLevel13(prepared);
-                        migrateLevel13To14(prepared);
-                        validateSchemaLevel14(prepared);
-                    }
-                    else if (schemaLevel === 14) {
-                        validateSchemaLevel14(prepared);
-                        migrateLevel14To15(prepared);
-                        validateSchemaLevel15(prepared);
-                    }
-                    else if (schemaLevel === 15) {
-                        validateSchemaLevel15(prepared);
-                        migrateLevel15To16(prepared);
-                        validateSchemaLevel16(prepared);
-                    }
-                    else {
-                        throw new Error('Restore candidate schema is unsupported');
-                    }
-                    prepared.exec('COMMIT');
-                    schemaLevel += 1;
-                }
-                catch (error) {
-                    if (prepared.isTransaction) {
-                        prepared.exec('ROLLBACK');
-                    }
-                    throw error;
-                }
-            }
-        }
-        finally {
-            prepared.close();
-        }
-        normalizeBackupDatabaseCopy(destinationPath);
-        const preparedFacts = this.inspectRestoreCandidateDatabase(destinationPath);
-        return Object.freeze({
-            ...preparedFacts,
-            sourceSchemaLevel: sourceFacts.schemaLevel,
-            preparedSchemaLevel: preparedFacts.schemaLevel,
-            validationCopy: sourceFacts.schemaLevel === preparedFacts.schemaLevel
-                ? 'copied'
-                : 'migrated',
-        });
-    }
 
-    /**
-     * Writes and verifies a healthy current DATA member for a RestoreSafetySet.
-     * @param {string} destinationPath - Absent operation-owned safety member path.
-     * @param {string} expectedRevision - Minimum preview-bound current revision.
-     * @return {Promise<BackupDatabaseFacts>} Fresh copied current DATA facts.
-     */
-    public async writeRestoreSafetyDatabaseCopy(
-        destinationPath: string,
-        expectedRevision: string,
-    ): Promise<BackupDatabaseFacts> {
-        this.requireBackupMutationAllowed();
-        if (!isAbsolute(destinationPath)
-            || destinationPath.includes('\0')
-            || !isCanonicalUnsignedSqliteInteger(expectedRevision)) {
-            throw new TypeError('Restore safety database destination is invalid');
-        }
-        await backup(this.database, destinationPath);
-        normalizeBackupDatabaseCopy(destinationPath);
-        return this.validateRestoreSafetyDatabaseCopy(destinationPath, expectedRevision);
-    }
 
-    /**
-     * Revalidates one healthy RestoreSafetySet DATA member against the current schema.
-     * @param {string} copyPath - Exact copied database path.
-     * @param {string} minimumRevision - Minimum revision the copy must cover.
-     * @return {BackupDatabaseFacts} Fresh current DATA facts.
-     */
-    public validateRestoreSafetyDatabaseCopy(
-        copyPath: string,
-        minimumRevision: string,
-    ): BackupDatabaseFacts {
-        this.requireOpen();
-        if (!isAbsolute(copyPath)
-            || copyPath.includes('\0')
-            || !isCanonicalUnsignedSqliteInteger(minimumRevision)) {
-            throw new TypeError('Restore safety database validation input is invalid');
-        }
-        const copied = openDatabase(copyPath, true);
-        try {
-            const identity = readDatabaseIdentity(copied);
-            const facts = validateSupportedRestoreSchema(copied, identity.schemaLevel);
-            if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-                || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL
-                || facts === null
-                || facts.workspaceId !== this.workspaceId
-                || facts.revision < BigInt(minimumRevision)) {
-                throw new Error('Restore safety database does not match current DATA');
-            }
-            return Object.freeze({
-                workspaceId: facts.workspaceId,
-                applicationId: identity.applicationId.toString(),
-                schemaLevel: identity.schemaLevel.toString(),
-                actualRevision: facts.revision.toString(),
-            });
-        }
-        finally {
-            copied.close();
-        }
-    }
 
-    /**
-     * Writes a consistent SQLite backup member and returns facts read from that exact copy.
-     * @param {string} destinationPath - Absent operation-owned temporary file.
-     * @param {string} targetRevision - Durable revision the copy must cover.
-     * @return {Promise<BackupDatabaseFacts>} Validated copied database identity and actual revision.
-     */
-    public async writeBackupDatabaseCopy(
-        destinationPath: string,
-        targetRevision: string,
-    ): Promise<BackupDatabaseFacts> {
-        this.requireBackupMutationAllowed();
-        if (!isAbsolute(destinationPath)
-            || destinationPath.includes('\0')
-            || !isCanonicalUnsignedSqliteInteger(targetRevision)
-            || targetRevision === '0') {
-            throw new TypeError('Backup database destination is invalid');
-        }
-        await backup(this.database, destinationPath);
-        normalizeBackupDatabaseCopy(destinationPath);
-        return this.validateBackupDatabaseCopy(destinationPath, targetRevision);
-    }
 
-    /**
-     * Revalidates one existing backup member without consulting cached checkpoint facts.
-     * @param {string} copyPath - Exact copied database path.
-     * @param {string} targetRevision - Durable revision the copy must cover.
-     * @return {BackupDatabaseFacts} Fresh database identity and actual revision.
-     */
-    public validateBackupDatabaseCopy(
-        copyPath: string,
-        targetRevision: string,
-    ): BackupDatabaseFacts {
-        this.requireOpen();
-        if (!isAbsolute(copyPath)
-            || copyPath.includes('\0')
-            || !isCanonicalUnsignedSqliteInteger(targetRevision)
-            || targetRevision === '0') {
-            throw new TypeError('Backup database validation input is invalid');
-        }
-        const copied = openDatabase(copyPath, true);
-        try {
-            const identity = readDatabaseIdentity(copied);
-            const facts = identity.schemaLevel === 13
-                ? validateSchemaLevel13(copied)
-                : identity.schemaLevel === 14
-                    ? validateSchemaLevel14(copied)
-                    : identity.schemaLevel === 15
-                        ? validateSchemaLevel15(copied)
-                        : identity.schemaLevel === 16
-                            ? validateSchemaLevel16(copied)
-                            : null;
-            if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-                || facts === null
-                || facts.workspaceId !== this.workspaceId
-                || facts.revision < BigInt(targetRevision)) {
-                throw new Error('Backup database copy does not cover the target revision');
-            }
-            return Object.freeze({
-                workspaceId: facts.workspaceId,
-                applicationId: identity.applicationId.toString(),
-                schemaLevel: identity.schemaLevel.toString(),
-                actualRevision: facts.revision.toString(),
-            });
-        }
-        finally {
-            copied.close();
-        }
-    }
 
-    /**
-     * Recovers accepted destination facts for exact CommandId replay inside Workspace.
-     * @param {string} commandId - Durable command identity.
-     * @return {StoredBackupDestination | null} Stored internal destination facts.
-     */
-    public readBackupConfigurationForCommand(commandId: string): StoredBackupDestination | null {
-        this.requireOpen();
-        if (!isCanonicalUuid(commandId)) {
-            throw new TypeError('CommandId must be a canonical UUID');
-        }
-        const row = this.database.prepare(`
-            SELECT
-                backup_set_id,
-                canonical_destination_path,
-                destination_display_name,
-                repository_schema
-            FROM backup_configuration
-            WHERE singleton = 1 AND originating_command_id = ?
-        `).get(commandId) as {
-            backup_set_id: string;
-            canonical_destination_path: string;
-            destination_display_name: string;
-            repository_schema: typeof BACKUP_REPOSITORY_SCHEMA;
-        } | undefined;
-        return row
-            ? Object.freeze({
-                backupSetId: row.backup_set_id,
-                canonicalPath: row.canonical_destination_path,
-                displayName: row.destination_display_name,
-                repositorySchema: row.repository_schema,
-            })
-            : null;
-    }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     public close(): Promise<void> {
         if (this.terminalError) {
