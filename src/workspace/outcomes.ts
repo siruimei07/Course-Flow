@@ -139,34 +139,19 @@ export function restoreProblem(host: WorkspaceHost,
     return problem(host, 'recovery-required', message, requestId);
 }
 
-export function backupConfigurationCommandOutcome(host: WorkspaceHost, 
+type CommittedEffectCode = WorkspaceCommandResult['effects'][number]['code'];
+type CommittedEffectEntityKind = WorkspaceCommandResult['effects'][number]['entity']['kind'];
+
+/**
+ * Wraps one validated committed result in the common Workspace command envelope.
+ * @param {string} requestId - Workspace request correlation identity.
+ * @param {WorkspaceCommandResult} outcome - Exact committed result.
+ * @return {WorkspaceSetupOutcome} Common command-outcome success envelope.
+ */
+function committedEnvelope(host: WorkspaceHost,
     requestId: string,
-    committed: CommandReceiptOutcome,
+    outcome: WorkspaceCommandResult,
 ): WorkspaceSetupOutcome {
-    const effect = committed.effects[0];
-    if (committed.effects.length !== 1
-        || effect.code !== 'protect.backup-destination-configured'
-        || effect.entity.kind !== 'backup-configuration') {
-        return problem(host,
-            'recovery-required',
-            '命令回执与备份配置事实不一致。',
-            requestId,
-            'unknown',
-        );
-    }
-    const outcome: WorkspaceCommandResult = {
-        kind: 'committed',
-        revision: committed.revision,
-        effects: [{
-            code: 'protect.backup-destination-configured',
-            entity: {
-                kind: 'backup-configuration',
-                id: effect.entity.id,
-                version: effect.entity.version,
-            },
-        }],
-        pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
     return {
         ok: true,
         value: {
@@ -180,47 +165,69 @@ export function backupConfigurationCommandOutcome(host: WorkspaceHost,
     };
 }
 
-export function termCommandOutcome(host: WorkspaceHost, 
+/**
+ * Validates one exactly-single durable effect and maps it into the command envelope.
+ * @param {string} requestId - Workspace request correlation identity.
+ * @param {CommandReceiptOutcome} committed - Durable DATA receipt outcome.
+ * @param {readonly CommittedEffectCode[]} allowedCodes - Effect codes the request permits.
+ * @param {CommittedEffectEntityKind} entityKind - Exact fact owner entity kind.
+ * @param {string} mismatchMessage - Domain message when the receipt disagrees.
+ * @param {boolean} includeUndo - Whether the receipt undo capability is surfaced.
+ * @return {WorkspaceSetupOutcome} Validated command outcome or recovery problem.
+ */
+function singleEffectCommandOutcome<Code extends CommittedEffectCode>(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
+    allowedCodes: readonly Code[],
+    entityKind: CommittedEffectEntityKind,
+    mismatchMessage: string,
+    includeUndo = false,
 ): WorkspaceSetupOutcome {
     const effect = committed.effects[0];
+    const code = allowedCodes.find(candidate => candidate === effect.code);
     if (committed.effects.length !== 1
-        || (effect.code !== 'plan.term-created-current'
-            && effect.code !== 'plan.term-end-date-updated'
-            && effect.code !== 'plan.term-restored-current')
-        || effect.entity.kind !== 'term') {
-        return problem(host,
-            'recovery-required',
-            '命令回执与学期事实不一致。',
-            requestId,
-            'unknown',
-        );
+        || code === undefined
+        || effect.entity.kind !== entityKind) {
+        return problem(host, 'recovery-required', mismatchMessage, requestId, 'unknown');
     }
-    const outcome: WorkspaceCommandResult = {
+    return committedEnvelope(host, requestId, {
         kind: 'committed',
         revision: committed.revision,
         effects: [{
-            code: effect.code,
+            code,
             entity: {
-                kind: effect.entity.kind,
+                kind: entityKind,
                 id: effect.entity.id,
                 version: effect.entity.version,
             },
         }],
         pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+        ...(includeUndo && committed.undoCapability !== undefined
+            ? { undoCapability: committed.undoCapability }
+            : {}),
+    });
+}
+
+export function backupConfigurationCommandOutcome(host: WorkspaceHost,
+    requestId: string,
+    committed: CommandReceiptOutcome,
+): WorkspaceSetupOutcome {
+    return singleEffectCommandOutcome(host, requestId, committed,
+        ['protect.backup-destination-configured'],
+        'backup-configuration',
+        '命令回执与备份配置事实不一致。',
+    );
+}
+
+export function termCommandOutcome(host: WorkspaceHost,
+    requestId: string,
+    committed: CommandReceiptOutcome,
+): WorkspaceSetupOutcome {
+    return singleEffectCommandOutcome(host, requestId, committed,
+        ['plan.term-created-current', 'plan.term-end-date-updated', 'plan.term-restored-current'],
+        'term',
+        '命令回执与学期事实不一致。',
+    );
 }
 
 /**
@@ -230,7 +237,7 @@ export function termCommandOutcome(host: WorkspaceHost,
  * @param {string} expectedEffect - Exact lifecycle effect required by the request.
  * @return {WorkspaceSetupOutcome} Validated command outcome or recovery problem.
  */
-export function holidayRangeCommandOutcome(host: WorkspaceHost, 
+export function holidayRangeCommandOutcome(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
     expectedEffect:
@@ -238,41 +245,11 @@ export function holidayRangeCommandOutcome(host: WorkspaceHost,
         | 'plan.holiday-range-updated'
         | 'plan.holiday-range-deleted',
 ): WorkspaceSetupOutcome {
-    const effect = committed.effects[0];
-    if (committed.effects.length !== 1
-        || effect.code !== expectedEffect
-        || effect.entity.kind !== 'holiday-range') {
-        return problem(host,
-            'recovery-required',
-            '命令回执与假期范围事实不一致。',
-            requestId,
-            'unknown',
-        );
-    }
-    const outcome: WorkspaceCommandResult = {
-        kind: 'committed',
-        revision: committed.revision,
-        effects: [{
-            code: effect.code,
-            entity: {
-                kind: 'holiday-range',
-                id: effect.entity.id,
-                version: effect.entity.version,
-            },
-        }],
-        pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+    return singleEffectCommandOutcome(host, requestId, committed,
+        [expectedEffect],
+        'holiday-range',
+        '命令回执与假期范围事实不一致。',
+    );
 }
 
 /**
@@ -282,7 +259,7 @@ export function holidayRangeCommandOutcome(host: WorkspaceHost,
  * @param {string} expectedEffect - Exact Task effect required by the request.
  * @return {WorkspaceSetupOutcome} Validated command outcome or recovery problem.
  */
-export function taskCommandOutcome(host: WorkspaceHost, 
+export function taskCommandOutcome(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
     expectedEffect:
@@ -296,90 +273,28 @@ export function taskCommandOutcome(host: WorkspaceHost,
         | 'plan.task-occurrence-deleted'
         | 'plan.task-occurrence-state-undone',
 ): WorkspaceSetupOutcome {
-    const effect = committed.effects[0];
-    if (committed.effects.length !== 1
-        || effect.code !== expectedEffect
-        || effect.entity.kind !== 'task-series') {
-        return problem(host,
-            'recovery-required',
-            '命令回执与任务事实不一致。',
-            requestId,
-            'unknown',
-        );
-    }
-    const outcome: WorkspaceCommandResult = {
-        kind: 'committed',
-        revision: committed.revision,
-        effects: [{
-            code: effect.code,
-            entity: {
-                kind: 'task-series',
-                id: effect.entity.id,
-                version: effect.entity.version,
-            },
-        }],
-        pendingFollowUps: [committed.pendingFollowUps[0]],
-        ...(committed.undoCapability === undefined
-            ? {}
-            : { undoCapability: committed.undoCapability }),
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+    return singleEffectCommandOutcome(host, requestId, committed,
+        [expectedEffect],
+        'task-series',
+        '命令回执与任务事实不一致。',
+        true,
+    );
 }
 
-export function singleCreationCommandOutcome(host: WorkspaceHost, 
+export function singleCreationCommandOutcome(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
     expectedEffect: 'plan.course-created' | 'plan.meeting-series-created',
     expectedEntityKind: 'course' | 'meeting-series',
 ): WorkspaceSetupOutcome {
-    const effect = committed.effects[0];
-    if (committed.effects.length !== 1
-        || effect.code !== expectedEffect
-        || effect.entity.kind !== expectedEntityKind) {
-        return problem(host,
-            'recovery-required',
-            '命令回执与课程或课节事实不一致。',
-            requestId,
-            'unknown',
-        );
-    }
-    const outcome: WorkspaceCommandResult = {
-        kind: 'committed',
-        revision: committed.revision,
-        effects: [{
-            code: expectedEffect,
-            entity: {
-                kind: expectedEntityKind,
-                id: effect.entity.id,
-                version: effect.entity.version,
-            },
-        }],
-        pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+    return singleEffectCommandOutcome(host, requestId, committed,
+        [expectedEffect],
+        expectedEntityKind,
+        '命令回执与课程或课节事实不一致。',
+    );
 }
 
-export function courseCommandOutcome(host: WorkspaceHost, 
+export function courseCommandOutcome(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
 ): WorkspaceSetupOutcome {
@@ -397,7 +312,7 @@ export function courseCommandOutcome(host: WorkspaceHost,
             'unknown',
         );
     }
-    const outcome: WorkspaceCommandResult = {
+    return committedEnvelope(host, requestId, {
         kind: 'committed',
         revision: committed.revision,
         effects: [
@@ -419,18 +334,7 @@ export function courseCommandOutcome(host: WorkspaceHost,
             },
         ],
         pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+    });
 }
 
 /**
@@ -440,44 +344,14 @@ export function courseCommandOutcome(host: WorkspaceHost,
  * @param {'plan.meeting-occurrence-changed' | 'plan.meeting-occurrence-cancelled'} expectedEffect - Intent effect.
  * @return {WorkspaceSetupOutcome} Exact Workspace command outcome or recovery problem.
  */
-export function meetingOccurrenceCommandOutcome(host: WorkspaceHost, 
+export function meetingOccurrenceCommandOutcome(host: WorkspaceHost,
     requestId: string,
     committed: CommandReceiptOutcome,
     expectedEffect: 'plan.meeting-occurrence-changed' | 'plan.meeting-occurrence-cancelled',
 ): WorkspaceSetupOutcome {
-    const effect = committed.effects[0];
-    if (committed.effects.length !== 1
-        || effect.code !== expectedEffect
-        || effect.entity.kind !== 'meeting-series') {
-        return problem(host,
-            'recovery-required',
-            '命令回执与课节实例事实不一致。',
-            requestId,
-            'unknown',
-        );
-    }
-    const outcome: WorkspaceCommandResult = {
-        kind: 'committed',
-        revision: committed.revision,
-        effects: [{
-            code: effect.code,
-            entity: {
-                kind: 'meeting-series',
-                id: effect.entity.id,
-                version: effect.entity.version,
-            },
-        }],
-        pendingFollowUps: [committed.pendingFollowUps[0]],
-    };
-    return {
-        ok: true,
-        value: {
-            kind: 'workspace.command-outcome',
-            protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
-            appBuildId: host.appBuildId,
-            requestId,
-            workspaceEpoch: host.workspaceEpoch(),
-            outcome,
-        },
-    };
+    return singleEffectCommandOutcome(host, requestId, committed,
+        [expectedEffect],
+        'meeting-series',
+        '命令回执与课节实例事实不一致。',
+    );
 }

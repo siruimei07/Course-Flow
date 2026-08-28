@@ -10,6 +10,7 @@ import test, { after } from 'node:test';
 import type * as TypeScriptAst from 'typescript/unstable/ast' with { 'resolution-mode': 'import' };
 import type * as TypeScriptIs from 'typescript/unstable/ast/is' with { 'resolution-mode': 'import' };
 import type * as TypeScriptSync from 'typescript/unstable/sync' with { 'resolution-mode': 'import' };
+import { WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS } from '../../src/shared/workspace-setup-contract';
 
 const repositoryRoot = process.cwd();
 const sourceRoot = path.join(repositoryRoot, 'src');
@@ -790,9 +791,11 @@ test('Main exits only after rollback confirmation reaches the external build han
 test('Main classifies every known Task occurrence request as a setup validation failure', async () => {
   const state = await compilerState();
   const main = sourceFor(state, mainPath).getText();
-  const validationMarker = /\)\r?\n          \? 'validation'/.exec(main)?.index ?? -1;
 
-  assert.ok(validationMarker >= 0, 'validation branch must remain explicit');
+  assert.ok(
+    main.indexOf("(WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly unknown[]).includes(kind)") >= 0,
+    'validation classification must come from the contract-owned kind list',
+  );
 
   for (const kind of [
     'workspace.task.set-occurrence-status',
@@ -802,17 +805,21 @@ test('Main classifies every known Task occurrence request as a setup validation 
     'workspace.task.undo-occurrence-state',
     'workspace.task-occurrence.preview',
   ]) {
-    assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
-    assert.ok(main.indexOf(`kind === '${kind}'`) < validationMarker, `${kind} must be validation`);
+    assert.ok(
+      (WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly string[]).includes(kind),
+      `${kind} must be validation`,
+    );
   }
 });
 
 test('Main classifies every known migration request as a setup validation failure', async () => {
   const state = await compilerState();
   const main = sourceFor(state, mainPath).getText();
-  const validationMarker = /\)\r?\n          \? 'validation'/.exec(main)?.index ?? -1;
 
-  assert.ok(validationMarker >= 0, 'validation branch must remain explicit');
+  assert.ok(
+    main.indexOf("(WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly unknown[]).includes(kind)") >= 0,
+    'validation classification must come from the contract-owned kind list',
+  );
 
   for (const kind of [
     'workspace.application-build.query',
@@ -824,8 +831,10 @@ test('Main classifies every known migration request as a setup validation failur
     'workspace.migration-rollback.cancel',
     'workspace.migration-rollback.continue',
   ]) {
-    assert.ok(main.indexOf(`kind === '${kind}'`) >= 0, `${kind} must be recognized`);
-    assert.ok(main.indexOf(`kind === '${kind}'`) < validationMarker, `${kind} must be validation`);
+    assert.ok(
+      (WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly string[]).includes(kind),
+      `${kind} must be validation`,
+    );
   }
 });
 

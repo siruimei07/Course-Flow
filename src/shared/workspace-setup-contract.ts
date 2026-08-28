@@ -120,6 +120,41 @@ import {
 
 export const WORKSPACE_SETUP_CHANNEL = 'courseflow:workspace-setup' as const;
 
+/**
+ * Request kinds whose malformed payloads still identify a known Workspace intent.
+ * The Main transport reports these as `validation` instead of `invalid-request`.
+ */
+export const WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS = Object.freeze([
+    'workspace.term.create',
+    'workspace.term.update-end-date',
+    'workspace.term.restore-as-current',
+    'workspace.holiday-range.create',
+    'workspace.holiday-range.update',
+    'workspace.holiday-range.delete',
+    'workspace.course.create-with-first-meeting',
+    'workspace.meeting-series.query',
+    'workspace.task-series.query',
+    'workspace.task.set-occurrence-status',
+    'workspace.task.set-progress',
+    'workspace.task.change-occurrence',
+    'workspace.task.delete-occurrence-or-series',
+    'workspace.task.undo-occurrence-state',
+    'workspace.task-occurrence.preview',
+    'workspace.meeting-occurrence.preview',
+    'workspace.meeting-occurrence.change',
+    'workspace.meeting-occurrence.cancel',
+    'workspace.protection.query',
+    'workspace.protection.configure',
+    'workspace.application-build.query',
+    'workspace.migration-safety.query',
+    'workspace.migration-safety.delete',
+    'workspace.migration-rollback.preview',
+    'workspace.migration-rollback.query',
+    'workspace.migration-rollback.confirm',
+    'workspace.migration-rollback.cancel',
+    'workspace.migration-rollback.continue',
+] as const);
+
 type WorkspaceRequestBase = Readonly<{
     protocolVersion: typeof BOOTSTRAP_PROTOCOL_VERSION;
     appBuildId: string;

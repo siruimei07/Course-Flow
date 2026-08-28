@@ -15,6 +15,7 @@ import {
   isWorkspaceSetupRequest,
   makeSelectedBackupDestinationRequest,
   WORKSPACE_SETUP_CHANNEL,
+  WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS,
   type WorkspaceSetupOutcome,
 } from './shared/workspace-setup-contract';
 import {
@@ -77,36 +78,9 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
     problem: {
       code: isBuildMismatch(value)
         ? 'build-mismatch'
-        : (kind === 'workspace.term.create'
-          || kind === 'workspace.term.update-end-date'
-          || kind === 'workspace.term.restore-as-current'
-          || kind === 'workspace.holiday-range.create'
-          || kind === 'workspace.holiday-range.update'
-          || kind === 'workspace.holiday-range.delete'
-          || kind === 'workspace.course.create-with-first-meeting'
-          || kind === 'workspace.meeting-series.query'
-          || kind === 'workspace.task-series.query'
-          || kind === 'workspace.task.set-occurrence-status'
-          || kind === 'workspace.task.set-progress'
-          || kind === 'workspace.task.change-occurrence'
-          || kind === 'workspace.task.delete-occurrence-or-series'
-          || kind === 'workspace.task.undo-occurrence-state'
-          || kind === 'workspace.task-occurrence.preview'
-          || kind === 'workspace.meeting-occurrence.preview'
-          || kind === 'workspace.meeting-occurrence.change'
-          || kind === 'workspace.meeting-occurrence.cancel'
-          || kind === 'workspace.protection.query'
-          || kind === 'workspace.protection.configure'
-          || kind === 'workspace.application-build.query'
-          || kind === 'workspace.migration-safety.query'
-          || kind === 'workspace.migration-safety.delete'
-          || kind === 'workspace.migration-rollback.preview'
-          || kind === 'workspace.migration-rollback.query'
-          || kind === 'workspace.migration-rollback.confirm'
-          || kind === 'workspace.migration-rollback.cancel'
-          || kind === 'workspace.migration-rollback.continue')
+        : ((WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly unknown[]).includes(kind)
           ? 'validation'
-          : 'invalid-request',
+          : 'invalid-request'),
       message: 'Workspace request is unavailable.',
       requestId: requestIdFrom(value),
       appBuildId: __COURSEFLOW_APP_BUILD_ID__,
