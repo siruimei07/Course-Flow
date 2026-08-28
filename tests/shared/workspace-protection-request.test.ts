@@ -66,7 +66,7 @@ test('the outcome validator accepts legal unconfigured state and rejects leaked 
         ok: true,
         value: {
             kind: 'workspace.data-protection-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: 'query-protection',
             workspaceEpoch: WORKSPACE_EPOCH,

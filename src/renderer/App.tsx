@@ -12,6 +12,7 @@ import {
 } from 'react';
 
 import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
+import type {WorkspaceMode} from '../shared/workspace-lifecycle-contract';
 import type {
     PlanProjection,
     PlanTaskProjection,
@@ -54,10 +55,7 @@ import {
     type TaskOccurrenceAction,
     type TaskOccurrenceActionsState,
 } from './task-occurrence-actions';
-import {
-    initialWorkspaceSurfaceFrom,
-    planProjectionStateFrom,
-} from './workspace-view-state';
+import {planProjectionStateFrom} from './workspace-view-state';
 import { WindowControls, WindowTitlebar } from './WindowControls';
 import {
     TaskActionNotice,
@@ -68,6 +66,17 @@ import {
 type ResolvedSetupState = Extract<SetupState, { projection: SetupProjection }>;
 
 export type WorkspaceLoadResult =
+    | Readonly<{
+        kind: 'welcome';
+    }>
+    | Readonly<{
+        kind: 'maintenance';
+        message: string;
+    }>
+    | Readonly<{
+        kind: 'recovery';
+        message: string;
+    }>
     | Readonly<{
         kind: 'problem';
         message: string;
@@ -86,6 +95,8 @@ export type WorkspaceLoadResult =
         buildStatus: ApplicationBuildStatus | null;
         migrationSafetyCopy: MigrationSafetyCopyProjection;
         migrationProblem: string | null;
+        route: 'setup' | 'today';
+        workspaceMode: Extract<WorkspaceMode, 'ready' | 'limited' | 'read-only'>;
     }>;
 
 type AppState = Readonly<{ kind: 'loading' }> | WorkspaceLoadResult;
@@ -722,7 +733,11 @@ export async function loadWorkspace(
         if (!bootstrap.ok) {
             return { kind: 'problem', message: bootstrap.problem.message };
         }
-        if (bootstrap.value.workspaceData.kind === 'recovery') {
+        const lifecycle = bootstrap.value.workspaceLifecycle;
+        if (lifecycle.route === 'welcome') {
+            return {kind: 'welcome'};
+        }
+        if (lifecycle.route === 'maintenance' || lifecycle.route === 'recovery') {
             const migrationRollbackSessionId = migrationRollbackSessionIdFrom(
                 bootstrap.value.workspaceData,
             );
@@ -730,15 +745,20 @@ export async function loadWorkspace(
                 return loadMigrationMaintenance(bridge, migrationRollbackSessionId);
             }
             return {
-                kind: 'problem',
-                message: '本地数据需要恢复，当前无法打开工作区。',
+                kind: lifecycle.route,
+                message: lifecycle.route === 'maintenance'
+                    ? '本地工作区正在完成已确认的维护操作；普通读写和备份暂时关闭。'
+                    : '本地工作区需要根据当前证据恢复；不会自动执行继续、回滚或取消。',
             };
         }
-        if (bootstrap.value.workspaceData.kind === 'absent') {
-            const initialized = await bridge.initialize();
-            if (!initialized.ok) {
-                return { kind: 'problem', message: initialized.problem.message };
-            }
+        if (bootstrap.value.workspaceData.kind === 'absent'
+            || bootstrap.value.workspaceData.kind === 'recovery'
+            || lifecycle.mode === 'maintenance'
+            || lifecycle.mode === 'recovery') {
+            return {
+                kind: 'recovery',
+                message: 'Workspace 启动状态不一致，已停止普通工作区查询。',
+            };
         }
 
         const [setupOutcome, migrationProtection] = await Promise.all([
@@ -758,6 +778,8 @@ export async function loadWorkspace(
             setup: setupState,
             ...await loadPlan(bridge, setupState.projection),
             ...migrationProtection,
+            route: lifecycle.route,
+            workspaceMode: lifecycle.mode,
         };
     }
     catch {
@@ -766,6 +788,31 @@ export async function loadWorkspace(
             message: '无法连接本地 Workspace，请重试。',
         };
     }
+}
+
+/**
+ * Presents the explicit first-run boundary without creating DATA on observation.
+ * @param {{onStart(): void}} props Explicit local initialization action.
+ * @return {ReactElement} Accessible welcome surface.
+ */
+export function WelcomeSurface({onStart}: Readonly<{onStart(): void}>): ReactElement {
+    return (
+        <main className="startup-surface">
+            <section
+                aria-labelledby="workspace-welcome-title"
+                className="status-card"
+            >
+                <p className="eyebrow">CourseFlow</p>
+                <h1 id="workspace-welcome-title">欢迎使用 CourseFlow</h1>
+                <p>课程与任务数据只保存在这台设备上；开始后可随时继续未完成的设置。</p>
+                <button
+                    className="primary-action"
+                    onClick={onStart}
+                    type="button"
+                >开始新的本地工作区</button>
+            </section>
+        </main>
+    );
 }
 
 /**
@@ -815,12 +862,25 @@ export function App(): ReactElement {
             setState(result);
             if (result.kind === 'ready') {
                 setActivePage('today');
-                setSetupOpen(initialWorkspaceSurfaceFrom(result.setup.projection) === 'setup');
+                setSetupOpen(result.route === 'setup');
             }
         });
     }, []);
 
     useEffect(reload, [reload]);
+
+    const startNewWorkspace = (): void => {
+        setState({kind: 'loading'});
+        void window.courseFlow.initialize().then(outcome => {
+            if (!outcome.ok) {
+                setState({kind: 'problem', message: outcome.problem.message});
+                return;
+            }
+            reload();
+        }).catch(() => {
+            setState({kind: 'problem', message: '无法创建本地工作区，请重试。'});
+        });
+    };
 
     const undoExpiresAt = taskActionState?.commandState.undoToast?.expiresAt ?? null;
     const undoPausedAt = taskActionState?.commandState.undoToast?.pausedAt ?? null;
@@ -1254,6 +1314,41 @@ export function App(): ReactElement {
                     problem={migrationActionProblem ?? state.problem}
                     session={state.session}
                 />
+            </div>
+        );
+    }
+
+    if (state.kind === 'welcome') {
+        return (
+            <div className="startup-frame">
+                <WindowTitlebar />
+                <WelcomeSurface onStart={startNewWorkspace} />
+            </div>
+        );
+    }
+
+    if (state.kind === 'maintenance' || state.kind === 'recovery') {
+        const recovery = state.kind === 'recovery';
+        return (
+            <div className="startup-frame">
+                <WindowTitlebar />
+                <main className="startup-surface">
+                    <section
+                        aria-labelledby="workspace-lifecycle-title"
+                        className={`status-card${recovery ? ' status-card--problem' : ''}`}
+                    >
+                        <p className="eyebrow">{recovery ? 'Recovery' : 'Maintenance'}</p>
+                        <h1 id="workspace-lifecycle-title">
+                            {recovery ? '需要恢复本地工作区' : '正在维护本地工作区'}
+                        </h1>
+                        <p role={recovery ? 'alert' : 'status'}>{state.message}</p>
+                        <button
+                            className="primary-action"
+                            onClick={reload}
+                            type="button"
+                        >重新检查</button>
+                    </section>
+                </main>
             </div>
         );
     }

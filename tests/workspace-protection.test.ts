@@ -84,6 +84,8 @@ test('A-DATA-002/TEST-PROTECT-001: unconfigured, configure, replay, and restart 
         || initialized.value.workspaceData.kind !== 'ready') {
         throw new Error('Expected initialized Workspace');
     }
+    const routed = await bootstrap(application);
+    assert.equal(routed.workspaceLifecycle.route, 'setup');
     const workspaceId = initialized.value.workspaceData.workspaceId;
 
     const before = await application.handle(makeDataProtectionQueryRequest(
@@ -204,6 +206,8 @@ test('TEST-DATA-004/FLOW-04: a formal commit wakes backup asynchronously', async
         || initialized.value.workspaceData.kind !== 'ready') {
         throw new Error('Expected initialized Workspace');
     }
+    const routed = await bootstrap(application);
+    assert.equal(routed.workspaceLifecycle.route, 'setup');
     const configured = await application.handle(makeSelectedBackupDestinationRequest(
         makeConfigureBackupDestinationRequest(
             'configure-durable-backup',
@@ -255,6 +259,8 @@ test('FLOW-04: an asynchronous backup failure never rolls back the local commit'
         || initialized.value.workspaceData.kind !== 'ready') {
         throw new Error('Expected initialized Workspace');
     }
+    const routed = await bootstrap(application);
+    assert.equal(routed.workspaceLifecycle.route, 'setup');
     const configured = await application.handle(makeSelectedBackupDestinationRequest(
         makeConfigureBackupDestinationRequest(
             'configure-failed-backup',
@@ -266,6 +272,16 @@ test('FLOW-04: an asynchronous backup failure never rolls back the local commit'
     ));
     assert.equal(configured.ok, true);
     await application.waitForDurableBackups();
+    const failedLifecycle = await bootstrap(application);
+    assert.equal(failedLifecycle.workspaceLifecycle.mode, 'limited');
+    assert.equal(failedLifecycle.workspaceLifecycle.moduleHealth['MOD-PROTECT'], 'degraded');
+    assert.equal(failedLifecycle.workspaceLifecycle.capabilities['protect.backup'], 'recovering');
+    assert.equal(
+        failedLifecycle.workspaceLifecycle.operations.find(
+            operation => operation.kind === 'backup',
+        )?.state,
+        'recovery-required',
+    );
     const projection = await application.handle(makeDataProtectionQueryRequest(
         'query-after-failed-backup',
         APP_BUILD_ID,
@@ -283,6 +299,7 @@ test('FLOW-04: an asynchronous backup failure never rolls back the local commit'
         dataSlotsRoot,
         APP_BUILD_ID,
     ) as BackupAwareWorkspaceApplication;
+    await bootstrap(restarted);
     await restarted.waitForDurableBackups();
     assert.equal(readdirSync(path.join(
         destination,

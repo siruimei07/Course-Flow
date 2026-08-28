@@ -165,7 +165,7 @@ function setupOutcome(projection: SetupProjection): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.setup-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: 'development:1234567890abcdef1234567890abcdef12345678',
             requestId: 'renderer-state-request',
             workspaceEpoch: '66666666-6666-4666-8666-666666666666',
@@ -205,7 +205,7 @@ function planOutcome(projection: PlanProjection): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.plan-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: 'development:1234567890abcdef1234567890abcdef12345678',
             requestId: 'renderer-state-request',
             workspaceEpoch: '66666666-6666-4666-8666-666666666666',

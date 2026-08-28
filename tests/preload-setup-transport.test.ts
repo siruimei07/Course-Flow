@@ -31,6 +31,7 @@ import type {
     RestoreSessionActionCommand,
     StartRestoreSessionCommand,
 } from '../src/shared/workspace-protection-contract';
+import {readyLifecycle} from './shared/workspace-lifecycle-fixture';
 
 const APP_BUILD_ID = 'development:1234567890abcdef1234567890abcdef12345678';
 const WORKSPACE_EPOCH = '11111111-1111-4111-8111-111111111111';
@@ -157,7 +158,7 @@ function readyOutcome(requestId: string): BootstrapOutcome {
     return {
         ok: true,
         value: {
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId,
             workspaceProcess: 'ready',
@@ -169,6 +170,12 @@ function readyOutcome(requestId: string): BootstrapOutcome {
                 workspaceId: WORKSPACE_ID,
                 schemaLevel: 16,
                 revision: '0',
+            },
+            workspaceLifecycle: {
+                ...readyLifecycle,
+                workspaceRevision: '0',
+                operations: [],
+                pendingFollowUps: [],
             },
         },
     };
@@ -340,7 +347,7 @@ test('preload sends path-free protection and restore requests on the bounded cha
                 ok: true,
                 value: {
                     kind: 'workspace.data-protection-projection',
-                    protocolVersion: 2,
+                    protocolVersion: 3,
                     appBuildId: APP_BUILD_ID,
                     requestId: request.requestId,
                     workspaceEpoch: WORKSPACE_EPOCH,

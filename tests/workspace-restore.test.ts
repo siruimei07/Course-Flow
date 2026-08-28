@@ -129,6 +129,8 @@ async function prepareProtectedRestore(
         || initialized.value.workspaceData.kind !== 'ready') {
         throw new Error('Expected initialized Workspace');
     }
+    const initializedBootstrap = await bootstrap(application);
+    assert.equal(initializedBootstrap.workspaceLifecycle.route, 'setup');
     const configureCommand: ConfigureBackupDestinationCommand = {
         commandId: CONFIGURE_COMMAND_ID,
         followUpId: CONFIGURE_FOLLOW_UP_ID,
@@ -226,6 +228,14 @@ test('TEST-WORKSPACE-002/TEST-PROTECT-004: restore remains path-free across Work
     assert.equal(started.value.session.impact.automaticMerge, false);
     assert.equal(confirmed.value.session.phase, 'protection-established');
     assert.equal(confirmed.value.session.recoverability.safetySet.state, 'verified');
+    const maintenance = await bootstrap(application);
+    assert.equal(maintenance.workspaceLifecycle.mode, 'maintenance');
+    assert.equal(maintenance.workspaceLifecycle.route, 'maintenance');
+    assert.equal(
+        maintenance.workspaceLifecycle.operations.find(operation => operation.kind === 'restore')?.state,
+        'accepted',
+    );
+    assert.equal(maintenance.workspaceLifecycle.capabilities['protect.backup'], 'unavailable');
     const blockedOrdinary = await application.handle(contract().makeInitializeWorkspaceRequest(
         'blocked-during-restore',
         APP_BUILD_ID,
@@ -304,6 +314,12 @@ test('FLOW-05: armed recovery blocks ordinary open until explicit rollback reope
         'restore-activation-pending',
     );
     assert.deepEqual(recovery.workspaceData.problem.allowedActions, ['resume', 'rollback']);
+    assert.equal(recovery.workspaceLifecycle.mode, 'recovery');
+    assert.equal(recovery.workspaceLifecycle.route, 'recovery');
+    assert.equal(
+        recovery.workspaceLifecycle.operations.find(operation => operation.kind === 'restore')?.state,
+        'recovery-required',
+    );
     const ordinary = await restarted.handle(contract().makeDataProtectionQueryRequest(
         'ordinary-query',
         APP_BUILD_ID,
@@ -339,6 +355,7 @@ test('FLOW-05: armed recovery blocks ordinary open until explicit rollback reope
     fixture.applications.push(terminalRestart);
     const terminalBootstrap = await bootstrap(terminalRestart);
     assert.equal(terminalBootstrap.workspaceData.kind, 'ready');
+    assert.equal(terminalBootstrap.workspaceLifecycle.route, 'setup');
     const terminalQuery = await terminalRestart.handle(contract().makeRestoreSessionQueryRequest(
         'terminal-query',
         APP_BUILD_ID,
@@ -388,6 +405,14 @@ test('FLOW-05: armed recovery blocks ordinary open until explicit rollback reope
     );
     fixture.applications.push(preCheckpointRestart);
     const preCheckpointBootstrap = await bootstrap(preCheckpointRestart);
+    assert.equal(preCheckpointBootstrap.workspaceLifecycle.mode, 'ready');
+    assert.equal(preCheckpointBootstrap.workspaceLifecycle.route, 'setup');
+    assert.equal(
+        preCheckpointBootstrap.workspaceLifecycle.operations.find(
+            operation => operation.kind === 'restore',
+        )?.state,
+        'waiting-decision',
+    );
     const ordinaryAfterSecondStart = await preCheckpointRestart.handle(
         contract().makeDataProtectionQueryRequest(
             'second-restore-protection',

@@ -1,6 +1,11 @@
-import { spawn, spawnSync } from 'node:child_process';
+/**
+ * @file Runs the packaged wrapper smoke probe with bounded process-tree cleanup.
+ */
+
+import { spawn } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
 const outRoot = path.resolve('out');
@@ -55,65 +60,162 @@ function remainingGrace(graceDeadline) {
   return Math.max(0, graceDeadline - Date.now());
 }
 
-function findWindowsDescendants(rootPid, rootStartedAt, rootExitedAt, graceDeadline) {
-  const snapshotTimeout = remainingGrace(graceDeadline);
-  if (snapshotTimeout === 0) {
-    throw new Error('termination grace elapsed before descendant discovery');
-  }
+/**
+ * Starts one helper command bounded by the caller's absolute cleanup deadline.
+ *
+ * @param {string} command Executable name.
+ * @param {string[]} args Exact arguments.
+ * @param {object} options Capture and deadline options.
+ * @return {object} Promise and idempotent cancellation handle.
+ */
+function startBoundedCommand(command, args, { captureStderr = false, captureStdout = false, deadline }) {
+  let commandChild;
+  let commandTimer;
+  let finish;
+  let settled = false;
+  const stderr = [];
+  const stdout = [];
 
+  const promise = new Promise((resolve) => {
+    finish = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(commandTimer);
+      resolve({
+        ...result,
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        stdout: Buffer.concat(stdout).toString('utf8'),
+      });
+    };
+
+    const commandTimeout = remainingGrace(deadline);
+    if (commandTimeout === 0) {
+      finish({ kind: 'timed-out' });
+      return;
+    }
+
+    commandChild = spawn(command, args, {
+      stdio: ['ignore', captureStdout ? 'pipe' : 'ignore', captureStderr ? 'pipe' : 'ignore'],
+      windowsHide: true,
+    });
+    commandChild.stdout?.on('data', (chunk) => stdout.push(chunk));
+    commandChild.stderr?.on('data', (chunk) => stderr.push(chunk));
+    commandChild.once('error', (error) => finish({ error, kind: 'error' }));
+    commandChild.once('close', (code, signal) => finish({ code, kind: 'close', signal }));
+    commandTimer = setTimeout(() => {
+      commandChild.kill();
+      commandChild.stdout?.destroy();
+      commandChild.stderr?.destroy();
+      commandChild.unref();
+      finish({ kind: 'timed-out' });
+    }, commandTimeout);
+  });
+
+  return {
+    cancel() {
+      if (settled) {
+        return;
+      }
+      commandChild?.kill();
+      commandChild?.stdout?.destroy();
+      commandChild?.stderr?.destroy();
+      commandChild?.unref();
+      finish({ kind: 'cancelled' });
+    },
+    promise,
+  };
+}
+
+/**
+ * Starts exact Windows descendant discovery while the root PID evidence is fresh.
+ *
+ * @param {number} rootPid Recorded root PID.
+ * @param {number} rootStartedAt Root creation lower bound in epoch milliseconds.
+ * @param {number} rootExitedAt Root exit upper bound in epoch milliseconds.
+ * @param {number} graceDeadline Absolute cleanup deadline.
+ * @return {object} Promise and cancellation handle for the path-free PID snapshot.
+ */
+function startWindowsDescendantDiscovery(rootPid, rootStartedAt, rootExitedAt, graceDeadline) {
   const command = [
-    `Get-CimInstance Win32_Process -Filter "ParentProcessId = ${rootPid}"`,
-    '| ForEach-Object {',
-    '"{0}`t{1:O}" -f $_.ProcessId, $_.CreationDate',
+    '$query = "SELECT ProcessId, CreationDate FROM Win32_Process',
+    `WHERE ParentProcessId = ${rootPid}";`,
+    '$searcher = [System.Management.ManagementObjectSearcher]::new($query);',
+    '$searcher.Get() | ForEach-Object {',
+    '"{0}`t{1:O}" -f $_.ProcessId,',
+    '[System.Management.ManagementDateTimeConverter]::ToDateTime($_.CreationDate)',
     '}',
   ].join(' ');
-  const snapshot = spawnSync(
+  const execution = startBoundedCommand(
     'powershell.exe',
     ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
     {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: snapshotTimeout,
-      windowsHide: true,
+      captureStderr: true,
+      captureStdout: true,
+      deadline: graceDeadline,
     },
   );
-  if (snapshot.error) {
-    throw snapshot.error;
-  }
-  if (snapshot.status !== 0) {
-    throw new Error(`process discovery exited with code ${String(snapshot.status)}`);
-  }
+  return {
+    cancel: execution.cancel,
+    promise: execution.promise.then((result) => {
+      if (result.kind === 'timed-out') {
+        return { failure: 'process discovery timed out' };
+      }
+      if (result.kind === 'cancelled') {
+        return { failure: 'process discovery was cancelled' };
+      }
+      if (result.kind === 'error') {
+        return { failure: result.error.message };
+      }
+      if (result.code !== 0) {
+        const detail = result.stderr.trim();
+        return {
+          failure: `process discovery exited with code ${String(result.code)}${detail ? `: ${detail}` : ''}`,
+        };
+      }
 
-  return snapshot.stdout
-    .split(/\r?\n/)
-    .flatMap((line) => {
-      const [pidText, createdText] = line.trim().split('\t');
-      const pid = Number(pidText);
-      const createdAt = Date.parse(createdText);
-      const belongsToRecordedRoot = createdAt >= rootStartedAt && createdAt <= rootExitedAt;
-      return Number.isInteger(pid) && pid > 0 && belongsToRecordedRoot ? [pid] : [];
-    });
+      const targetPids = result.stdout
+        .split(/\r?\n/)
+        .flatMap((line) => {
+          const [pidText, createdText] = line.trim().split('\t');
+          const pid = Number(pidText);
+          const createdAt = Date.parse(createdText);
+          const belongsToRecordedRoot = createdAt >= rootStartedAt && createdAt <= rootExitedAt;
+          return Number.isInteger(pid) && pid > 0 && belongsToRecordedRoot ? [pid] : [];
+        });
+      return { targetPids: [...new Set(targetPids)] };
+    }),
+  };
 }
 
-function killWindowsProcessTrees(targetPids, graceDeadline) {
+/**
+ * Terminates exact Windows process trees within the shared cleanup deadline.
+ *
+ * @param {number[]} targetPids Verified process identities.
+ * @param {number} graceDeadline Absolute cleanup deadline.
+ * @return {Promise<string | undefined>} Failure reason, or undefined after taskkill success.
+ */
+async function killWindowsProcessTrees(targetPids, graceDeadline) {
   if (targetPids.length === 0) {
     return undefined;
   }
 
-  const killTimeout = remainingGrace(graceDeadline);
-  if (killTimeout === 0) {
-    return 'termination grace elapsed before process tree kill';
-  }
   const pidArguments = targetPids.flatMap((pid) => ['/PID', String(pid)]);
-  const result = spawnSync('taskkill.exe', [...pidArguments, '/T', '/F'], {
-    stdio: 'ignore',
-    timeout: killTimeout,
-    windowsHide: true,
+  const execution = startBoundedCommand('taskkill.exe', [...pidArguments, '/T', '/F'], {
+    deadline: graceDeadline,
   });
-  if (result.error) {
+  const result = await execution.promise;
+  if (result.kind === 'timed-out') {
+    return 'taskkill timed out';
+  }
+  if (result.kind === 'error') {
     return result.error.message;
   }
-  return result.status === 0 ? undefined : `taskkill exited with code ${String(result.status)}`;
+  if (result.kind === 'cancelled') {
+    return 'taskkill was cancelled';
+  }
+  return result.code === 0 ? undefined : `taskkill exited with code ${String(result.code)}`;
 }
 
 function processIsRunning(pid) {
@@ -125,56 +227,103 @@ function processIsRunning(pid) {
   }
 }
 
-function terminateProcessTree(child, graceMilliseconds, rootStartedAt, rootExitedAt) {
+/**
+ * Polls the exact process postcondition without blocking child-process events.
+ *
+ * @param {number[]} targetPids Verified process identities.
+ * @param {number} graceDeadline Absolute cleanup deadline.
+ * @return {Promise<number[]>} Processes still live when the deadline is reached.
+ */
+async function waitForProcessExit(targetPids, graceDeadline) {
+  let remainingPids = targetPids.filter(processIsRunning);
+  while (remainingPids.length > 0) {
+    const waitTimeout = remainingGrace(graceDeadline);
+    if (waitTimeout === 0) {
+      return remainingPids;
+    }
+    await delay(Math.min(20, waitTimeout));
+    remainingPids = targetPids.filter(processIsRunning);
+  }
+  return [];
+}
+
+/**
+ * Awaits one cached discovery handle and preserves its stable failure vocabulary.
+ *
+ * @param {object} discovery Descendant discovery handle.
+ * @return {Promise<object>} Exact target PIDs or a failure reason.
+ */
+async function exitedRootTargets(discovery) {
+  const result = await discovery.promise;
+  return result.failure ? { failure: result.failure } : { targetPids: result.targetPids };
+}
+
+/**
+ * Cleans and verifies descendants after their recorded root has exited.
+ *
+ * @param {object} discovery Cached exact descendant discovery.
+ * @param {number} graceDeadline Absolute cleanup deadline.
+ * @return {Promise<string | undefined>} Failure reason, or undefined after verified cleanup.
+ */
+async function terminateExitedRoot(discovery, graceDeadline) {
+  const targetResult = await exitedRootTargets(discovery);
+  if (targetResult.failure) {
+    return targetResult.failure;
+  }
+  if (targetResult.targetPids.length === 0) {
+    return 'exited process had no verifiable live descendants';
+  }
+
+  const killFailure = await killWindowsProcessTrees(targetResult.targetPids, graceDeadline);
+  if (killFailure) {
+    return killFailure;
+  }
+  const remainingPids = await waitForProcessExit(targetResult.targetPids, graceDeadline);
+  return remainingPids.length > 0
+    ? `exited process descendants remain after taskkill: ${remainingPids.join(', ')}`
+    : undefined;
+}
+
+/**
+ * Terminates the live root tree or its exact exited-root descendants.
+ *
+ * @param {import('node:child_process').ChildProcess} child Spawned root process.
+ * @param {number} graceDeadline Absolute cleanup deadline.
+ * @param {number} rootStartedAt Root creation lower bound.
+ * @param {Function} observeRootExit Returns current exit evidence and cached discovery.
+ * @return {Promise<string | undefined>} Failure reason, or undefined after cleanup.
+ */
+async function terminateProcessTree(child, graceDeadline, rootStartedAt, observeRootExit) {
   if (child.pid === undefined) {
     return 'spawned process did not expose a PID';
   }
 
   if (process.platform === 'win32') {
-    const graceDeadline = Date.now() + graceMilliseconds;
-    let targetPids = [child.pid];
-    if (rootExitedAt !== undefined) {
-      try {
-        targetPids = findWindowsDescendants(child.pid, rootStartedAt, rootExitedAt, graceDeadline);
-      } catch (error) {
-        return error instanceof Error ? error.message : String(error);
-      }
-      if (targetPids.length === 0) {
-        return 'exited process had no verifiable live descendants';
-      }
-      const killFailure = killWindowsProcessTrees(targetPids, graceDeadline);
-      if (killFailure) {
-        return killFailure;
-      }
-
-      const waitState = new Int32Array(new SharedArrayBuffer(4));
-      let remainingPids = targetPids.filter(processIsRunning);
-      while (remainingPids.length > 0) {
-        const waitTimeout = remainingGrace(graceDeadline);
-        if (waitTimeout === 0) {
-          return `exited process descendants remain after taskkill: ${remainingPids.join(', ')}`;
-        }
-        Atomics.wait(waitState, 0, 0, Math.min(20, waitTimeout));
-        remainingPids = targetPids.filter(processIsRunning);
-      }
-      return undefined;
+    let exitEvidence = observeRootExit();
+    if (exitEvidence.discovery) {
+      return terminateExitedRoot(exitEvidence.discovery, graceDeadline);
     }
 
-    const initialFailure = killWindowsProcessTrees(targetPids, graceDeadline);
+    const initialFailure = await killWindowsProcessTrees([child.pid], graceDeadline);
     if (!initialFailure) {
       return undefined;
     }
 
-    // spawnSync blocks libuv's exit callback; Node retains the root handle, so Windows cannot reuse its PID here.
-    try {
-      targetPids = findWindowsDescendants(child.pid, rootStartedAt, Date.now(), graceDeadline);
-    } catch (error) {
-      const fallbackFailure = error instanceof Error ? error.message : String(error);
-      return `${initialFailure}; descendant fallback failed: ${fallbackFailure}`;
+    exitEvidence = observeRootExit();
+    const fallbackDiscovery =
+      exitEvidence.discovery ??
+      startWindowsDescendantDiscovery(child.pid, rootStartedAt, Date.now(), graceDeadline);
+    const targetResult = await exitedRootTargets(fallbackDiscovery);
+    if (targetResult.failure) {
+      return `${initialFailure}; descendant fallback failed: ${targetResult.failure}`;
     }
-    const fallbackFailure = killWindowsProcessTrees(targetPids, graceDeadline);
+    const fallbackFailure = await killWindowsProcessTrees(targetResult.targetPids, graceDeadline);
     if (fallbackFailure) {
       return `${initialFailure}; descendant fallback failed: ${fallbackFailure}`;
+    }
+    const remainingPids = await waitForProcessExit(targetResult.targetPids, graceDeadline);
+    if (remainingPids.length > 0) {
+      return `${initialFailure}; descendants remain after fallback: ${remainingPids.join(', ')}`;
     }
     return processIsRunning(child.pid)
       ? `${initialFailure}; root process remains after exact descendant fallback`
@@ -189,6 +338,14 @@ function terminateProcessTree(child, graceMilliseconds, rootStartedAt, rootExite
   }
 }
 
+/**
+ * Runs one process until close or a timeout with verified process-tree cleanup.
+ *
+ * @param {string} command Executable path.
+ * @param {string[]} args Exact arguments.
+ * @param {object} options Timeout, cleanup grace, and description.
+ * @return {Promise<object>} Closed process result.
+ */
 export function runBoundedProcess(
   command,
   args,
@@ -196,6 +353,8 @@ export function runBoundedProcess(
 ) {
   return new Promise((resolve, reject) => {
     const rootStartedAt = Date.now();
+    const processDeadline = rootStartedAt + processTimeout;
+    const terminationDeadline = processDeadline + terminationGrace;
     const child = spawn(command, args, {
       detached: process.platform !== 'win32',
       shell: false,
@@ -207,6 +366,27 @@ export function runBoundedProcess(
     let settled = false;
     let deadline;
     let rootExitedAt;
+    let rootExitDiscovery;
+
+    const observeRootExit = (observedAt) => {
+      if (rootExitedAt === undefined && observedAt !== undefined) {
+        rootExitedAt = observedAt;
+      }
+      if (
+        process.platform === 'win32' &&
+        rootExitedAt !== undefined &&
+        rootExitDiscovery === undefined &&
+        child.pid !== undefined
+      ) {
+        rootExitDiscovery = startWindowsDescendantDiscovery(
+          child.pid,
+          rootStartedAt,
+          rootExitedAt,
+          terminationDeadline,
+        );
+      }
+      return { discovery: rootExitDiscovery, rootExitedAt };
+    };
 
     const settle = (action) => {
       if (settled) {
@@ -214,6 +394,7 @@ export function runBoundedProcess(
       }
       settled = true;
       clearTimeout(deadline);
+      rootExitDiscovery?.cancel();
       action();
     };
 
@@ -223,27 +404,43 @@ export function runBoundedProcess(
       settle(() => reject(new Error(`could not start ${description}: ${error.message}`)));
     });
     child.once('exit', () => {
-      rootExitedAt = Date.now();
+      observeRootExit(Date.now());
     });
     child.once('close', (code, signal) => {
       settle(() => resolve({ code, signal, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) }));
     });
 
     deadline = setTimeout(() => {
-      const observedExit =
-        rootExitedAt ?? (child.exitCode !== null || child.signalCode !== null ? Date.now() : undefined);
-      const terminationFailure = terminateProcessTree(child, terminationGrace, rootStartedAt, observedExit);
-      const terminationResult = terminationFailure
-        ? `process tree termination failed: ${terminationFailure}`
-        : 'process tree was terminated';
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.unref();
-      settle(() =>
-        reject(
-          new Error(`${description} timed out after ${processTimeout}ms; ${terminationResult}`),
-        ),
-      );
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(deadline);
+      if (child.exitCode !== null || child.signalCode !== null) {
+        observeRootExit(Date.now());
+      }
+
+      void (async () => {
+        let terminationFailure;
+        try {
+          terminationFailure = await terminateProcessTree(
+            child,
+            terminationDeadline,
+            rootStartedAt,
+            observeRootExit,
+          );
+        } catch (error) {
+          terminationFailure = error instanceof Error ? error.message : String(error);
+        }
+        const terminationResult = terminationFailure
+          ? `process tree termination failed: ${terminationFailure}`
+          : 'process tree was terminated';
+        rootExitDiscovery?.cancel();
+        child.stdout.destroy();
+        child.stderr.destroy();
+        child.unref();
+        reject(new Error(`${description} timed out after ${processTimeout}ms; ${terminationResult}`));
+      })();
     }, processTimeout);
   });
 }

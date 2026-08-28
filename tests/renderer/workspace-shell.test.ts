@@ -10,11 +10,12 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { loadWorkspace, WorkspaceShell } from '../../src/renderer/App';
+import { loadWorkspace, WelcomeSurface, WorkspaceShell } from '../../src/renderer/App';
 import type { TaskActionPresentation } from '../../src/renderer/workspace-pages';
 import { BOOTSTRAP_PROTOCOL_VERSION } from '../../src/shared/bootstrap-contract';
 import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-contract';
 import type { SetupProjection } from '../../src/shared/workspace-term-contract';
+import {readyLifecycle} from '../shared/workspace-lifecycle-fixture';
 
 const setup: SetupProjection = {
     workspaceRevision: '0',
@@ -195,7 +196,7 @@ test('Task feedback reserves scroll space while keeping the restored control cen
     );
 });
 
-test('startup initializes absent DATA, resumes Setup, and does not query an inapplicable PLAN', async () => {
+test('FLOW-00 routes absent DATA to welcome without an implicit physical initialization command', async () => {
     const calls: string[] = [];
     const bridge = {
         async query() {
@@ -211,6 +212,13 @@ test('startup initializes absent DATA, resumes Setup, and does not query an inap
                     dataRootClass: 'verified-local',
                     workspaceEpoch: 'workspace-epoch',
                     workspaceData: { kind: 'absent' },
+                    workspaceLifecycle: {
+                        ...readyLifecycle,
+                        route: 'welcome',
+                        workspaceRevision: null,
+                        operations: [],
+                        pendingFollowUps: [],
+                    },
                 },
             };
         },
@@ -229,13 +237,14 @@ test('startup initializes absent DATA, resumes Setup, and does not query an inap
     } as unknown as Window['courseFlow'];
 
     const result = await loadWorkspace(bridge);
-    assert.equal(result.kind, 'ready');
-    if (result.kind === 'ready') {
-        assert.equal(result.setup.kind, 'term');
-        assert.equal(result.plan, null);
-        assert.equal(result.planProblem, null);
-    }
-    assert.deepEqual(calls, ['query', 'initialize', 'querySetup']);
+    assert.equal(result.kind, 'welcome');
+    assert.deepEqual(calls, ['query']);
+});
+
+test('welcome exposes one explicit keyboard-operable local initialization command', () => {
+    const html = renderToStaticMarkup(createElement(WelcomeSurface, {onStart: noop}));
+    assert.match(html, /欢迎使用 CourseFlow/);
+    assert.match(html, /<button[^>]*type="button"[^>]*>开始新的本地工作区<\/button>/);
 });
 
 test('a PLAN failure remains distinct from an empty Setup projection', async () => {
@@ -275,6 +284,23 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
                         schemaLevel: 16,
                         revision: '0',
                     },
+                    workspaceLifecycle: {
+                        ...readyLifecycle,
+                        mode: 'limited',
+                        route: 'setup',
+                        workspaceRevision: '0',
+                        capabilities: {
+                            ...readyLifecycle.capabilities,
+                            'library.read': 'unavailable',
+                            'library.write': 'unavailable',
+                        },
+                        moduleHealth: {
+                            ...readyLifecycle.moduleHealth,
+                            'MOD-LIBRARY': 'unavailable',
+                        },
+                        operations: [],
+                        pendingFollowUps: [],
+                    },
                 },
             };
         },
@@ -289,6 +315,8 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
     const result = await loadWorkspace(bridge);
     assert.equal(result.kind, 'ready');
     if (result.kind === 'ready') {
+        assert.equal(result.workspaceMode, 'limited');
+        assert.equal(result.route, 'setup');
         assert.equal(result.setup.kind, 'course');
         assert.equal(result.plan, null);
         assert.match(result.planProblem ?? '', /无法读取统一计划投影/);
@@ -321,6 +349,14 @@ test('TEST-SHELL-005 routes rollback evidence to the dedicated recovery surface'
                             context: {},
                             details: {reason: 'migration-rollback-evidence'},
                         },
+                    },
+                    workspaceLifecycle: {
+                        ...readyLifecycle,
+                        mode: 'recovery',
+                        route: 'recovery',
+                        workspaceRevision: null,
+                        operations: [],
+                        pendingFollowUps: [],
                     },
                 },
             };
@@ -383,3 +419,48 @@ test('TEST-SHELL-005 routes rollback evidence to the dedicated recovery surface'
         'queryMigrationRollbackStatus:null',
     ]);
 });
+
+for (const route of ['maintenance', 'recovery'] as const) {
+    test(`FLOW-00 consumes the Workspace ${route} route before ordinary queries`, async () => {
+        const calls: string[] = [];
+        const bridge = {
+            async query() {
+                calls.push('query');
+                return {
+                    ok: true,
+                    value: {
+                        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+                        appBuildId: 'test-build',
+                        requestId: 'bootstrap-query',
+                        workspaceProcess: 'ready',
+                        sqliteVersion: '3.53.1',
+                        dataRootClass: 'verified-local',
+                        workspaceEpoch: '11111111-1111-4111-8111-111111111111',
+                        workspaceData: {
+                            kind: 'ready',
+                            workspaceId: '22222222-2222-4222-8222-222222222222',
+                            schemaLevel: 16,
+                            revision: '4',
+                        },
+                        workspaceLifecycle: {
+                            ...readyLifecycle,
+                            mode: route === 'maintenance' ? 'maintenance' : 'recovery',
+                            route,
+                            workspaceRevision: '4',
+                            operations: [],
+                            pendingFollowUps: [],
+                        },
+                    },
+                };
+            },
+            async querySetup() {
+                calls.push('querySetup');
+                return setupOutcome();
+            },
+        } as unknown as Window['courseFlow'];
+
+        const result = await loadWorkspace(bridge);
+        assert.equal(result.kind, route);
+        assert.deepEqual(calls, ['query']);
+    });
+}

@@ -4,8 +4,12 @@
 
 import { isSupportedSqliteVersion } from './sqlite-version';
 import { isCanonicalUnsignedSqliteInteger, isCanonicalUuid } from './workspace-data-contract';
+import {
+  isWorkspaceLifecycleProjection,
+  type WorkspaceLifecycleProjection,
+} from './workspace-lifecycle-contract';
 
-export const BOOTSTRAP_PROTOCOL_VERSION = 2 as const;
+export const BOOTSTRAP_PROTOCOL_VERSION = 3 as const;
 export const WORKSPACE_QUERY_CHANNEL = 'courseflow:workspace-query' as const;
 
 export type BootstrapRequest = Readonly<{
@@ -160,6 +164,7 @@ export type BootstrapReady = Readonly<{
   dataRootClass: 'verified-local';
   workspaceEpoch: string;
   workspaceData: WorkspaceDataStatus;
+  workspaceLifecycle: WorkspaceLifecycleProjection;
 }>;
 
 export type BootstrapProblemCode =
@@ -191,6 +196,7 @@ const readyKeys = [
   'dataRootClass',
   'workspaceEpoch',
   'workspaceData',
+  'workspaceLifecycle',
 ];
 const problemKeys = ['code', 'message', 'requestId', 'appBuildId'];
 
@@ -397,6 +403,29 @@ function isWorkspaceDataStatus(value: unknown): value is WorkspaceDataStatus {
   );
 }
 
+function lifecycleMatchesWorkspaceData(
+  workspaceData: WorkspaceDataStatus,
+  lifecycle: WorkspaceLifecycleProjection,
+): boolean {
+  if (workspaceData.kind === 'absent') {
+    return lifecycle.route === 'welcome'
+      && lifecycle.workspaceRevision === null
+      && (lifecycle.mode === 'ready' || lifecycle.mode === 'limited');
+  }
+  if (workspaceData.kind === 'recovery') {
+    return lifecycle.workspaceRevision === null
+      && (lifecycle.mode === 'maintenance' || lifecycle.mode === 'recovery');
+  }
+  if (lifecycle.workspaceRevision !== workspaceData.revision) {
+    return false;
+  }
+  return workspaceData.kind === 'read-only'
+    ? lifecycle.mode === 'read-only'
+      || lifecycle.mode === 'maintenance'
+      || lifecycle.mode === 'recovery'
+    : lifecycle.mode !== 'read-only';
+}
+
 export function makeBootstrapRequest(requestId: string, appBuildId: string): BootstrapRequest {
   return {
     kind: 'bootstrap.status',
@@ -468,7 +497,9 @@ export function isBootstrapOutcome(
       isSupportedSqliteVersion(ready.sqliteVersion) &&
       ready.dataRootClass === 'verified-local' &&
       isCanonicalUuid(ready.workspaceEpoch) &&
-      isWorkspaceDataStatus(ready.workspaceData)
+      isWorkspaceDataStatus(ready.workspaceData) &&
+      isWorkspaceLifecycleProjection(ready.workspaceLifecycle) &&
+      lifecycleMatchesWorkspaceData(ready.workspaceData, ready.workspaceLifecycle)
     );
   }
 

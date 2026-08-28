@@ -15,6 +15,9 @@ const COMMIT_PATTERN = /^[0-9a-f]{40}$/;
 const PORTABLE_ARTIFACT_PATTERN = /^[^/\\\0]+$/;
 const MAXIMUM_IDENTITY_LENGTH = 1_024;
 
+export type WorkspaceProtocolVersion = `${typeof BOOTSTRAP_PROTOCOL_VERSION}`;
+export const WORKSPACE_PROTOCOL_VERSION: WorkspaceProtocolVersion = `${BOOTSTRAP_PROTOCOL_VERSION}`;
+
 export type MigrationRollbackArtifactProjection = Readonly<{
     platform: 'darwin-arm64' | 'win32-x64';
     name: string;
@@ -41,7 +44,7 @@ export type ApplicationReleaseDescriptor = Readonly<{
     platform: 'darwin' | 'win32';
     architecture: 'arm64' | 'x64';
     variant: 'development';
-    workspaceProtocolVersion: '2';
+    workspaceProtocolVersion: WorkspaceProtocolVersion;
     currentSchemaLevel: string;
     formats: Readonly<{
         snapshot: '1';
@@ -381,7 +384,7 @@ export function isApplicationBuildStatus(value: unknown): value is ApplicationBu
         || (value.descriptor.architecture !== 'arm64' && value.descriptor.architecture !== 'x64')
         || (value.descriptor.platform === 'darwin') !== (value.descriptor.architecture === 'arm64')
         || value.descriptor.variant !== 'development'
-        || value.descriptor.workspaceProtocolVersion !== '2'
+        || value.descriptor.workspaceProtocolVersion !== WORKSPACE_PROTOCOL_VERSION
         || !isCanonicalUnsignedSqliteInteger(value.descriptor.currentSchemaLevel)
         || value.descriptor.currentSchemaLevel === '0'
         || !hasExactDataKeys(value.descriptor.formats, [

@@ -101,6 +101,9 @@ test('FLOW-00/01: setup creates Current Term, Course, and first Meeting through 
     const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
     const initial = await bootstrap(application);
     assert.deepEqual(initial.workspaceData, { kind: 'absent' });
+    assert.equal(initial.workspaceLifecycle.route, 'welcome');
+    assert.equal(initial.workspaceLifecycle.workspaceRevision, null);
+    assert.equal(initial.workspaceLifecycle.capabilities['workspace.initialize'], 'available');
 
     const initialized = await application.handle(makeInitializeWorkspaceRequest(
         'initialize',
@@ -192,6 +195,13 @@ test('FLOW-00/01: setup creates Current Term, Course, and first Meeting through 
     });
     assert.equal(after.value.projection.everReachedMinimum, true);
     assert.equal(after.value.projection.defaultRoute, 'today');
+    const completedLifecycle = await bootstrap(application);
+    assert.equal(completedLifecycle.workspaceLifecycle.route, 'today');
+    assert.equal(completedLifecycle.workspaceLifecycle.workspaceRevision, '2');
+    assert.deepEqual(
+        completedLifecycle.workspaceLifecycle.pendingFollowUps.map(followUp => followUp.followUpId),
+        [FOLLOW_UP_ID, COURSE_FOLLOW_UP_ID],
+    );
     assert.doesNotMatch(
         JSON.stringify(after),
         /workspace\.sqlite|DataSlots|[A-Za-z]:[\\/]|\/Users\//,
@@ -236,6 +246,14 @@ test('FLOW-00/Q-CONTINUITY-01: restart preserves Term, Course, and Meeting ident
     const restarted = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
     const restartedBootstrap = await bootstrap(restarted);
     assert.notEqual(restartedBootstrap.workspaceEpoch, firstBootstrap.workspaceEpoch);
+    assert.equal(restartedBootstrap.workspaceLifecycle.route, 'today');
+    assert.equal(restartedBootstrap.workspaceLifecycle.workspaceRevision, '2');
+    assert.deepEqual(
+        restartedBootstrap.workspaceLifecycle.pendingFollowUps.map(
+            followUp => followUp.followUpId,
+        ),
+        [FOLLOW_UP_ID, COURSE_FOLLOW_UP_ID],
+    );
     const projection = await restarted.handle(makeSetupQueryRequest(
         'setup-restarted',
         APP_BUILD_ID,
@@ -255,10 +273,28 @@ test('FLOW-00/Q-CONTINUITY-01: restart preserves Term, Course, and Meeting ident
     assert.equal(projection.value.projection.defaultRoute, 'today');
     await restarted.close();
 
+    let loseLifecycleResponse = true;
     const ended = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
         clock: { now: () => '2027-01-05T12:00:00.000Z' },
+        commitOptions: {
+            failpoint(point) {
+                if (loseLifecycleResponse && point === 'commit.after-sqlite-commit') {
+                    loseLifecycleResponse = false;
+                    throw new Error('simulated lifecycle response loss');
+                }
+            },
+        },
     });
     const endedBootstrap = await bootstrap(ended);
+    assert.equal(endedBootstrap.workspaceLifecycle.route, 'today');
+    assert.equal(endedBootstrap.workspaceLifecycle.workspaceRevision, '3');
+    assert.equal(endedBootstrap.workspaceData.kind, 'ready');
+    if (endedBootstrap.workspaceData.kind !== 'ready'
+        || restartedBootstrap.workspaceData.kind !== 'ready') {
+        throw new Error('Expected ready DATA before and after automatic archive');
+    }
+    assert.equal(endedBootstrap.workspaceData.workspaceId, restartedBootstrap.workspaceData.workspaceId);
+    assert.equal(endedBootstrap.workspaceData.revision, '3');
     const endedProjection = await ended.handle(makeSetupQueryRequest(
         'setup-after-term-ended',
         APP_BUILD_ID,
@@ -272,6 +308,26 @@ test('FLOW-00/Q-CONTINUITY-01: restart preserves Term, Course, and Meeting ident
     assert.equal(endedProjection.value.projection.everReachedMinimum, true);
     assert.equal(endedProjection.value.projection.defaultRoute, 'today');
     await ended.close();
+
+    const afterArchiveRestart = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
+    const afterArchiveBootstrap = await bootstrap(afterArchiveRestart);
+    assert.equal(afterArchiveBootstrap.workspaceLifecycle.route, 'today');
+    assert.equal(afterArchiveBootstrap.workspaceLifecycle.workspaceRevision, '3');
+    const afterArchiveProjection = await afterArchiveRestart.handle(makeSetupQueryRequest(
+        'setup-after-archive-restart',
+        APP_BUILD_ID,
+        afterArchiveBootstrap.workspaceEpoch,
+    ));
+    assert.equal(afterArchiveProjection.ok, true);
+    if (!afterArchiveProjection.ok
+        || afterArchiveProjection.value.kind !== 'workspace.setup-projection') {
+        throw new Error('Expected setup projection after archived restart');
+    }
+    assert.equal(afterArchiveProjection.value.projection.currentTerm, null);
+    assert.equal(afterArchiveProjection.value.projection.everReachedMinimum, true);
+    assert.equal(afterArchiveProjection.value.projection.defaultRoute, 'today');
+    assert.equal(afterArchiveProjection.value.projection.terms[0]?.termId, termId);
+    await afterArchiveRestart.close();
 });
 
 test('FLOW-00: setup draft saves, conflicts, resumes, and discards outside formal revision', async (t) => {
@@ -635,8 +691,27 @@ test('read-only and recovery-required Workspace modes reject setup writes', asyn
         ));
         await writable.close();
 
-        const readOnly = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, { readOnly: true });
+        const readOnly = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+            readOnly: true,
+            clock: {now: () => '2027-01-05T12:00:00.000Z'},
+        });
         const readOnlyBootstrap = await bootstrap(readOnly);
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.mode, 'read-only');
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.route, 'setup');
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.workspaceRevision, '1');
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.capabilities['workspace.read'], 'available');
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.capabilities['workspace.write'], 'unavailable');
+        const unchanged = await readOnly.handle(makeSetupQueryRequest(
+            'query-read-only-ended-term',
+            APP_BUILD_ID,
+            readOnlyBootstrap.workspaceEpoch,
+        ));
+        assert.equal(unchanged.ok, true);
+        if (!unchanged.ok || unchanged.value.kind !== 'workspace.setup-projection') {
+            throw new Error('Expected unchanged read-only setup projection');
+        }
+        assert.notEqual(unchanged.value.projection.currentTerm, null);
+        assert.equal(unchanged.value.projection.workspaceRevision, '1');
         const outcome = await readOnly.handle(makeCreateCourseWithMeetingRequest(
             'create-read-only',
             APP_BUILD_ID,
@@ -660,6 +735,8 @@ test('read-only and recovery-required Workspace modes reject setup writes', asyn
         const recovery = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
         const recoveryBootstrap = await bootstrap(recovery);
         assert.equal(recoveryBootstrap.workspaceData.kind, 'recovery');
+        assert.equal(recoveryBootstrap.workspaceLifecycle.mode, 'recovery');
+        assert.equal(recoveryBootstrap.workspaceLifecycle.route, 'recovery');
 
         const outcome = await recovery.handle(makeCreateCourseWithMeetingRequest(
             'create-recovery',
@@ -674,5 +751,30 @@ test('read-only and recovery-required Workspace modes reject setup writes', asyn
         assert.equal(outcome.problem.code, 'recovery-required');
         assert.equal(outcome.problem.dataEffect, 'unchanged');
         await recovery.close();
+    });
+
+    await t.test('peripheral unavailable', async (caseTest) => {
+        const dataSlotsRoot = createTempDataSlots(caseTest);
+        const writable = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID);
+        const initial = await bootstrap(writable);
+        await writable.handle(makeInitializeWorkspaceRequest(
+            'initialize',
+            APP_BUILD_ID,
+            initial.workspaceEpoch,
+        ));
+        await writable.close();
+
+        const limited = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+            moduleStatus: {
+                library: {health: 'unavailable', capability: 'unavailable'},
+            },
+        });
+        const limitedBootstrap = await bootstrap(limited);
+        assert.equal(limitedBootstrap.workspaceLifecycle.mode, 'limited');
+        assert.equal(limitedBootstrap.workspaceLifecycle.route, 'setup');
+        assert.equal(limitedBootstrap.workspaceLifecycle.moduleHealth['MOD-LIBRARY'], 'unavailable');
+        assert.equal(limitedBootstrap.workspaceLifecycle.capabilities['library.read'], 'unavailable');
+        assert.equal(limitedBootstrap.workspaceLifecycle.capabilities['plan.write'], 'available');
+        await limited.close();
     });
 });

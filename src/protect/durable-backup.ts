@@ -1116,6 +1116,14 @@ export class DurableBackupCoordinator {
     }
 
     /**
+     * Reports whether this process is actively advancing durable backup work.
+     * @return {boolean} Whether a background pass is currently running.
+     */
+    public isRunning(): boolean {
+        return this.running !== undefined;
+    }
+
+    /**
      * Stops accepting hints and lets the current filesystem operation reach a safe boundary.
      * @return {Promise<void>} Coordinator shutdown completion.
      */

@@ -245,7 +245,7 @@ function outcomeWithCourse(course: unknown): unknown {
         ok: true,
         value: {
             kind: 'workspace.setup-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -387,7 +387,7 @@ test('A-TASK-004/TEST-PLAN-003: bounded Task series query validates its request 
     );
     assert.deepEqual(request, {
         kind: 'workspace.task-series.query',
-        protocolVersion: 2,
+        protocolVersion: 3,
         appBuildId: APP_BUILD_ID,
         requestId: REQUEST_ID,
         workspaceEpoch: WORKSPACE_EPOCH,
@@ -400,7 +400,7 @@ test('A-TASK-004/TEST-PLAN-003: bounded Task series query validates its request 
         ok: true,
         value: {
             kind: 'workspace.task-series-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -425,7 +425,7 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: unified PLAN query validates its exac
     const request = makePlanQueryRequest(REQUEST_ID, APP_BUILD_ID, WORKSPACE_EPOCH);
     assert.deepEqual(request, {
         kind: 'workspace.plan.query',
-        protocolVersion: 2,
+        protocolVersion: 3,
         appBuildId: APP_BUILD_ID,
         requestId: REQUEST_ID,
         workspaceEpoch: WORKSPACE_EPOCH,
@@ -441,7 +441,7 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: unified PLAN query validates its exac
         ok: true,
         value: {
             kind: 'workspace.plan-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -509,7 +509,7 @@ test('A-TASK-008/TEST-WORKSPACE-002: committed state receipts carry one exact Un
         ok: true,
         value: {
             kind: 'workspace.command-outcome',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -669,7 +669,7 @@ test('TEST-WORKSPACE-007: build and migration requests use the existing bounded 
         ok: true,
         value: {
             kind: 'workspace.migration-safety-copy',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,

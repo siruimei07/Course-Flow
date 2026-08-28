@@ -709,7 +709,7 @@ test('a checkpoint query reconciles only unknown exact saved or discarded draft 
         ok: true,
         value: {
             kind: 'workspace.setup-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: 'test-build',
             requestId: 'setup-query',
             workspaceEpoch: 'workspace-epoch',

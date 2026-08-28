@@ -288,7 +288,7 @@ function committedOutcome(options: Readonly<{
         ok: true,
         value: {
             kind: 'workspace.command-outcome',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -315,7 +315,7 @@ function projectionOutcome(projection: TaskSeriesDetailProjection): WorkspaceSet
         ok: true,
         value: {
             kind: 'workspace.task-series-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -331,7 +331,7 @@ function setupProjectionOutcome(workspaceRevision: string): WorkspaceSetupOutcom
         ok: true,
         value: {
             kind: 'workspace.setup-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -397,7 +397,7 @@ function previewOutcome(): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.task-occurrence-impact',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -412,7 +412,7 @@ function undoCommittedOutcome(): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.command-outcome',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,

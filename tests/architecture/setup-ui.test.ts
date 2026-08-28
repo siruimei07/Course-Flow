@@ -43,7 +43,8 @@ test('UI-SETUP-01 exposes Current Term, standalone Course, then a Meeting or Tas
     assert.match(renderer, /结束日期/);
     assert.match(renderer, /默认时区/);
     assert.match(renderer, /创建并继续/);
-    assert.match(app, /bridge\.initialize/);
+    assert.match(app, /courseFlow\.initialize/);
+    assert.match(app, /开始新的本地工作区/);
     assert.match(app, /bridge\.querySetup/);
     assert.match(renderer, /courseFlow\.createTerm/);
     assert.match(renderer, /课程代码/);
@@ -137,7 +138,7 @@ test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', 
     assert.match(renderer, /保存进度并退出/);
     assert.match(renderer, /进入今天/);
     assert.match(renderer, /onCancel/);
-    assert.match(app, /initialWorkspaceSurfaceFrom/);
+    assert.match(app, /setSetupOpen\(result\.route === 'setup'\)/);
     assert.match(app, /bridge\.queryPlan/);
     assert.match(app, /SetupDialog/);
     assert.match(styles, /backdrop-filter/);
@@ -146,7 +147,7 @@ test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', 
 });
 
 test('custom title chrome remains reachable during startup, rollback, and setup modality', () => {
-    assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 3);
+    assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 5);
     assert.match(
         setupDialog,
         /<header className="setup-modal-header">[\s\S]*<WindowControls \/>[\s\S]*<\/header>/,

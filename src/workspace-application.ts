@@ -16,6 +16,8 @@ import {
     stageMigrationSafetyCopyForRollback,
     workspaceDataRuntimeVersion,
     type CommandReceiptOutcome,
+    type BackupCleanupOperation,
+    type BackupOperation,
     type CommitOptions,
     type DataCommitResult,
     type DataOpenResult,
@@ -35,6 +37,11 @@ import {
     type DataOpenProblem,
     type WorkspaceProbeRequest,
 } from './shared/bootstrap-contract';
+import type {
+    WorkspaceLifecycleProjection,
+    WorkspaceOperationProjection,
+    WorkspacePendingFollowUpProjection,
+} from './shared/workspace-lifecycle-contract';
 import {
     isWorkspaceProcessRequest,
     type CancelMeetingOccurrenceRequest,
@@ -79,6 +86,7 @@ import {
 } from './shared/workspace-setup-contract';
 import {
     isMigrationRollbackSessionView,
+    WORKSPACE_PROTOCOL_VERSION,
     type ApplicationBuildStatus,
     type ConfirmMigrationRollbackCommand,
     type DeleteMigrationSafetyCopyCommand,
@@ -123,6 +131,10 @@ import {
     type PreparedMigrationRollbackPreview,
 } from './protect/migration-rollback-session';
 import {
+    inspectBeforeWorkspaceOpen,
+    type WorkspaceStartupInspection,
+} from './protect/workspace-startup';
+import {
     buildPlanProjection,
     createPlanEvaluationContext,
 } from './shared/workspace-plan-contract';
@@ -133,6 +145,10 @@ import {
     type RestoreTermAsCurrentCommand,
     type SetupProjection,
 } from './shared/workspace-term-contract';
+import {
+    workspaceLifecycleFrom,
+    type WorkspaceLifecycleInput,
+} from './workspace-lifecycle';
 
 export interface ClockPort {
     now(): string;
@@ -157,6 +173,7 @@ export type WorkspaceApplicationOptions = Omit<OpenWorkspaceDataOptions, 'migrat
         tag: string;
     }>;
     setupProjectionReadOptions?: ReadSnapshotOptions;
+    moduleStatus?: WorkspaceLifecycleInput['moduleStatus'];
 }>;
 
 type WorkspaceDataState = Readonly<{
@@ -412,6 +429,108 @@ function sourceBuildProjection(
     });
 }
 
+/**
+ * Maps the latest durable backup row to its path-free lifecycle handle.
+ * @param {BackupOperation | null} operation Latest durable backup row.
+ * @param {boolean} activelyRunning Whether this process is currently advancing it.
+ * @return {WorkspaceOperationProjection | null} Lifecycle handle when one exists.
+ */
+function backupOperationProjection(
+    operation: BackupOperation | null,
+    activelyRunning: boolean,
+): WorkspaceOperationProjection | null {
+    if (!operation) {
+        return null;
+    }
+    return Object.freeze({
+        operationId: operation.operationId,
+        owner: 'protect' as const,
+        kind: 'backup' as const,
+        state: operation.phase === 'succeeded'
+            ? 'succeeded' as const
+            : activelyRunning ? 'running' as const : 'recovery-required' as const,
+        version: operation.version,
+    });
+}
+
+/**
+ * Maps active retention cleanup to its path-free lifecycle handle.
+ * @param {BackupCleanupOperation | null} operation Active cleanup row.
+ * @return {WorkspaceOperationProjection | null} Lifecycle handle when cleanup is pending.
+ */
+function backupCleanupOperationProjection(
+    operation: BackupCleanupOperation | null,
+): WorkspaceOperationProjection | null {
+    if (!operation) {
+        return null;
+    }
+    return Object.freeze({
+        operationId: operation.operationId,
+        owner: 'protect' as const,
+        kind: 'backup-cleanup' as const,
+        state: 'running' as const,
+        version: operation.version,
+    });
+}
+
+/**
+ * Maps the latest Restore session to the shared operation vocabulary.
+ * @param {ReturnType<RestoreCoordinator['query']> | null} session Latest Restore session.
+ * @return {WorkspaceOperationProjection | null} Path-free Restore handle.
+ */
+function restoreOperationProjection(
+    session: ReturnType<RestoreCoordinator['query']> | null,
+): WorkspaceOperationProjection | null {
+    if (!session) {
+        return null;
+    }
+    const state = session.phase === 'previewed' || session.phase === 'waiting-decision'
+        ? 'waiting-decision' as const
+        : session.phase === 'protection-established'
+            ? 'accepted' as const
+            : session.phase === 'recovery-required'
+                ? 'recovery-required' as const
+                : session.phase === 'cancelled' || session.phase === 'rolled-back'
+                    ? 'cancelled' as const
+                    : 'succeeded' as const;
+    return Object.freeze({
+        operationId: session.operationId,
+        owner: 'protect' as const,
+        kind: 'restore' as const,
+        state,
+        version: session.sessionVersion,
+    });
+}
+
+/**
+ * Maps rollback boot evidence to the shared operation vocabulary.
+ * @param {MigrationRollbackBootState | null} boot Latest rollback classification.
+ * @return {WorkspaceOperationProjection | null} Path-free rollback handle.
+ */
+function migrationRollbackOperationProjection(
+    boot: MigrationRollbackBootState | null,
+): WorkspaceOperationProjection | null {
+    if (!boot?.operationId || !boot.sessionVersion) {
+        return null;
+    }
+    const state = boot.kind === 'recovery-required'
+        ? 'recovery-required' as const
+        : boot.kind === 'succeeded'
+            ? 'succeeded' as const
+            : boot.kind === 'cancelled'
+                ? 'cancelled' as const
+                : boot.allowedActions.length > 0 || boot.phase === 'awaiting-target-build'
+                    ? 'waiting-decision' as const
+                    : 'running' as const;
+    return Object.freeze({
+        operationId: boot.operationId,
+        owner: 'protect' as const,
+        kind: 'migration-rollback' as const,
+        state,
+        version: boot.sessionVersion,
+    });
+}
+
 export class WorkspaceApplication {
     private backupCoordinator: DurableBackupCoordinator | undefined;
     private restoreCoordinator: RestoreCoordinator | undefined;
@@ -421,37 +540,43 @@ export class WorkspaceApplication {
     private migrationRollbackBinding: MigrationRollbackBindingProjection | null = null;
     private preparedMigrationRollback: PreparedMigrationRollbackPreview | null = null;
     private restoreMaintenance = false;
+    private latestRestoreSession: ReturnType<RestoreCoordinator['query']> | null = null;
     private workspaceEpoch = randomUUID();
 
     private constructor(
         private readonly dataSlotsRoot: string,
         private readonly appBuildId: string,
         private dataState: WorkspaceDataState,
+        private readonly startupInspection: WorkspaceStartupInspection | null,
         private readonly options: WorkspaceApplicationOptions,
-    ) {}
+    ) {
+        this.latestRestoreSession = startupInspection?.restore.session ?? null;
+    }
 
     public static async open(
         dataSlotsRoot: string,
         appBuildId: string,
         options: WorkspaceApplicationOptions = {},
     ): Promise<WorkspaceApplication> {
+        let startupInspection: WorkspaceStartupInspection | null = null;
         let restoreBoot: ReturnType<typeof inspectRestoreBeforeWorkspaceOpen> | null = null;
         let migrationRollbackBoot: MigrationRollbackBootState | null = null;
         if (options.activityControlRoot) {
-            restoreBoot = inspectRestoreBeforeWorkspaceOpen(
-                options.activityControlRoot,
-                dataSlotsRoot,
-            );
-            migrationRollbackBoot = inspectMigrationRollbackBeforeWorkspaceOpen(
+            startupInspection = inspectBeforeWorkspaceOpen(
                 options.activityControlRoot,
                 dataSlotsRoot,
                 appBuildId,
             );
-            const restorePending = restoreBoot.kind === 'pre-checkpoint-session'
-                || restoreBoot.kind === 'recovery-required';
-            const migrationPending = migrationRollbackBoot.kind === 'maintenance'
+            restoreBoot = startupInspection.restore;
+            migrationRollbackBoot = startupInspection.migrationRollback;
+            const migrationBlocksOrdinaryOpen = migrationRollbackBoot.kind === 'maintenance'
                 || migrationRollbackBoot.kind === 'recovery-required';
-            if (migrationPending) {
+            const migrationOrAmbiguousRecovery = startupInspection.kind === 'recovery-required'
+                && (startupInspection.reason === 'ambiguous-operations'
+                    || migrationRollbackBoot.kind === 'recovery-required');
+            if (migrationOrAmbiguousRecovery
+                || (startupInspection.kind === 'maintenance'
+                    && startupInspection.reason === 'migration-rollback')) {
                 const application = new WorkspaceApplication(
                     dataSlotsRoot,
                     appBuildId,
@@ -459,15 +584,18 @@ export class WorkspaceApplication {
                         sqliteVersion: workspaceDataRuntimeVersion(),
                         status: {
                             kind: 'recovery',
-                            problem: restorePending
-                                || migrationRollbackBoot.kind === 'recovery-required'
+                            problem: migrationOrAmbiguousRecovery
                                 ? migrationRollbackEvidenceProblem()
                                 : migrationRollbackProblem(migrationRollbackBoot),
                         },
                     },
+                    startupInspection,
                     options,
                 );
-                application.migrationMaintenance = true;
+                application.migrationMaintenance = migrationBlocksOrdinaryOpen;
+                application.restoreMaintenance = restoreBoot.kind === 'recovery-required'
+                    || (restoreBoot.kind === 'pre-checkpoint-session'
+                        && restoreBoot.session?.phase === 'protection-established');
                 application.migrationRollbackBoot = migrationRollbackBoot;
                 application.tryRestoreMigrationRollbackBinding(migrationRollbackBoot);
                 return application;
@@ -483,6 +611,7 @@ export class WorkspaceApplication {
                             problem: restoreActivationProblem(restoreBoot.session),
                         },
                     },
+                    startupInspection,
                     options,
                 );
                 application.restoreMaintenance = true;
@@ -507,6 +636,7 @@ export class WorkspaceApplication {
             dataSlotsRoot,
             appBuildId,
             dataStateFrom(opened),
+            startupInspection,
             options,
         );
         application.migrationRollbackBoot = migrationRollbackBoot;
@@ -525,7 +655,8 @@ export class WorkspaceApplication {
                 restoreBoot,
             );
         }
-        application.startDurableBackup();
+        application.restoreMaintenance = startupInspection?.kind === 'maintenance'
+            && startupInspection.reason === 'restore';
         return application;
     }
 
@@ -798,7 +929,7 @@ export class WorkspaceApplication {
                     platform: process.platform,
                     architecture: process.arch,
                     variant: 'development' as const,
-                    workspaceProtocolVersion: '2' as const,
+                    workspaceProtocolVersion: WORKSPACE_PROTOCOL_VERSION,
                     currentSchemaLevel: CURRENT_SCHEMA_LEVEL.toString(),
                     formats: Object.freeze({
                         snapshot: '1' as const,
@@ -1683,11 +1814,82 @@ export class WorkspaceApplication {
             });
             this.backupCoordinator = coordinator;
             store.setPostCommitHint(() => coordinator.wake());
-            coordinator.wake();
         }
+        this.backupCoordinator.wake();
     }
 
-    private bootstrap(request: WorkspaceProbeRequest): BootstrapOutcome {
+    /**
+     * Reduces current owner state to the lifecycle mode-precedence input.
+     * @return {WorkspaceLifecycleInput['startupDisposition']} Current startup disposition.
+     */
+    private lifecycleDisposition(): WorkspaceLifecycleInput['startupDisposition'] {
+        if (this.dataState.status.kind === 'recovery') {
+            return this.dataState.status.problem.code === 'rollback-required'
+                ? 'maintenance'
+                : 'recovery';
+        }
+        return this.migrationMaintenance || this.restoreMaintenance
+            ? 'maintenance'
+            : 'ordinary';
+    }
+
+    /**
+     * Restores current durable operation handles without leaking owner storage facts.
+     * @return {readonly WorkspaceOperationProjection[]} Current path-free operation handles.
+     */
+    private lifecycleOperations(): readonly WorkspaceOperationProjection[] {
+        const store = this.dataState.store;
+        const migrationBoot = this.migrationMaintenance
+            ? this.currentMigrationRollbackBoot()
+            : this.migrationRollbackBoot ?? this.startupInspection?.migrationRollback ?? null;
+        return Object.freeze([
+            restoreOperationProjection(this.latestRestoreSession),
+            migrationRollbackOperationProjection(migrationBoot),
+            backupOperationProjection(
+                store?.readBackupOperation() ?? null,
+                this.backupCoordinator?.isRunning() ?? false,
+            ),
+            backupCleanupOperationProjection(store?.readBackupCleanupOperation() ?? null),
+        ].filter((operation): operation is WorkspaceOperationProjection => operation !== null));
+    }
+
+    /**
+     * Reconciles FLOW-00 and builds the authoritative startup projection.
+     * @param {string} requestId Bootstrap request correlation identity.
+     * @return {Promise<WorkspaceLifecycleProjection>} Current lifecycle projection.
+     */
+    private async workspaceLifecycle(requestId: string): Promise<WorkspaceLifecycleProjection> {
+        let setupRoute: WorkspaceLifecycleInput['setupRoute'] = null;
+        let startupDisposition = this.lifecycleDisposition();
+        if (this.dataState.store && startupDisposition === 'ordinary') {
+            const initialProjection = this.dataState.store.readSetupProjection();
+            const reconciled = await this.reconcileWorkspaceLifecycle(requestId, initialProjection);
+            if (reconciled) {
+                startupDisposition = 'recovery';
+            }
+            else {
+                setupRoute = this.dataState.store.readSetupProjection(
+                    this.options.setupProjectionReadOptions,
+                ).defaultRoute;
+            }
+        }
+        const pendingFollowUps: readonly WorkspacePendingFollowUpProjection[] = this.dataState.store
+            ?.readPendingFollowUps() ?? Object.freeze([]);
+        return workspaceLifecycleFrom({
+            workspaceData: this.dataState.status,
+            setupRoute,
+            startupDisposition,
+            moduleStatus: this.options.moduleStatus ?? Object.freeze({}),
+            operations: this.lifecycleOperations(),
+            pendingFollowUps,
+        });
+    }
+
+    private async bootstrap(request: WorkspaceProbeRequest): Promise<BootstrapOutcome> {
+        const workspaceLifecycle = await this.workspaceLifecycle(request.requestId);
+        if (workspaceLifecycle.route === 'setup' || workspaceLifecycle.route === 'today') {
+            this.startDurableBackup();
+        }
         return {
             ok: true,
             value: {
@@ -1699,6 +1901,7 @@ export class WorkspaceApplication {
                 dataRootClass: request.dataRootClass,
                 workspaceEpoch: this.workspaceEpoch,
                 workspaceData: this.dataState.status,
+                workspaceLifecycle,
             },
         };
     }
@@ -1718,7 +1921,6 @@ export class WorkspaceApplication {
                     status: store.status(),
                     store,
                 };
-                this.startDurableBackup();
             }
             catch {
                 return this.problem('workspace-unavailable', '无法创建本地工作区。', requestId);
@@ -1960,10 +2162,9 @@ export class WorkspaceApplication {
         }
         try {
             await this.backupCoordinator?.waitForIdle();
-            return this.restoreSessionOutcome(
-                requestId,
-                await this.restoreCoordinator.start(command),
-            );
+            const session = await this.restoreCoordinator.start(command);
+            this.latestRestoreSession = session;
+            return this.restoreSessionOutcome(requestId, session);
         }
         catch (error) {
             return this.restoreProblem(error, requestId, '无法开始恢复会话。');
@@ -1982,10 +2183,9 @@ export class WorkspaceApplication {
             );
         }
         try {
-            return this.restoreSessionOutcome(
-                requestId,
-                this.restoreCoordinator.query(restoreSessionId),
-            );
+            const session = this.restoreCoordinator.query(restoreSessionId);
+            this.latestRestoreSession = session;
+            return this.restoreSessionOutcome(requestId, session);
         }
         catch (error) {
             return this.restoreProblem(error, requestId, '无法查询恢复会话。');
@@ -2010,6 +2210,7 @@ export class WorkspaceApplication {
                 await this.stopDurableBackupForRestore();
                 this.restoreMaintenance = true;
             }
+            this.latestRestoreSession = session;
             return this.restoreSessionOutcome(requestId, session);
         }
         catch (error) {
@@ -2032,6 +2233,7 @@ export class WorkspaceApplication {
             await this.backupCoordinator?.waitForIdle();
             const session = await this.restoreCoordinator.cancelBeforeCheckpoint(command);
             this.restoreMaintenance = false;
+            this.latestRestoreSession = session;
             this.startDurableBackup();
             return this.restoreSessionOutcome(requestId, session);
         }
@@ -2058,6 +2260,7 @@ export class WorkspaceApplication {
                 throw new RestoreSessionError('recovery-required');
             }
             this.restoreMaintenance = false;
+            this.latestRestoreSession = session;
             this.startDurableBackup();
             const outcome = this.restoreSessionOutcome(requestId, session);
             this.workspaceEpoch = randomUUID();
@@ -2095,6 +2298,7 @@ export class WorkspaceApplication {
                 throw new RestoreSessionError('recovery-required');
             }
             this.restoreMaintenance = false;
+            this.latestRestoreSession = session;
             this.startDurableBackup();
             const outcome = this.restoreSessionOutcome(requestId, session);
             this.workspaceEpoch = randomUUID();

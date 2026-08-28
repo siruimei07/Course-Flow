@@ -10,6 +10,7 @@ import test from 'node:test';
 import { WorkspaceSupervisor } from '../../src/main/workspace-supervisor';
 import { makeBootstrapRequest } from '../../src/shared/bootstrap-contract';
 import { makeSetupQueryRequest } from '../../src/shared/workspace-setup-contract';
+import {readyLifecycle} from '../shared/workspace-lifecycle-fixture';
 
 const repositoryRoot = process.cwd();
 const appBuildId = '0.0.0-dev';
@@ -84,7 +85,7 @@ test('WorkspaceSupervisor resolves a matching ready response and clears its time
   child.emit('message', {
     ok: true,
     value: {
-      protocolVersion: 2,
+      protocolVersion: 3,
       appBuildId,
       requestId: 'request-ready',
       workspaceProcess: 'ready',
@@ -92,13 +93,20 @@ test('WorkspaceSupervisor resolves a matching ready response and clears its time
       dataRootClass: 'verified-local',
       workspaceEpoch,
       workspaceData: { kind: 'absent' },
+      workspaceLifecycle: {
+        ...readyLifecycle,
+        route: 'welcome',
+        workspaceRevision: null,
+        operations: [],
+        pendingFollowUps: [],
+      },
     },
   });
 
   assert.deepEqual(await outcomePromise, {
     ok: true,
     value: {
-      protocolVersion: 2,
+      protocolVersion: 3,
       appBuildId,
       requestId: 'request-ready',
       workspaceProcess: 'ready',
@@ -106,6 +114,13 @@ test('WorkspaceSupervisor resolves a matching ready response and clears its time
       dataRootClass: 'verified-local',
       workspaceEpoch,
       workspaceData: { kind: 'absent' },
+      workspaceLifecycle: {
+        ...readyLifecycle,
+        route: 'welcome',
+        workspaceRevision: null,
+        operations: [],
+        pendingFollowUps: [],
+      },
     },
   });
   assert.equal(timers[0]!.cleared, true);
@@ -122,7 +137,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
     ok: true,
     value: {
       kind: 'workspace.setup-projection',
-      protocolVersion: 2,
+      protocolVersion: 3,
       appBuildId,
       requestId: request.requestId,
       workspaceEpoch,
@@ -153,7 +168,7 @@ test('WorkspaceSupervisor forwards and validates a setup response for the active
     ok: true,
     value: {
       kind: 'workspace.setup-projection',
-      protocolVersion: 2,
+      protocolVersion: 3,
       appBuildId,
       requestId: request.requestId,
       workspaceEpoch,
@@ -356,4 +371,32 @@ test('backup directory selection stays in Main and only the adapted request reac
   assert.match(main, /code:\s*'user-cancelled'/);
   assert.doesNotMatch(preload, /selectedDirectoryPath/);
   assert.doesNotMatch(rendererSources, /selectedDirectoryPath|canonicalDestinationPath/);
+});
+
+test('FLOW-00 inspects PROTECT before DATA open and never starts physical recovery on boot', () => {
+  const application = readFileSync(
+    path.join(repositoryRoot, 'src/workspace-application.ts'),
+    'utf8',
+  );
+  const startup = readFileSync(
+    path.join(repositoryRoot, 'src/protect/workspace-startup.ts'),
+    'utf8',
+  );
+  const openStart = application.indexOf('public static async open(');
+  const openEnd = application.indexOf('public handle(', openStart);
+  const openSource = application.slice(openStart, openEnd);
+  const protectionInspection = openSource.indexOf('inspectBeforeWorkspaceOpen(');
+  const dataOpen = openSource.indexOf('openWorkspaceDataWithMigrations(');
+
+  assert.ok(openStart >= 0 && openEnd > openStart);
+  assert.ok(protectionInspection >= 0 && protectionInspection < dataOpen);
+  assert.doesNotMatch(openSource, /startDurableBackup\(\)/);
+  assert.doesNotMatch(
+    startup,
+    /\b(?:resumeRestoreActivation|rollbackRestoreActivation)\s*\(/,
+  );
+  assert.doesNotMatch(
+    startup,
+    /\b(?:continueMigrationRollbackHandoff|cancelMigrationRollbackHandoff)\s*\(/,
+  );
 });

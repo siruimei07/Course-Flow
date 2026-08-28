@@ -13,6 +13,7 @@ import {
   isBootstrapRequest,
   isWorkspaceProbeRequest,
 } from '../../src/shared/bootstrap-contract';
+import {readyLifecycle} from './workspace-lifecycle-fixture';
 
 const buildId = '0.0.0-dev';
 const requestId = 'req-1';
@@ -31,7 +32,7 @@ test('makeBootstrapRequest emits only the bootstrap query fields', () => {
 test('isBootstrapRequest rejects values outside the exact bootstrap request shape', () => {
   const validRequest = {
     kind: 'bootstrap.status',
-    protocolVersion: 2,
+    protocolVersion: 3,
     appBuildId: buildId,
     requestId,
   };
@@ -40,6 +41,7 @@ test('isBootstrapRequest rejects values outside the exact bootstrap request shap
     { ...validRequest, kind: 'bootstrap.other' },
     { ...validRequest, appBuildId: 'other-build' },
     { ...validRequest, appBuildId: 1 },
+    { ...validRequest, protocolVersion: 2 },
     { ...validRequest, protocolVersion: 1 },
     { ...validRequest, requestId: '' },
     { ...validRequest, requestId: 1 },
@@ -57,7 +59,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
   const validOutcome = {
     ok: true,
     value: {
-      protocolVersion: 2,
+      protocolVersion: 3,
       appBuildId: buildId,
       requestId,
       workspaceProcess: 'ready',
@@ -70,6 +72,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
         schemaLevel: 16,
         revision: '42',
       },
+      workspaceLifecycle: readyLifecycle,
     },
   };
 
@@ -187,8 +190,34 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
       },
     },
   ]) {
+    const problemCode = 'problem' in workspaceData
+      ? workspaceData.problem?.code
+      : null;
+    const workspaceLifecycle = workspaceData.kind === 'absent'
+      ? {
+        ...readyLifecycle,
+        route: 'welcome' as const,
+        workspaceRevision: null,
+      }
+      : workspaceData.kind === 'read-only'
+        ? { ...readyLifecycle, mode: 'read-only' as const }
+        : workspaceData.kind === 'recovery'
+          ? {
+            ...readyLifecycle,
+            mode: problemCode === 'rollback-required'
+              ? 'maintenance' as const
+              : 'recovery' as const,
+            route: problemCode === 'rollback-required'
+              ? 'maintenance' as const
+              : 'recovery' as const,
+            workspaceRevision: null,
+          }
+          : readyLifecycle;
     assert.equal(
-      isBootstrapOutcome({ ...validOutcome, value: { ...validOutcome.value, workspaceData } }, buildId, requestId),
+      isBootstrapOutcome({
+        ...validOutcome,
+        value: { ...validOutcome.value, workspaceData, workspaceLifecycle },
+      }, buildId, requestId),
       true,
     );
   }
@@ -197,6 +226,7 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     { ok: 'true', value: validOutcome.value },
     { ...validOutcome, value: { ...validOutcome.value, appBuildId: 'other-build' } },
     { ...validOutcome, value: { ...validOutcome.value, requestId: 'req-2' } },
+    { ...validOutcome, value: { ...validOutcome.value, protocolVersion: 2 } },
     { ...validOutcome, value: { ...validOutcome.value, protocolVersion: 1 } },
     { ...validOutcome, value: { ...validOutcome.value, workspaceProcess: 'starting' } },
     { ...validOutcome, value: { ...validOutcome.value, sqliteVersion: '3.36.9' } },
@@ -205,6 +235,20 @@ test('isBootstrapOutcome accepts only complete path-free states correlated to it
     { ...validOutcome, value: { ...validOutcome.value, dataRootClass: undefined } },
     { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: 'not-a-uuid' } },
     { ...validOutcome, value: { ...validOutcome.value, workspaceEpoch: Buffer.from('workspace-epoch') } },
+    {
+      ...validOutcome,
+      value: {
+        ...validOutcome.value,
+        workspaceLifecycle: { ...readyLifecycle, workspaceRevision: '41' },
+      },
+    },
+    {
+      ...validOutcome,
+      value: {
+        ...validOutcome.value,
+        workspaceLifecycle: { ...readyLifecycle, route: 'welcome', workspaceRevision: null },
+      },
+    },
     {
       ...validOutcome,
       value: { ...validOutcome.value, workspaceData: { kind: 'ready', workspaceId, schemaLevel: 16, revision: '01' } },
@@ -351,7 +395,7 @@ test('isBootstrapOutcome accepts only known, complete bootstrap problems', () =>
 test('isWorkspaceProbeRequest accepts only a build-correlated verified-local probe', () => {
   const validProbe = {
     kind: 'bootstrap.status',
-    protocolVersion: 2,
+    protocolVersion: 3,
     appBuildId: buildId,
     requestId,
     dataRootClass: 'verified-local',
@@ -362,8 +406,9 @@ test('isWorkspaceProbeRequest accepts only a build-correlated verified-local pro
   for (const value of [
     { ...validProbe, dataRootClass: 'unverified' },
     { ...validProbe, appBuildId: 'other-build' },
+    { ...validProbe, protocolVersion: 2 },
     { ...validProbe, extra: true },
-    { kind: 'bootstrap.status', protocolVersion: 2, appBuildId: buildId, requestId },
+    { kind: 'bootstrap.status', protocolVersion: 3, appBuildId: buildId, requestId },
   ]) {
     assert.equal(isWorkspaceProbeRequest(value, buildId), false);
   }

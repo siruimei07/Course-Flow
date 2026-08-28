@@ -439,6 +439,11 @@ test('TEST-WORKSPACE-007/PROTECT-007: Workspace owns preview, maintenance, and e
 
     const reopened = await bootstrap(application, SOURCE_APP_BUILD_ID);
     assert.equal(reopened.workspaceData.kind, 'ready');
+    const completedOperation = reopened.workspaceLifecycle.operations.find(
+        operation => operation.kind === 'migration-rollback',
+    );
+    assert.equal(completedOperation?.operationId, cancelled.value.session.operationId);
+    assert.equal(completedOperation?.state, 'cancelled');
     assert.equal(inspectMigrationSafetyCopy(dataSlotsRoot).kind, 'verified');
 });
 
@@ -545,7 +550,7 @@ test('TEST-WORKSPACE-007: explicit safety deletion is confirmation-bound and rep
     assert.equal(deleted.ok, true);
     assert.deepEqual(deleted.ok ? deleted.value : null, {
         kind: 'workspace.migration-safety-copy',
-        protocolVersion: 2,
+        protocolVersion: 3,
         appBuildId: SOURCE_APP_BUILD_ID,
         requestId: 'delete-safety',
         workspaceEpoch: initial.workspaceEpoch,
@@ -575,18 +580,21 @@ test('TEST-WORKSPACE-005/007: pre-DATA boot classifies rollback builds without p
             code: 'rollback-required',
             currentBuild: 'source',
             allowedActions: ['cancel-as-source'],
+            mode: 'maintenance',
         },
         {
             appBuildId: TARGET_APP_BUILD_ID,
             code: 'rollback-required',
             currentBuild: 'target',
             allowedActions: ['continue-as-target'],
+            mode: 'maintenance',
         },
         {
             appBuildId: OTHER_APP_BUILD_ID,
             code: 'rollback-build-mismatch',
             currentBuild: 'other',
             allowedActions: [],
+            mode: 'recovery',
         },
     ] as const;
 
@@ -612,6 +620,17 @@ test('TEST-WORKSPACE-005/007: pre-DATA boot classifies rollback builds without p
         assert.equal(problem.code, expected.code);
         assert.deepEqual(problem.allowedActions, expected.allowedActions);
         assert.equal(problem.details.currentBuild, expected.currentBuild);
+        assert.equal(first.workspaceLifecycle.mode, expected.mode);
+        assert.equal(
+            first.workspaceLifecycle.route,
+            expected.mode === 'maintenance' ? 'maintenance' : 'recovery',
+        );
+        assert.equal(
+            first.workspaceLifecycle.operations.find(
+                operation => operation.kind === 'migration-rollback',
+            )?.state,
+            'waiting-decision',
+        );
         assert.deepEqual(
             problem.details.requiredBuilds,
             {
@@ -695,11 +714,18 @@ test('TEST-WORKSPACE-005: corrupt rollback handoff fails closed before opening D
     assert.ok(finalRecord);
     writeFileSync(path.join(journalDirectory, finalRecord), '{}');
     const before = physicalDataSnapshot(fixture.dataSlotsRoot);
+    let dataOpenAttempted = false;
 
     const application = await WorkspaceApplication.open(
         fixture.dataSlotsRoot,
         TARGET_APP_BUILD_ID,
-        {activityControlRoot: fixture.activityControlRoot},
+        {
+            activityControlRoot: fixture.activityControlRoot,
+            migrationFailpoint() {
+                dataOpenAttempted = true;
+                throw new Error('DATA open must remain behind the PROTECT gate');
+            },
+        },
     );
     const result = await bootstrap(application, TARGET_APP_BUILD_ID);
     assert.equal(result.workspaceData.kind, 'recovery');
@@ -712,6 +738,10 @@ test('TEST-WORKSPACE-005: corrupt rollback handoff fails closed before opening D
     assert.deepEqual(result.workspaceData.problem.details, {
         reason: 'migration-rollback-evidence',
     });
+    assert.equal(result.workspaceLifecycle.mode, 'recovery');
+    assert.equal(result.workspaceLifecycle.route, 'recovery');
+    assert.deepEqual(result.workspaceLifecycle.operations, []);
+    assert.equal(dataOpenAttempted, false);
     assert.deepEqual(physicalDataSnapshot(fixture.dataSlotsRoot), before);
     await application.close();
 });
@@ -792,6 +822,14 @@ test('TEST-WORKSPACE-005: simultaneous Restore and rollback evidence exposes no 
     assert.deepEqual(result.workspaceData.problem.details, {
         reason: 'migration-rollback-evidence',
     });
+    assert.equal(result.workspaceLifecycle.mode, 'recovery');
+    assert.equal(result.workspaceLifecycle.route, 'recovery');
+    assert.equal(
+        result.workspaceLifecycle.operations.find(
+            operation => operation.kind === 'migration-rollback',
+        )?.state,
+        'waiting-decision',
+    );
     assert.deepEqual(physicalDataSnapshot(fixture.dataSlotsRoot), before);
     await application.close();
 });

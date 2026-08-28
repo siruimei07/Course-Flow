@@ -345,7 +345,7 @@ function detailOutcome(projection: TaskSeriesDetailProjection): WorkspaceSetupOu
         ok: true,
         value: {
             kind: 'workspace.task-series-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -367,7 +367,7 @@ function committedOutcome(
         ok: true,
         value: {
             kind: 'workspace.command-outcome',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -394,7 +394,7 @@ function undoCommittedOutcome(): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.command-outcome',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -420,7 +420,7 @@ function setupOutcome(): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.setup-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,
@@ -439,7 +439,7 @@ function planOutcome(): WorkspaceSetupOutcome {
         ok: true,
         value: {
             kind: 'workspace.plan-projection',
-            protocolVersion: 2,
+            protocolVersion: 3,
             appBuildId: APP_BUILD_ID,
             requestId: REQUEST_ID,
             workspaceEpoch: WORKSPACE_EPOCH,

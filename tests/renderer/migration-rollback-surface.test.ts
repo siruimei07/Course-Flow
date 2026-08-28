@@ -63,7 +63,7 @@ const BUILD_STATUS = Object.freeze({
         platform: 'win32' as const,
         architecture: 'x64' as const,
         variant: 'development' as const,
-        workspaceProtocolVersion: '2' as const,
+        workspaceProtocolVersion: '3' as const,
         currentSchemaLevel: '16',
         formats: Object.freeze({
             snapshot: '1' as const,

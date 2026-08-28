@@ -148,6 +148,73 @@ for (const parentMode of ['live', 'exit'] as const) {
 }
 
 test(
+  'packaged smoke reuses exited-root discovery prepared before a constrained cleanup window',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'courseflow-smoke-discovery-'));
+    const descendantPath = path.join(fixtureRoot, 'descendant.mjs');
+    const parentPath = path.join(fixtureRoot, 'parent.mjs');
+    const harnessPath = path.join(fixtureRoot, 'harness.mjs');
+    const pidPath = path.join(fixtureRoot, 'pids.json');
+
+    writeFileSync(descendantPath, "setInterval(() => {}, 1_000);\n");
+    writeFileSync(
+      parentPath,
+      [
+        "import { spawn } from 'node:child_process';",
+        "import { writeFileSync } from 'node:fs';",
+        'const descendant = spawn(',
+        '  process.execPath,',
+        '  [process.argv[2]],',
+        "  { detached: true, stdio: ['ignore', 'ignore', 'inherit'], windowsHide: true },",
+        ');',
+        'writeFileSync(process.argv[3], JSON.stringify([process.pid, descendant.pid]));',
+        'process.exit(0);',
+        '',
+      ].join('\n'),
+    );
+    writeFileSync(
+      harnessPath,
+      [
+        `import { runBoundedProcess } from ${JSON.stringify(runnerUrl)};`,
+        'let message;',
+        'try {',
+        '  await runBoundedProcess(',
+        '    process.execPath,',
+        `    [${JSON.stringify(parentPath)}, ${JSON.stringify(descendantPath)}, ${JSON.stringify(pidPath)}],`,
+        '    { timeoutMilliseconds: 1_500, terminationGraceMilliseconds: 600 },',
+        '  );',
+        "  message = 'process unexpectedly completed';",
+        '} catch (error) {',
+        '  message = error instanceof Error ? error.message : String(error);',
+        '}',
+        'process.stdout.write(JSON.stringify({ message }));',
+        '',
+      ].join('\n'),
+    );
+
+    try {
+      const execution = spawnSync(process.execPath, [harnessPath], {
+        encoding: 'utf8',
+        timeout: 5_000,
+        windowsHide: true,
+      });
+
+      assert.equal(execution.status, 0, execution.stderr || execution.error?.message);
+      const evidence = JSON.parse(execution.stdout) as { message: string };
+      assert.match(evidence.message, /timed out after 1500ms; process tree was terminated/);
+      const pids = fixturePids(pidPath);
+      assert.deepEqual(await waitForResidue(pids, 500), [], evidence.message);
+    } finally {
+      const pids = fixturePids(pidPath);
+      await cleanExactFixtureProcesses(pids);
+      assert.equal(path.dirname(fixtureRoot), path.resolve(tmpdir()));
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
   'packaged smoke cleans the inherited-stderr descendant when the root exits during taskkill',
   { skip: process.platform !== 'win32' },
   async () => {
