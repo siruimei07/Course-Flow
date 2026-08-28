@@ -512,7 +512,8 @@ test('production keeps one utility process and Renderer imports no privileged ru
     (importer) => !/^src\/data\/(?:[^/]+|(?:store|schema)\/.+)\.ts$/.test(importer),
   );
   assert.deepEqual(outsideDataLayer, []);
-  assert.ok(nodeSqliteImporters.includes('src/data/sqlite-data-store.ts'));
+  assert.ok(nodeSqliteImporters.length > 0);
+  assert.ok(nodeSqliteImporters.includes('src/data/store/kernel.ts'));
   assert.deepEqual(rendererViolations, []);
 });
 
