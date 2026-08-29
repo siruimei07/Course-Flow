@@ -194,6 +194,44 @@ test('one visual shell fills the window client area and owns the only vertical s
     );
 });
 
+test('stacked first-setup panels never overlap and a single panel still fills the workspace', () => {
+    const rule = (selector: string): string => {
+        const start = styles.indexOf(`${selector} {`);
+        assert.ok(start >= 0, `${selector} must exist`);
+        return styles.slice(start, styles.indexOf('}', start) + 1);
+    };
+
+    // A percentage min-height on a grid item desynchronizes the row size from the
+    // item size, so the completion summary painted over the holiday form beneath it.
+    assert.doesNotMatch(rule('.setup-step-panel'), /min-height:\s*\d+%/);
+    assert.match(rule('.setup-workspace'), /align-content:\s*stretch;/);
+    assert.match(rule('.setup-workspace'), /overflow-y:\s*auto;/);
+});
+
+test('course cards stay compact instead of filling half the Courses page', () => {
+    const rule = (selector: string): string => {
+        const start = styles.indexOf(`${selector} {`);
+        assert.ok(start >= 0, `${selector} must exist`);
+        return styles.slice(start, styles.indexOf('}', start) + 1);
+    };
+
+    assert.match(
+        rule('.workspace-grid--courses'),
+        /grid-template-columns:\s*repeat\(auto-fill, minmax\(21rem, 1fr\)\);/,
+    );
+    assert.match(rule('.course-card'), /padding:\s*clamp\(/);
+    assert.match(rule('.course-card-header .status-label'), /align-self:\s*start;/);
+    assert.match(
+        rule('.course-card .course-facts'),
+        /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/,
+    );
+    assert.match(rule('.course-card .course-facts > div'), /background:\s*transparent;/);
+    assert.match(
+        rule('.course-card .meeting-rule-list > li'),
+        /grid-template-columns:\s*minmax\(0, 1fr\) max-content;/,
+    );
+});
+
 test('Task feedback reserves scroll space while keeping the restored control centered', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'tasks',

@@ -468,7 +468,7 @@ ul {
 }
 
 .workspace-grid--courses {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
 }
 
 .workspace-grid--tasks {
@@ -842,6 +842,9 @@ ul {
 
 .course-card {
     position: relative;
+    align-content: start;
+    padding: clamp(0.85rem, 1.3vw, 1.1rem);
+    padding-left: clamp(1.15rem, 1.7vw, 1.45rem);
     overflow: hidden;
 }
 
@@ -888,16 +891,17 @@ ul {
 .course-card-header .status-label {
     grid-column: 2;
     grid-row: 1 / span 2;
+    align-self: start;
 }
 
 .course-card-header h2 {
-    font-size: 1.4rem;
+    font-size: 1.15rem;
     letter-spacing: -0.04em;
 }
 
 .course-card-header p:not(.status-label) {
     color: var(--ink-soft);
-    font-size: 0.84rem;
+    font-size: 0.78rem;
 }
 
 .course-facts,
@@ -927,14 +931,56 @@ ul {
     font-weight: 600;
 }
 
+.course-card .course-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0 0.9rem;
+    margin-top: 0.7rem;
+}
+
+/* Two paired label/value rows per line keep a narrow card readable; the teaching
+   range is the one fact whose value cannot survive a half-width column. */
+.course-card .course-facts > div {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 0.6rem;
+    align-items: baseline;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid var(--line);
+    border-radius: 0;
+    background: transparent;
+}
+
+.course-card .course-facts > div:first-child {
+    grid-column: 1 / -1;
+}
+
+.course-card .course-facts dd {
+    margin-top: 0;
+    font-size: 0.76rem;
+    text-align: right;
+}
+
+.course-card .meeting-rule-list > li {
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 0.2rem 0.6rem;
+    align-items: baseline;
+    padding: 0.5rem 0.65rem;
+}
+
+.course-card .meeting-rule-list > li > :nth-child(2),
+.course-card .meeting-rule-list > li > :nth-child(4) {
+    justify-self: end;
+    text-align: right;
+}
+
 .course-meetings {
-    margin-top: 1rem;
-    padding-top: 0.8rem;
+    margin-top: 0.75rem;
+    padding-top: 0.6rem;
     border-top: 1px solid var(--line);
 }
 
 .course-meetings h3 {
-    font-size: 0.84rem;
+    font-size: 0.8rem;
 }
 
 .meeting-rule-list > li {
@@ -1448,7 +1494,8 @@ ul {
 }
 
 .setup-step-panel {
-    min-height: 100%;
+    /* No percentage min-height: it desynchronizes row size from item size and
+       makes stacked panels (completion summary + holiday form) overlap. */
     padding: clamp(1rem, 2.7vw, 2rem);
     border-radius: 1.25rem;
 }
