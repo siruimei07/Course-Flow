@@ -2390,6 +2390,7 @@ test('level 11 migration retains a historically reached setup minimum after fact
             UPDATE setup_state SET ever_reached_minimum = 0 WHERE singleton = 1;
             UPDATE courses SET archived = 1;
             UPDATE meeting_series SET retired = 1;
+            UPDATE plan_state SET current_term_id = NULL WHERE singleton = 1;
         `);
     }
     finally {

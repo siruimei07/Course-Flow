@@ -99,11 +99,12 @@ async function establishCourse(t: test.TestContext): Promise<Readonly<{
     if (!projection.ok || projection.value.kind !== 'workspace.setup-projection') {
         throw new Error('Expected setup projection after Course');
     }
+    // The Current Term alone satisfies the minimum; the Course is a supplement.
     assert.deepEqual(projection.value.projection.minimum, {
         hasCurrentTerm: true,
         hasCurrentTermCourse: true,
         hasMeetingOrTask: false,
-        isSatisfied: false,
+        isSatisfied: true,
     });
     assert.equal(projection.value.projection.courses[0]?.meetings.length, 0);
     return {

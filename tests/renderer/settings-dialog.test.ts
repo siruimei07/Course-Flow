@@ -103,6 +103,7 @@ function settingsProps(overrides: Partial<SettingsProps> = {}): SettingsProps {
         setup,
         onClose: noop,
         onOpenDataProtection: noop,
+        onOpenManagement: noop,
         onOpenSetup: noop,
         ...overrides,
     };
@@ -141,7 +142,11 @@ test('settings opens on Term facts and keeps the setup entry inside that categor
     assert.match(html, /Fall 2026/);
     assert.match(html, /2026-09-08 至 2026-12-18/);
     assert.match(html, /America\/Toronto/);
-    assert.match(html, />打开学期与课程设置<\/button>/);
+    assert.match(html, />管理学期<\/button>/);
+    assert.match(html, />管理课程<\/button>/);
+    assert.match(html, />管理课节<\/button>/);
+    assert.match(html, />管理任务<\/button>/);
+    assert.match(html, />管理假期<\/button>/);
     assert.doesNotMatch(html, />打开数据与备份<\/button>/);
     assert.doesNotMatch(html, /AppBuildId/);
 });

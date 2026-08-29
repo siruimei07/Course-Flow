@@ -186,12 +186,12 @@ Files 之间加入 Grades；批准设计不等于已经交付入口。
 Setup 调整为：
 
 ```text
-Term → First Course + optional Time Slots → optional First Task
-     → optional Holiday → Today
+Term → Today
+     → optional Course / Meeting / Task / Holiday（各自的管理抽屉）
 ```
 
-当前最低完成条件为 `Current Term + 至少一门 Course`。Meeting、Task 和 Holiday 都可稍后从对应页面的右侧 Drawer
-补充，不再为了满足最低条件强迫用户创建虚假数据。
+当前最低完成条件为 `Current Term`。Course、Meeting、Task 和 Holiday 都可稍后从对应页面的创建/编辑抽屉补充，
+不再为了满足最低条件强迫用户创建虚假数据。
 
 Drawer 宽度为 `440–520 px`，内容区独立滚动，标题和主保存动作保持可达；页面不因长月历或多个 Time Slot 让整个应用
 产生难以控制的嵌套滚动。

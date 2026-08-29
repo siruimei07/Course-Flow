@@ -13,16 +13,6 @@ export type SetupState =
         projection: SetupProjection;
     }>
     | Readonly<{
-        kind: 'course';
-        dataMode: 'ready' | 'read-only';
-        projection: SetupProjection;
-    }>
-    | Readonly<{
-        kind: 'activity';
-        dataMode: 'ready' | 'read-only';
-        projection: SetupProjection;
-    }>
-    | Readonly<{
         kind: 'complete';
         dataMode: 'ready' | 'read-only';
         projection: SetupProjection;
@@ -31,6 +21,12 @@ export type SetupState =
 
 /**
  * Converts a validated Workspace outcome into the setup surface that may be shown.
+ *
+ * First setup owns exactly one required fact, the Current Term; Courses, Meetings,
+ * Tasks and HolidayRanges are added later from their own management surfaces.
+ *
+ * @param {WorkspaceSetupOutcome} outcome Validated Workspace setup outcome.
+ * @return {SetupState} Renderer-only setup state.
  */
 export function setupStateFrom(outcome: WorkspaceSetupOutcome): SetupState {
     if (!outcome.ok) {
@@ -40,14 +36,8 @@ export function setupStateFrom(outcome: WorkspaceSetupOutcome): SetupState {
         return { kind: 'problem', message: 'Workspace 返回了意外的设置状态。' };
     }
     const projection = outcome.value.projection;
-    if (!projection.currentTerm) {
+    if (!projection.minimum.hasCurrentTerm) {
         return { kind: 'term', dataMode: outcome.value.dataMode, projection };
-    }
-    if (!projection.minimum.hasCurrentTermCourse) {
-        return { kind: 'course', dataMode: outcome.value.dataMode, projection };
-    }
-    if (!projection.minimum.hasMeetingOrTask) {
-        return { kind: 'activity', dataMode: outcome.value.dataMode, projection };
     }
     return {
         kind: 'complete',

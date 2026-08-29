@@ -123,17 +123,6 @@ type FocusFirstSetupFieldError = (
     errors: SetupFieldErrors,
 ) => void;
 
-type SetupChecklistStep = 'term' | 'course' | 'activity' | 'holiday';
-
-type SetupChecklistNavigationFrom = (
-    state: Exclude<SetupState, Readonly<{ kind: 'loading' }> | Readonly<{ kind: 'problem' }>>,
-    activeStep: SetupChecklistStep,
-    blocked: boolean,
-) => Readonly<{
-    previous: SetupChecklistStep | null;
-    next: SetupChecklistStep | null;
-}>;
-
 /**
  * Reads a wished-for production helper without turning RED into a compile error.
  * @param {string} name Exported SetupDialog helper name.
@@ -305,6 +294,7 @@ test('setup is a modal checklist with an inner dark current-step layer and early
         open: true,
         state,
         onClose(): void {},
+        onOpenManagement(): void {},
         onProjection(): void {},
     }));
 
@@ -314,14 +304,16 @@ test('setup is a modal checklist with an inner dark current-step layer and early
     assert.doesNotMatch(html, /aria-label="关闭窗口"/);
     assert.match(html, /完成首次设置/);
     assert.match(html, /当前学期/);
-    assert.match(html, /添加课程/);
-    assert.match(html, /课节或任务/);
-    assert.match(html, /假期（可稍后）/);
+    assert.match(html, /创建当前学期/);
+    assert.match(html, /可选 · 已有 0 门/);
     assert.match(html, /class="setup-progress-card"[^>]*>[\s\S]*class="setup-current-layer"/);
     assert.match(html, /保存进度并退出/);
-    assert.match(html, />上一步<\/button>/);
-    assert.match(html, />下一步<\/button>/);
     assert.match(html, /进入今天/);
+    // Course, Meeting, Task and Holiday are supplemental and belong to their surfaces.
+    assert.doesNotMatch(html, /name="course-code"/);
+    assert.doesNotMatch(html, /name="holiday-name"/);
+    assert.doesNotMatch(html, />上一步<\/button>/);
+    assert.doesNotMatch(html, />下一步<\/button>/);
     assert.doesNotMatch(html, /保护数据|备份|Grade|Attendance|即将推出/);
 });
 
@@ -330,6 +322,7 @@ test('setup progress nests its real checklist inside the elevated task card', ()
         open: true,
         state,
         onClose(): void {},
+        onOpenManagement(): void {},
         onProjection(): void {},
     }));
     const elevatedChecklistPattern = new RegExp([
@@ -356,175 +349,12 @@ test('setup progress nests its real checklist inside the elevated task card', ()
     assert.doesNotMatch(html, /当前任务/);
 });
 
-test('setup checklist navigation reaches only completed facts and the current step', () => {
-    const candidate = setupDialogHelper('setupChecklistNavigationFrom');
-    assert.equal(typeof candidate, 'function');
-    const navigationFrom = candidate as SetupChecklistNavigationFrom;
-    const currentTerm = {
-        termId: '11111111-1111-4111-8111-111111111111',
-        name: 'Fall 2026',
-        startDate: '2026-09-08',
-        endDate: '2026-12-18',
-        timeZone: 'America/Toronto',
-        archived: false,
-        entityVersion: '1',
-    } as const;
-    const courseState = {
-        kind: 'course',
-        dataMode: 'ready',
-        projection: {
-            ...setup,
-            minimum: {
-                hasCurrentTerm: true,
-                hasCurrentTermCourse: false,
-                hasMeetingOrTask: false,
-                isSatisfied: false,
-            },
-            currentTerm,
-            terms: [currentTerm],
-        },
-    } as const satisfies SetupState;
-    const activityState = {
-        ...courseState,
-        kind: 'activity',
-        projection: {
-            ...courseState.projection,
-            minimum: {
-                hasCurrentTerm: true,
-                hasCurrentTermCourse: true,
-                hasMeetingOrTask: false,
-                isSatisfied: false,
-            },
-        },
-    } as const satisfies SetupState;
-    const completeState = {
-        ...activityState,
-        kind: 'complete',
-        projection: {
-            ...activityState.projection,
-            minimum: {
-                hasCurrentTerm: true,
-                hasCurrentTermCourse: true,
-                hasMeetingOrTask: true,
-                isSatisfied: true,
-            },
-        },
-    } as const satisfies SetupState;
-
-    assert.deepEqual(navigationFrom(courseState, 'course', false), {
-        previous: 'term',
-        next: null,
-    });
-    assert.deepEqual(navigationFrom(courseState, 'term', false), {
-        previous: null,
-        next: 'course',
-    });
-    assert.deepEqual(navigationFrom(activityState, 'course', false), {
-        previous: 'term',
-        next: 'activity',
-    });
-    assert.deepEqual(navigationFrom(completeState, 'activity', false), {
-        previous: 'course',
-        next: 'holiday',
-    });
-    assert.deepEqual(navigationFrom(completeState, 'activity', true), {
-        previous: null,
-        next: null,
-    });
-
-    const courseHtml = renderToStaticMarkup(createElement(SetupDialog, {
-        open: true,
-        state: courseState,
-        onClose(): void {},
-        onProjection(): void {},
-    }));
-    assert.match(courseHtml, /<button(?![^>]*disabled)[^>]*>上一步<\/button>/);
-    assert.match(courseHtml, /<button(?=[^>]*disabled)[^>]*>下一步<\/button>/);
-});
-
-test('activity setup offers the approved Meeting or Task choice without example data', () => {
-    const currentTerm = {
-        termId: '11111111-1111-4111-8111-111111111111',
-        name: 'Fall 2026',
-        startDate: '2026-09-08',
-        endDate: '2026-12-18',
-        timeZone: 'America/Toronto',
-        archived: false,
-        entityVersion: '1',
-    } as const;
-    const activityState: SetupState = {
-        kind: 'activity',
-        dataMode: 'ready',
-        projection: {
-            ...setup,
-            workspaceRevision: '2',
-            planEntityVersion: '2',
-            minimum: {
-                hasCurrentTerm: true,
-                hasCurrentTermCourse: true,
-                hasMeetingOrTask: false,
-                isSatisfied: false,
-            },
-            currentTerm,
-            terms: [currentTerm],
-            holidayRanges: [{
-                holidayRangeId: '44444444-4444-4444-8444-444444444444',
-                termId: '55555555-5555-4555-8555-555555555555',
-                name: 'Past Reading Week',
-                startDate: '2026-02-16',
-                endDate: '2026-02-20',
-                entityVersion: '1',
-            }],
-            courses: [{
-                courseId: '22222222-2222-4222-8222-222222222222',
-                termId: currentTerm.termId,
-                code: 'CSC108',
-                name: 'Introduction to Computer Programming',
-                section: null,
-                instructor: null,
-                color: null,
-                credits: null,
-                teachingRange: {
-                    kind: 'inherit-term',
-                    startDate: currentTerm.startDate,
-                    endDate: currentTerm.endDate,
-                },
-                archived: false,
-                entityVersion: '1',
-                meetings: [],
-            }],
-        },
-    };
-    const html = renderToStaticMarkup(createElement(SetupDialog, {
-        open: true,
-        state: activityState,
-        onClose(): void {},
-        onProjection(): void {},
-    }));
-
-    assert.match(html, /选择添加方式/);
-    assert.match(html, /aria-pressed="true"[^>]*>添加课节/);
-    assert.match(html, /aria-pressed="false"[^>]*>添加任务/);
-    assert.match(html, /保存课节/);
-    assert.doesNotMatch(html, /示例课程|模拟数据/);
-
-    const taskEntryHtml = renderToStaticMarkup(createElement(SetupDialog, {
-        entryIntent: 'task',
-        open: true,
-        state: activityState,
-        onClose(): void {},
-        onProjection(): void {},
-    }));
-    assert.match(taskEntryHtml, /aria-pressed="true"[^>]*>添加任务/);
-    assert.match(taskEntryHtml, /保存任务/);
-    assert.doesNotMatch(taskEntryHtml, /保存课节/);
-});
-
 test('read-only setup disables editable controls as well as the submit action', () => {
     const html = renderToStaticMarkup(createElement(SetupDialog, {
         open: true,
         state: { ...state, dataMode: 'read-only' },
         onClose(): void {},
+        onOpenManagement(): void {},
         onProjection(): void {},
     }));
 
@@ -610,6 +440,7 @@ test('a completed setup exposes an announced programmatic focus destination', ()
         open: true,
         state: completeState,
         onClose(): void {},
+        onOpenManagement(): void {},
         onProjection(): void {},
     }));
 
@@ -618,27 +449,17 @@ test('a completed setup exposes an announced programmatic focus destination', ()
         + '<h2[^>]*tabindex="-1"[^>]*>你的 Today 已经可以使用</h2>',
     );
     assert.match(html, focusDestinationPattern);
-    assert.match(html, /添加假期（可选）/);
-    assert.match(html, /name="holiday-name"/);
-    assert.match(html, /保存假期/);
-    assert.match(html, /暂不添加，进入 Today/);
     assert.match(html, /继续补充/);
-    assert.match(html, /添加另一门课程/);
-    assert.match(html, /添加课节或任务/);
+    assert.match(html, />管理课程<\/button>/);
+    assert.match(html, />管理课节<\/button>/);
+    assert.match(html, />管理任务<\/button>/);
+    assert.match(html, />管理假期<\/button>/);
     assert.match(html, /假期<\/dt><dd>0 个/);
-    assert.match(html, /当前已有 0 个假期/);
-    assert.doesNotMatch(html, /当前已有 1 个假期/);
-
-    const taskEntryHtml = renderToStaticMarkup(createElement(SetupDialog, {
-        entryIntent: 'task',
-        open: true,
-        state: completeState,
-        onClose(): void {},
-        onProjection(): void {},
-    }));
-    assert.match(taskEntryHtml, /aria-pressed="true"[^>]*>添加任务/);
-    assert.match(taskEntryHtml, /保存任务/);
-    assert.doesNotMatch(taskEntryHtml, /name="holiday-name"/);
+    // Only the Current Term owns HolidayRanges, so a past Term range is never counted.
+    assert.doesNotMatch(html, /假期<\/dt><dd>1 个/);
+    // The supplemental editors are no longer nested inside first setup.
+    assert.doesNotMatch(html, /name="holiday-name"/);
+    assert.doesNotMatch(html, /name="course-code"/);
 });
 
 test('an incompatible draft does not offer a read-only discard as executable', () => {
@@ -661,6 +482,7 @@ test('an incompatible draft does not offer a read-only discard as executable', (
             },
         },
         onClose(): void {},
+        onOpenManagement(): void {},
         onProjection(): void {},
     }));
 

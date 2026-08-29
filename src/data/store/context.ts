@@ -152,23 +152,8 @@ export function advanceSetupMinimumMilestone(database: DatabaseSync): void {
                 AND EXISTS (
                     SELECT 1
                     FROM plan_state
-                    JOIN courses ON courses.term_id = plan_state.current_term_id
-                        AND courses.archived = 0
                     WHERE plan_state.singleton = 1
-                        AND (
-                            EXISTS (
-                                SELECT 1
-                                FROM meeting_series
-                                WHERE meeting_series.course_id = courses.course_id
-                                    AND meeting_series.retired = 0
-                            )
-                            OR EXISTS (
-                                SELECT 1
-                                FROM task_series
-                                WHERE task_series.course_id = courses.course_id
-                                    AND task_series.retired = 0
-                            )
-                        )
+                        AND plan_state.current_term_id IS NOT NULL
                 )
         `);
 }

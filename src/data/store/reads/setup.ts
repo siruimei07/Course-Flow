@@ -398,8 +398,9 @@ export function readSetupProjection(ctx: StoreContext, options: ReadSnapshotOpti
             hasCurrentTerm,
             hasCurrentTermCourse,
             hasMeetingOrTask,
-            isSatisfied: hasCurrentTerm && hasCurrentTermCourse && hasMeetingOrTask,
+            isSatisfied: hasCurrentTerm,
         });
+        const everReachedMinimum = stateRow.ever_reached_minimum === 1n || minimum.isSatisfied;
         const draftCheckpoint = stateRow.schema_version === null
             ? null
             : Object.freeze({
@@ -415,8 +416,10 @@ export function readSetupProjection(ctx: StoreContext, options: ReadSnapshotOpti
             workspaceRevision: stateRow.revision.toString(),
             planEntityVersion: stateRow.plan_entity_version.toString(),
             minimum,
-            everReachedMinimum: stateRow.ever_reached_minimum === 1n,
-            defaultRoute: stateRow.ever_reached_minimum === 1n ? 'today' : 'setup',
+            // A satisfied minimum has by definition been reached, so the persisted
+            // one-way milestone only has to outlive the Term it was reached in.
+            everReachedMinimum,
+            defaultRoute: everReachedMinimum ? 'today' : 'setup',
             draftCheckpointVersion: stateRow.checkpoint_version.toString(),
             draftCheckpoint,
             currentTerm,

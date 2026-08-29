@@ -697,7 +697,7 @@ test('read-only and recovery-required Workspace modes reject setup writes', asyn
         });
         const readOnlyBootstrap = await bootstrap(readOnly);
         assert.equal(readOnlyBootstrap.workspaceLifecycle.mode, 'read-only');
-        assert.equal(readOnlyBootstrap.workspaceLifecycle.route, 'setup');
+        assert.equal(readOnlyBootstrap.workspaceLifecycle.route, 'today');
         assert.equal(readOnlyBootstrap.workspaceLifecycle.workspaceRevision, '1');
         assert.equal(readOnlyBootstrap.workspaceLifecycle.capabilities['workspace.read'], 'available');
         assert.equal(readOnlyBootstrap.workspaceLifecycle.capabilities['workspace.write'], 'unavailable');
@@ -771,6 +771,7 @@ test('read-only and recovery-required Workspace modes reject setup writes', asyn
         });
         const limitedBootstrap = await bootstrap(limited);
         assert.equal(limitedBootstrap.workspaceLifecycle.mode, 'limited');
+        // This case never created a Term, so first setup is still the only route.
         assert.equal(limitedBootstrap.workspaceLifecycle.route, 'setup');
         assert.equal(limitedBootstrap.workspaceLifecycle.moduleHealth['MOD-LIBRARY'], 'unavailable');
         assert.equal(limitedBootstrap.workspaceLifecycle.capabilities['library.read'], 'unavailable');

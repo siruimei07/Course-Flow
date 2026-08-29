@@ -449,9 +449,7 @@ export function isSetupProjection(value: unknown): boolean {
     if (minimum.hasCurrentTerm !== (currentTerm !== null)
         || minimum.hasCurrentTermCourse !== (currentTermCourses.length > 0)
         || minimum.hasMeetingOrTask !== hasMeetingOrTask
-        || minimum.isSatisfied !== (minimum.hasCurrentTerm
-            && minimum.hasCurrentTermCourse
-            && minimum.hasMeetingOrTask)
+        || minimum.isSatisfied !== minimum.hasCurrentTerm
         || value.defaultRoute !== (value.everReachedMinimum ? 'today' : 'setup')) {
         return false;
     }

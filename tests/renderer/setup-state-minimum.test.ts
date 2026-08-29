@@ -47,10 +47,10 @@ function projection(overrides: Partial<SetupProjection> = {}): SetupProjection {
             hasCurrentTerm: true,
             hasCurrentTermCourse: true,
             hasMeetingOrTask: false,
-            isSatisfied: false,
+            isSatisfied: true,
         },
-        everReachedMinimum: false,
-        defaultRoute: 'setup',
+        everReachedMinimum: true,
+        defaultRoute: 'today',
         draftCheckpointVersion: '0',
         draftCheckpoint: null,
         currentTerm: term,
@@ -80,8 +80,36 @@ function outcome(
     };
 }
 
-test('a Current Term and Course without a Meeting or Task remains incomplete', () => {
-    assert.equal(setupStateFrom(outcome(projection())).kind, 'activity');
+test('a Current Term alone completes first setup even without a Course', () => {
+    const termOnly = projection({
+        minimum: {
+            hasCurrentTerm: true,
+            hasCurrentTermCourse: false,
+            hasMeetingOrTask: false,
+            isSatisfied: true,
+        },
+        courses: [],
+    });
+
+    assert.equal(setupStateFrom(outcome(termOnly)).kind, 'complete');
+});
+
+test('no Current Term is the only state that still routes to first setup', () => {
+    const withoutTerm = projection({
+        minimum: {
+            hasCurrentTerm: false,
+            hasCurrentTermCourse: false,
+            hasMeetingOrTask: false,
+            isSatisfied: false,
+        },
+        currentTerm: null,
+        terms: [],
+        courses: [],
+    });
+
+    assert.equal(setupStateFrom(outcome(withoutTerm)).kind, 'term');
+    // Supplemental facts never send a completed setup back to the wizard.
+    assert.equal(setupStateFrom(outcome(projection())).kind, 'complete');
 });
 
 test('a current-Course Task satisfies the minimum when no Meeting exists', () => {

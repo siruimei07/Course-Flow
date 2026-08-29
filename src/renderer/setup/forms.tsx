@@ -362,7 +362,7 @@ export function TermForm(props: Readonly<{
 
     return (
         <div className="setup-step-panel">
-            <p className="eyebrow">步骤 1 / 3</p>
+            <p className="eyebrow">当前学期</p>
             <h2>创建当前学期</h2>
             <p>先确定名称、起止日期和默认时区。所有信息只保存在这台设备上。</p>
             <form
@@ -606,7 +606,7 @@ export function CourseForm(props: Readonly<{
 
     return (
         <div className="setup-step-panel">
-            <p className="eyebrow">步骤 2 / 3 · {currentTerm.name}</p>
+            <p className="eyebrow">课程 · {currentTerm.name}</p>
             <h2>添加课程</h2>
             <p>教学范围默认与学期相同；课程晚开始或提前结束时可以明确缩短。</p>
             <form
@@ -749,124 +749,6 @@ export function CourseForm(props: Readonly<{
                     writable={writable}
                 />
             </form>
-        </div>
-    );
-}
-
-/**
- * Makes the Meeting-or-Task decision explicit and preserves it in the setup draft.
- *
- * @param {object} props Controlled activity drafts and formal projection.
- * @return {JSX.Element} Activity choice with the selected real form.
- */
-export function ActivityStep(props: Readonly<{
-    blocked: boolean;
-    dataMode: 'ready' | 'read-only';
-    draft: SetupDraft;
-    inputLocked: boolean;
-    pendingMutation: PendingSetupMutation | null;
-    projection: ResolvedSetupState['projection'];
-    selectionBlocked: boolean;
-    onActivityKindChange(value: SetupDraft['activityKind']): void;
-    onBusyChange(busy: boolean): void;
-    onMeetingChange(value: MeetingDraft): void;
-    onTaskChange(value: TaskDraft): void;
-    onCommitted(): Promise<void>;
-    onSettled(kind: PendingSetupMutation['kind']): void;
-    onUnknown(pending: PendingSetupMutation): void;
-}>) {
-    const chooseFromKey = (
-        event: KeyboardEvent<HTMLButtonElement>,
-        current: SetupDraft['activityKind'],
-    ): void => {
-        if (event.key !== 'ArrowLeft'
-            && event.key !== 'ArrowRight'
-            && event.key !== 'Home'
-            && event.key !== 'End') {
-            return;
-        }
-        event.preventDefault();
-        const target = event.key === 'Home'
-            ? 'meeting'
-            : event.key === 'End'
-                ? 'task'
-                : current === 'meeting' ? 'task' : 'meeting';
-        props.onActivityKindChange(target);
-        globalThis.requestAnimationFrame(() => {
-            document.getElementById(`activity-choice-${target}`)?.focus();
-        });
-    };
-
-    return (
-        <div className="setup-step-panel">
-            <p className="eyebrow">步骤 3 / 3</p>
-            <h2>添加课节或任务</h2>
-            <p>选择一种真实活动即可达到最低条件；以后仍可继续补充另一种。</p>
-            <div
-                aria-label="选择添加方式"
-                className="activity-choice"
-                role="group"
-            >
-                <button
-                    aria-pressed={props.draft.activityKind === 'meeting'}
-                    autoFocus={props.draft.activityKind === 'meeting'}
-                    disabled={props.dataMode === 'read-only'
-                        || props.blocked
-                        || props.selectionBlocked}
-                    id="activity-choice-meeting"
-                    onClick={() => props.onActivityKindChange('meeting')}
-                    onKeyDown={event => chooseFromKey(event, 'meeting')}
-                    type="button"
-                >添加课节</button>
-                <button
-                    aria-pressed={props.draft.activityKind === 'task'}
-                    autoFocus={props.draft.activityKind === 'task'}
-                    disabled={props.dataMode === 'read-only'
-                        || props.blocked
-                        || props.selectionBlocked}
-                    id="activity-choice-task"
-                    onClick={() => props.onActivityKindChange('task')}
-                    onKeyDown={event => chooseFromKey(event, 'task')}
-                    type="button"
-                >添加任务</button>
-            </div>
-            {props.draft.activityKind === 'meeting' ? (
-                <MeetingForm
-                    blocked={props.blocked
-                        || (props.pendingMutation !== null
-                            && props.pendingMutation.kind !== 'meeting')}
-                    dataMode={props.dataMode}
-                    draft={props.draft.meeting}
-                    inputLocked={props.inputLocked}
-                    pendingCommand={props.pendingMutation?.kind === 'meeting'
-                        ? props.pendingMutation.command
-                        : null}
-                    projection={props.projection}
-                    onChange={props.onMeetingChange}
-                    onBusyChange={props.onBusyChange}
-                    onCommitted={props.onCommitted}
-                    onSettled={() => props.onSettled('meeting')}
-                    onUnknown={command => props.onUnknown({ kind: 'meeting', command })}
-                />
-            ) : (
-                <TaskForm
-                    blocked={props.blocked
-                        || (props.pendingMutation !== null
-                            && props.pendingMutation.kind !== 'task')}
-                    dataMode={props.dataMode}
-                    draft={props.draft.task}
-                    inputLocked={props.inputLocked}
-                    pendingCommand={props.pendingMutation?.kind === 'task'
-                        ? props.pendingMutation.command
-                        : null}
-                    projection={props.projection}
-                    onChange={props.onTaskChange}
-                    onBusyChange={props.onBusyChange}
-                    onCommitted={props.onCommitted}
-                    onSettled={() => props.onSettled('task')}
-                    onUnknown={command => props.onUnknown({ kind: 'task', command })}
-                />
-            )}
         </div>
     );
 }

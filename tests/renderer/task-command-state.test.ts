@@ -343,7 +343,7 @@ function setupProjectionOutcome(workspaceRevision: string): WorkspaceSetupOutcom
                     hasCurrentTerm: true,
                     hasCurrentTermCourse: true,
                     hasMeetingOrTask: false,
-                    isSatisfied: false,
+                    isSatisfied: true,
                 },
                 everReachedMinimum: true,
                 defaultRoute: 'today',

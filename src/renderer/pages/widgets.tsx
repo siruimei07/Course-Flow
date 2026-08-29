@@ -37,6 +37,7 @@ export function PageHeader(props: Readonly<{
     headingId: string;
     title: string;
     context: string;
+    actions?: ReactElement;
 }>): ReactElement {
     return (
         <header className="workspace-page-header">
@@ -46,6 +47,9 @@ export function PageHeader(props: Readonly<{
                 tabIndex={-1}
             >{props.title}</h1>
             <p className="page-context">{props.context}</p>
+            {props.actions === undefined ? null : (
+                <div className="workspace-page-actions">{props.actions}</div>
+            )}
         </header>
     );
 }

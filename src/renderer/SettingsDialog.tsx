@@ -16,6 +16,7 @@ import type {
     MigrationSafetyCopyProjection,
 } from '../shared/workspace-migration-contract';
 import type { SetupProjection } from '../shared/workspace-term-contract';
+import type { ManagementSurfaceId } from './management-surfaces';
 import { currentTermHolidayCount } from './setup/checklist';
 
 /**
@@ -40,6 +41,7 @@ export type SettingsDialogProps = Readonly<{
     setup: SetupProjection;
     onClose(): void;
     onOpenDataProtection(): void;
+    onOpenManagement(surface: ManagementSurfaceId): void;
     onOpenSetup(): void;
 }>;
 
@@ -234,11 +236,40 @@ export function TermSettings(props: SettingsDialogProps): ReactElement {
                 <div><dt>课节与任务</dt><dd>{meetingCount} 条课节 · {taskCount} 条任务</dd></div>
                 <div><dt>假期</dt><dd>{currentTermHolidayCount(props.setup)} 个</dd></div>
             </dl>
-            <button
-                className="primary-action"
-                onClick={props.onOpenSetup}
-                type="button"
-            >打开学期与课程设置</button>
+            <div className="settings-section-actions">
+                {currentTerm === null ? (
+                    <button
+                        className="primary-action"
+                        onClick={props.onOpenSetup}
+                        type="button"
+                    >完成首次设置</button>
+                ) : null}
+                <button
+                    className={currentTerm === null ? 'secondary-action' : 'primary-action'}
+                    onClick={() => props.onOpenManagement('term')}
+                    type="button"
+                >管理学期</button>
+                <button
+                    className="secondary-action"
+                    onClick={() => props.onOpenManagement('course')}
+                    type="button"
+                >管理课程</button>
+                <button
+                    className="secondary-action"
+                    onClick={() => props.onOpenManagement('meeting')}
+                    type="button"
+                >管理课节</button>
+                <button
+                    className="secondary-action"
+                    onClick={() => props.onOpenManagement('task')}
+                    type="button"
+                >管理任务</button>
+                <button
+                    className="secondary-action"
+                    onClick={() => props.onOpenManagement('holiday')}
+                    type="button"
+                >管理假期</button>
+            </div>
         </div>
     );
 }

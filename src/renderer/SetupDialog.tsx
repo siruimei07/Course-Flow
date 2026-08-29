@@ -1,13 +1,11 @@
-import { INTL_ZONE_RULES } from '../shared/meeting-time';
-import { normalizeCreateTaskCommand, type CreateTaskCommand } from '../shared/workspace-task-contract';
-import { normalizeCreateTermCommand, type CreateTermCommand } from '../shared/workspace-term-contract';
 import { setupStateFrom, type SetupState } from './setup-state';
-import { completeEditorForEntry, completeEditorFrom, currentSetupChecklistStepFrom, editableStepFrom, initialDraftFrom, setupChecklistNavigationFrom, visibleChecklistStepFrom } from './setup/checklist';
+import type { ManagementSurfaceId } from './management-surfaces';
+import { initialDraftFrom } from './setup/checklist';
 import { focusStatus } from './setup/field-errors';
-import { ActivityStep, CourseForm, HolidayForm, TermForm } from './setup/forms';
+import { TermForm } from './setup/forms';
 import { reconcileSetupCheckpoint, reducePendingSetupMutation, retryPendingSetupMutation, setupMutationProblemMessage } from './setup/mutation';
 import type { PendingSetupMutation } from './setup/mutation';
-import { IncompatibleDraft, SetupComplete, SetupFactReview, SetupProgress } from './setup/progress';
+import { IncompatibleDraft, SetupComplete, SetupProgress } from './setup/progress';
 /**
  * @file Renders and persists the interruptible first-setup editing flow.
  */
@@ -17,36 +15,15 @@ import {
     useReducer,
     useRef,
     useState,
-    type FormEvent,
-    type KeyboardEvent,
-    type RefObject,
 } from 'react';
 
-import {
-    normalizeCreateCourseCommand,
-    normalizeCreateMeetingSeriesCommand,
-    type CreateCourseCommand,
-    type CreateMeetingSeriesCommand,
-    type CourseColor,
-    type MeetingTypeCode,
-    type MeetingWeekday,
-} from '../shared/workspace-course-contract';
-import {
-    normalizeCreateHolidayRangeCommand,
-    type CreateHolidayRangeCommand,
-} from '../shared/workspace-holiday-contract';
 import type {
     WorkspaceSetupOutcome,
-    WorkspaceSetupProblem,
 } from '../shared/workspace-setup-contract';
 import {
     decodeSetupDraft,
     encodeSetupDraft,
-    type CourseDraft,
-    type HolidayDraft,
-    type MeetingDraft,
     type SetupDraft,
-    type TaskDraft,
     type TermDraft,
 } from './setup-draft';
 
@@ -56,63 +33,29 @@ export type ResolvedSetupState = Exclude<
 >;
 
 export type SetupDialogProps = Readonly<{
-    entryIntent?: 'default' | 'task';
     open: boolean;
     state: ResolvedSetupState;
     onProjection(state: ResolvedSetupState): void;
     onClose(destination: 'current' | 'today'): void;
+    onOpenManagement(surface: ManagementSurfaceId): void;
 }>;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /**
- * Renders the modal setup flow and saves Shell drafts before every explicit exit.
+ * Renders the modal first-setup flow and saves Shell drafts before every explicit exit.
+ *
+ * First setup owns exactly one required fact, the Current Term. Courses, Meetings,
+ * Tasks and HolidayRanges are supplemental and belong to their management surfaces.
  *
  * @param {SetupDialogProps} props Setup state and lifecycle callbacks.
  * @return {JSX.Element} Native modal dialog.
  */
 export function SetupDialog(props: SetupDialogProps) {
     const dialogRef = useRef<HTMLDialogElement>(null);
-    const setupWorkspaceRef = useRef<HTMLElement>(null);
     const statusRef = useRef<HTMLParagraphElement>(null);
     const completionHeadingRef = useRef<HTMLHeadingElement>(null);
     const isDirty = useRef(false);
     const readOnly = props.state.dataMode === 'read-only';
-    const [draft, setDraft] = useState<SetupDraft>(() => initialDraftFrom(props.state, props.entryIntent));
+    const [draft, setDraft] = useState<SetupDraft>(() => initialDraftFrom(props.state));
     const [checkpointMessage, setCheckpointMessage] = useState(readOnly
         ? '只读模式；可以查看现有设置和草稿，但不能更改或丢弃。'
         : '未提交输入会保存为本地草稿。');
@@ -122,12 +65,6 @@ export function SetupDialog(props: SetupDialogProps) {
         reducePendingSetupMutation,
         { pending: null },
     );
-    const [completeEditor, setCompleteEditor] = useState<'course' | 'activity' | null>(() => (
-        completeEditorForEntry(props.state, props.entryIntent)
-    ));
-    const [activeChecklistStep, setActiveChecklistStep] = useState<SetupDraft['step']>(() => (
-        visibleChecklistStepFrom(props.state, props.entryIntent)
-    ));
     const pendingMutation = pendingMutationState.pending;
     const hasPendingMutation = pendingMutation !== null;
     const checkpoint = props.state.projection.draftCheckpoint;
@@ -135,22 +72,6 @@ export function SetupDialog(props: SetupDialogProps) {
         && decodeSetupDraft(checkpoint.opaquePayload) === null;
     const hasUncommittedDraft = isDirty.current || (checkpoint !== null
         && !checkpointIsIncompatible);
-    const currentChecklistStep = currentSetupChecklistStepFrom(props.state);
-    const reviewingChecklistStep = completeEditor !== null
-        || activeChecklistStep === currentChecklistStep
-        ? null
-        : activeChecklistStep;
-    const setupNavigationBlocked = savingCheckpoint
-        || commandBusy
-        || hasPendingMutation
-        || hasUncommittedDraft
-        || checkpointIsIncompatible
-        || completeEditor !== null;
-    const checklistNavigation = setupChecklistNavigationFrom(
-        props.state,
-        activeChecklistStep,
-        setupNavigationBlocked,
-    );
 
     useEffect(() => {
         const dialog = dialogRef.current;
@@ -167,26 +88,13 @@ export function SetupDialog(props: SetupDialogProps) {
 
     useEffect(() => {
         if (!isDirty.current) {
-            setDraft(initialDraftFrom(props.state, props.entryIntent));
+            setDraft(initialDraftFrom(props.state));
         }
     }, [
-        props.entryIntent,
         props.open,
         props.state.kind,
         props.state.projection.workspaceRevision,
         props.state.projection.draftCheckpointVersion,
-    ]);
-
-    useEffect(() => {
-        if (pendingMutation === null) {
-            setActiveChecklistStep(visibleChecklistStepFrom(props.state, props.entryIntent));
-        }
-    }, [
-        pendingMutation,
-        props.entryIntent,
-        props.open,
-        props.state.kind,
-        props.state.projection.workspaceRevision,
     ]);
 
     useEffect(() => {
@@ -198,10 +106,7 @@ export function SetupDialog(props: SetupDialogProps) {
     useEffect(() => {
         if (!props.open
             || props.state.kind !== 'complete'
-            || props.entryIntent === 'task'
-            || completeEditor !== null
-            || (checkpoint !== null && !checkpointIsIncompatible)
-            || completeEditorFrom(props.state) !== null) {
+            || (checkpoint !== null && !checkpointIsIncompatible)) {
             return;
         }
         const completionFocusFrame = globalThis.requestAnimationFrame(() => (
@@ -210,48 +115,20 @@ export function SetupDialog(props: SetupDialogProps) {
         return () => globalThis.cancelAnimationFrame(completionFocusFrame);
     }, [
         checkpointIsIncompatible,
-        completeEditor,
-        props.entryIntent,
-        props.open,
-        props.state.kind,
-        props.state.projection.draftCheckpointVersion,
-    ]);
-
-    useEffect(() => {
-        if (!props.open || props.state.kind !== 'complete') {
-            setCompleteEditor(null);
-            return;
-        }
-        if (!isDirty.current) {
-            setCompleteEditor(completeEditorForEntry(props.state, props.entryIntent));
-        }
-    }, [
-        props.entryIntent,
         props.open,
         props.state.kind,
         props.state.projection.draftCheckpointVersion,
     ]);
 
     /**
-     * Updates one controlled draft branch and marks it as needing a checkpoint.
+     * Updates the controlled Term draft and marks it as needing a checkpoint.
      *
-     * @param {'term' | 'course' | 'meeting' | 'task'} branch Draft branch.
-     * @param {TermDraft | CourseDraft | MeetingDraft | TaskDraft} value Updated branch value.
+     * @param {TermDraft} value Updated Term branch value.
      * @return {void}
      */
-    const updateDraft = (
-        branch: 'term' | 'course' | 'meeting' | 'task' | 'holiday',
-        value: TermDraft | CourseDraft | MeetingDraft | TaskDraft | HolidayDraft,
-    ): void => {
-        const completedStep = branch === 'course'
-            ? 'course'
-            : branch === 'meeting' || branch === 'task' ? 'activity' : 'holiday';
+    const updateTermDraft = (value: TermDraft): void => {
         isDirty.current = true;
-        setDraft(current => ({
-            ...current,
-            step: props.state.kind === 'complete' ? completedStep : editableStepFrom(props.state),
-            [branch]: value,
-        }));
+        setDraft(current => ({ ...current, step: 'term', term: value }));
         setCheckpointMessage('有未提交输入；请先提交当前表单，或保存进度并退出。');
     };
 
@@ -263,41 +140,6 @@ export function SetupDialog(props: SetupDialogProps) {
         if (pendingMutation?.kind === kind) {
             dispatchPendingMutation({ kind: 'resolved' });
         }
-    };
-
-    /**
-     * Selects the explicit Meeting-or-Task branch and checkpoints that choice.
-     *
-     * @param {'meeting' | 'task'} activityKind Selected setup activity.
-     * @return {void}
-     */
-    const updateActivityKind = (activityKind: SetupDraft['activityKind']): void => {
-        if (hasPendingMutation) {
-            dispatchPendingMutation({ kind: 'branch-switch-attempted' });
-            setCheckpointMessage('先精确重试未确认的正式请求，再切换添加方式。');
-            focusStatus(statusRef);
-            return;
-        }
-        isDirty.current = true;
-        setDraft(current => ({ ...current, activityKind, step: 'activity' }));
-        setCheckpointMessage('已选择添加方式；退出时会先保存本地草稿。');
-    };
-
-    /**
-     * Moves among completed checklist facts and the current editable step.
-     * @param {SetupDraft['step'] | null} target Adjacent destination already authorized by formal facts.
-     * @return {void}
-     */
-    const navigateChecklist = (target: SetupDraft['step'] | null): void => {
-        if (target === null
-            || (target !== checklistNavigation.previous && target !== checklistNavigation.next)) {
-            return;
-        }
-        setActiveChecklistStep(target);
-        setCheckpointMessage(target === currentChecklistStep
-            ? '已返回当前设置步骤；正式数据和草稿没有改变。'
-            : '正在查看已完成的正式设置；正式数据和草稿没有改变。');
-        globalThis.requestAnimationFrame(() => setupWorkspaceRef.current?.focus());
     };
 
     /**
@@ -338,12 +180,7 @@ export function SetupDialog(props: SetupDialogProps) {
         setSavingCheckpoint(true);
         setCheckpointMessage('正在保存设置草稿…');
         const expectedVersion = props.state.projection.draftCheckpointVersion;
-        const opaquePayload = encodeSetupDraft({
-            ...draft,
-            step: props.state.kind === 'complete'
-                ? draft.step
-                : editableStepFrom(props.state),
-        });
+        const opaquePayload = encodeSetupDraft({ ...draft, step: 'term' });
         const expectedCheckpoint = { schemaVersion: 1, opaquePayload } as const;
         let outcome: WorkspaceSetupOutcome | null = null;
         try {
@@ -565,14 +402,10 @@ export function SetupDialog(props: SetupDialogProps) {
                     </div>
                 </header>
                 <div className="setup-modal-body">
-                    <SetupProgress
-                        activeStep={activeChecklistStep}
-                        state={props.state}
-                    />
+                    <SetupProgress state={props.state} />
                     <section
                         aria-label="当前设置步骤"
                         className="setup-workspace"
-                        ref={setupWorkspaceRef}
                         tabIndex={-1}
                     >
                         {checkpointIsIncompatible ? (
@@ -582,15 +415,7 @@ export function SetupDialog(props: SetupDialogProps) {
                                 onDiscard={() => void discardIncompatibleCheckpoint()}
                             />
                         ) : null}
-                        {!checkpointIsIncompatible && reviewingChecklistStep !== null ? (
-                            <SetupFactReview
-                                state={props.state}
-                                step={reviewingChecklistStep}
-                            />
-                        ) : null}
-                        {!checkpointIsIncompatible
-                            && reviewingChecklistStep === null
-                            && props.state.kind === 'term' ? (
+                        {!checkpointIsIncompatible && props.state.kind === 'term' ? (
                             <TermForm
                                 blocked={savingCheckpoint
                                     || (hasPendingMutation && pendingMutation.kind !== 'term')}
@@ -601,166 +426,31 @@ export function SetupDialog(props: SetupDialogProps) {
                                     ? pendingMutation.command
                                     : null}
                                 projection={props.state.projection}
-                                onChange={value => updateDraft('term', value)}
+                                onChange={updateTermDraft}
                                 onBusyChange={setCommandBusy}
                                 onCommitted={refreshAfterCommit}
                                 onSettled={() => resolvePendingMutation('term')}
                                 onUnknown={command => retainUnknownMutation({ kind: 'term', command })}
                             />
                         ) : null}
-                        {!checkpointIsIncompatible
-                            && reviewingChecklistStep === null
-                            && props.state.kind === 'course' ? (
-                            <CourseForm
-                                blocked={savingCheckpoint
-                                    || (hasPendingMutation && pendingMutation.kind !== 'course')}
-                                dataMode={props.state.dataMode}
-                                draft={draft.course}
-                                inputLocked={hasPendingMutation}
-                                pendingCommand={pendingMutation?.kind === 'course'
-                                    ? pendingMutation.command
-                                    : null}
-                                projection={props.state.projection}
-                                onChange={value => updateDraft('course', value)}
-                                onBusyChange={setCommandBusy}
-                                onCommitted={refreshAfterCommit}
-                                onSettled={() => resolvePendingMutation('course')}
-                                onUnknown={command => retainUnknownMutation({ kind: 'course', command })}
+                        {!checkpointIsIncompatible && props.state.kind === 'complete' ? (
+                            <SetupComplete
+                                disabled={savingCheckpoint
+                                    || commandBusy
+                                    || readOnly
+                                    || hasPendingMutation
+                                    || hasUncommittedDraft}
+                                headingRef={completionHeadingRef}
+                                onOpenManagement={surface => {
+                                    closeDialog('current');
+                                    props.onOpenManagement(surface);
+                                }}
+                                state={props.state}
                             />
-                        ) : null}
-                        {!checkpointIsIncompatible
-                            && reviewingChecklistStep === null
-                            && props.state.kind === 'activity' ? (
-                            <ActivityStep
-                                blocked={savingCheckpoint}
-                                dataMode={props.state.dataMode}
-                                draft={draft}
-                                inputLocked={hasPendingMutation}
-                                pendingMutation={pendingMutation}
-                                projection={props.state.projection}
-                                selectionBlocked={hasPendingMutation}
-                                onActivityKindChange={updateActivityKind}
-                                onBusyChange={setCommandBusy}
-                                onMeetingChange={value => updateDraft('meeting', value)}
-                                onTaskChange={value => updateDraft('task', value)}
-                                onCommitted={refreshAfterCommit}
-                                onSettled={resolvePendingMutation}
-                                onUnknown={retainUnknownMutation}
-                            />
-                        ) : null}
-                        {!checkpointIsIncompatible
-                            && reviewingChecklistStep === null
-                            && props.state.kind === 'complete' ? (
-                            <>
-                                <SetupComplete
-                                    activeEditor={completeEditor}
-                                    disabled={savingCheckpoint
-                                        || commandBusy
-                                        || readOnly
-                                        || hasPendingMutation
-                                        || hasUncommittedDraft}
-                                    headingRef={completionHeadingRef}
-                                    onEdit={editor => {
-                                        setActiveChecklistStep(editor);
-                                        setCompleteEditor(editor);
-                                    }}
-                                    state={props.state}
-                                />
-                                {completeEditor === 'course' ? (
-                                    <CourseForm
-                                        blocked={savingCheckpoint
-                                            || (hasPendingMutation && pendingMutation.kind !== 'course')}
-                                        dataMode={props.state.dataMode}
-                                        draft={draft.course}
-                                        inputLocked={hasPendingMutation}
-                                        pendingCommand={pendingMutation?.kind === 'course'
-                                            ? pendingMutation.command
-                                            : null}
-                                        projection={props.state.projection}
-                                        onChange={value => updateDraft('course', value)}
-                                        onBusyChange={setCommandBusy}
-                                        onCommitted={refreshAfterCommit}
-                                        onSettled={() => resolvePendingMutation('course')}
-                                        onUnknown={command => retainUnknownMutation({ kind: 'course', command })}
-                                    />
-                                ) : null}
-                                {completeEditor === 'activity' ? (
-                                    <ActivityStep
-                                        blocked={savingCheckpoint}
-                                        dataMode={props.state.dataMode}
-                                        draft={draft}
-                                        inputLocked={hasPendingMutation}
-                                        pendingMutation={pendingMutation}
-                                        projection={props.state.projection}
-                                        selectionBlocked={hasPendingMutation}
-                                        onActivityKindChange={updateActivityKind}
-                                        onBusyChange={setCommandBusy}
-                                        onMeetingChange={value => updateDraft('meeting', value)}
-                                        onTaskChange={value => updateDraft('task', value)}
-                                        onCommitted={refreshAfterCommit}
-                                        onSettled={resolvePendingMutation}
-                                        onUnknown={retainUnknownMutation}
-                                    />
-                                ) : null}
-                                {completeEditor === null ? (
-                                    <HolidayForm
-                                        autoFocusName={checkpoint !== null && draft.step === 'holiday'}
-                                        blocked={savingCheckpoint
-                                            || (hasPendingMutation && pendingMutation.kind !== 'holiday')}
-                                        dataMode={props.state.dataMode}
-                                        draft={draft.holiday}
-                                        exitBlocked={hasPendingMutation}
-                                        inputLocked={hasPendingMutation}
-                                        pendingCommand={pendingMutation?.kind === 'holiday'
-                                            ? pendingMutation.command
-                                            : null}
-                                        projection={props.state.projection}
-                                        onBusyChange={setCommandBusy}
-                                        onChange={value => updateDraft('holiday', value)}
-                                        onCommitted={refreshAfterCommit}
-                                        onSettled={() => resolvePendingMutation('holiday')}
-                                        onSkip={() => void saveAndClose('today')}
-                                        onUnknown={command => retainUnknownMutation({ kind: 'holiday', command })}
-                                    />
-                                ) : (
-                                    <button
-                                        className="secondary-action setup-summary-action"
-                                        disabled={savingCheckpoint
-                                            || commandBusy
-                                            || hasPendingMutation
-                                            || hasUncommittedDraft}
-                                        onClick={() => {
-                                            setActiveChecklistStep(currentChecklistStep);
-                                            setCompleteEditor(null);
-                                            globalThis.requestAnimationFrame(() => (
-                                                completionHeadingRef.current?.focus()
-                                            ));
-                                        }}
-                                        type="button"
-                                    >返回完成概览与假期</button>
-                                )}
-                            </>
                         ) : null}
                     </section>
                 </div>
                 <footer className="setup-modal-footer">
-                    <div
-                        aria-label="设置步骤导航"
-                        className="setup-step-navigation"
-                    >
-                        <button
-                            className="secondary-action"
-                            disabled={checklistNavigation.previous === null}
-                            onClick={() => navigateChecklist(checklistNavigation.previous)}
-                            type="button"
-                        >上一步</button>
-                        <button
-                            className="secondary-action"
-                            disabled={checklistNavigation.next === null}
-                            onClick={() => navigateChecklist(checklistNavigation.next)}
-                            type="button"
-                        >下一步</button>
-                    </div>
                     <p
                         className="checkpoint-message"
                         ref={statusRef}
@@ -800,7 +490,6 @@ export {
     type PendingSetupMutationEvent,
     type SetupMutationRetryPort,
 } from './setup/mutation';
-export { setupChecklistNavigationFrom } from './setup/checklist';
 export {
     SetupFieldError,
     focusFirstSetupFieldError,

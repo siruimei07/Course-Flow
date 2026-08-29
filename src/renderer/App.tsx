@@ -1,5 +1,7 @@
 import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
 import type {WorkspaceMode} from '../shared/workspace-lifecycle-contract';
+import { ManagementDialog } from './ManagementDialog';
+import type { ManagementSurfaceId } from './management-surfaces';
 import { SettingsDialog } from './SettingsDialog';
 import { SetupDialog } from './SetupDialog';
 import { setupStateFrom, type SetupState } from './setup-state';
@@ -82,6 +84,7 @@ export type WorkspaceShellProps = Readonly<{
     taskActions: TaskActionPresentation;
     onNavigate(page: WorkspaceNavigationId): void;
     onCreateTask(): void;
+    onOpenManagement(surface: ManagementSurfaceId): void;
     onOpenSettings(): void;
     onOpenSetup(): void;
     onRetryPlan(): void;
@@ -156,7 +159,8 @@ export function App(): ReactElement {
     const [activePage, setActivePage] = useState<WorkspaceNavigationId>('today');
     const [setupOpen, setSetupOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
-    const [setupEntryIntent, setSetupEntryIntent] = useState<'default' | 'task'>('default');
+    const [managementOpen, setManagementOpen] = useState(false);
+    const [managementSurface, setManagementSurface] = useState<ManagementSurfaceId>('course');
     const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
     const [migrationDialogMode, setMigrationDialogMode] = useState<MigrationProtectionDialogMode>(
         'overview',
@@ -172,6 +176,7 @@ export function App(): ReactElement {
     const returnFocusRef = useRef<HTMLElement | null>(null);
     const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
     const migrationReturnFocusRef = useRef<HTMLElement | null>(null);
+    const managementReturnFocusRef = useRef<HTMLElement | null>(null);
     const taskActionInFlightRef = useRef(false);
     const taskActionFocusRef = useRef<Readonly<{
         itemId: string;
@@ -233,13 +238,36 @@ export function App(): ReactElement {
         return () => globalThis.clearTimeout(timer);
     }, [undoExpiresAt, undoPausedAt]);
 
-    const openSetupWithIntent = (entryIntent: 'default' | 'task'): void => {
+    const openSetup = (): void => {
         returnFocusRef.current = document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null;
         setSettingsOpen(false);
-        setSetupEntryIntent(entryIntent);
+        setManagementOpen(false);
         setSetupOpen(true);
+    };
+
+    const openManagement = (surface: ManagementSurfaceId): void => {
+        managementReturnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        setSettingsOpen(false);
+        setSetupOpen(false);
+        setManagementSurface(surface);
+        setManagementOpen(true);
+    };
+
+    const closeManagement = (): void => {
+        setManagementOpen(false);
+        const returnTarget = managementReturnFocusRef.current;
+        globalThis.requestAnimationFrame(() => {
+            if (returnTarget?.isConnected) {
+                returnTarget.focus();
+            }
+            else {
+                document.getElementById(PAGE_HEADING_IDS[activePage])?.focus();
+            }
+        });
     };
 
     const openSettings = (): void => {
@@ -258,9 +286,6 @@ export function App(): ReactElement {
             }
         });
     };
-
-    const openSetup = (): void => openSetupWithIntent('default');
-    const openTaskSetup = (): void => openSetupWithIntent('task');
 
     const focusPageHeading = (page: WorkspaceNavigationId): void => {
         globalThis.requestAnimationFrame(() => {
@@ -762,7 +787,8 @@ export function App(): ReactElement {
                 activePage={activePage}
                 dataMode={state.setup.dataMode}
                 onNavigate={setActivePage}
-                onCreateTask={openTaskSetup}
+                onCreateTask={() => openManagement('task')}
+                onOpenManagement={openManagement}
                 onOpenSettings={openSettings}
                 onOpenSetup={openSetup}
                 onRetryPlan={() => refreshPlan(state.setup.projection)}
@@ -776,17 +802,26 @@ export function App(): ReactElement {
                 dataMode={state.setup.dataMode}
                 onClose={closeSettings}
                 onOpenDataProtection={openDataProtection}
+                onOpenManagement={openManagement}
                 onOpenSetup={openSetup}
                 open={settingsOpen}
                 safetyCopy={state.migrationSafetyCopy}
                 setup={state.setup.projection}
             />
             <SetupDialog
-                entryIntent={setupEntryIntent}
                 onClose={closeSetup}
+                onOpenManagement={openManagement}
                 onProjection={acceptSetupProjection}
                 open={setupOpen}
                 state={state.setup}
+            />
+            <ManagementDialog
+                onClose={closeManagement}
+                onProjection={acceptSetupProjection}
+                onSurfaceChange={setManagementSurface}
+                open={managementOpen}
+                state={state.setup}
+                surface={managementSurface}
             />
             <MigrationProtectionDialog
                 buildStatus={state.buildStatus}
@@ -907,6 +942,7 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
                 <WorkspacePage
                     onContinueSetup={props.onOpenSetup}
                     onCreateTask={props.onCreateTask}
+                    onOpenManagement={props.onOpenManagement}
                     onNavigate={page => {
                         props.onNavigate(page);
                         globalThis.requestAnimationFrame(() => {

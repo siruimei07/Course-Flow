@@ -27,6 +27,20 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
             className="workspace-page workspace-page--courses"
         >
             <PageHeader
+                actions={historicalMode ? undefined : (
+                    <>
+                        <button
+                            className="primary-action"
+                            onClick={() => props.onOpenManagement('course')}
+                            type="button"
+                        >添加课程</button>
+                        <button
+                            className="secondary-action"
+                            onClick={() => props.onOpenManagement('meeting')}
+                            type="button"
+                        >添加课节</button>
+                    </>
+                )}
                 context={historicalMode
                     ? `${displayedCourses.length} 门历史课程`
                     : `${termContext(setup)} · ${displayedCourses.length} 门课程`}
@@ -45,7 +59,9 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
                 >{historicalMode ? '历史课程' : '当前学期课程'}</h2>
                 {displayedCourses.length === 0 ? (
                     <EmptyState
-                        action={buttonAction('继续设置', props.onContinueSetup)}
+                        action={currentTermId
+                            ? buttonAction('添加课程', () => props.onOpenManagement('course'))
+                            : buttonAction('继续设置', props.onContinueSetup)}
                         id="courses-empty"
                         reason={historicalMode
                             ? '曾达到最低设置条件，但当前投影没有可显示的历史课程。'
@@ -65,6 +81,7 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
                                 course={course}
                                 historical={historicalMode}
                                 key={course.courseId}
+                                onAddMeeting={() => props.onOpenManagement('meeting')}
                                 onContinueSetup={props.onContinueSetup}
                             />
                         ))}
@@ -84,6 +101,7 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
 export function CourseCard(props: Readonly<{
     course: CourseProjection;
     historical?: boolean;
+    onAddMeeting: () => void;
     onContinueSetup: () => void;
 }>): ReactElement {
     const { course } = props;
@@ -131,10 +149,9 @@ export function CourseCard(props: Readonly<{
                 <h3 id={`course-${course.courseId}-meetings-title`}>课节规则</h3>
                 {course.meetings.length === 0 ? (
                     <EmptyState
-                        action={buttonAction(
-                            props.historical ? '创建新学期' : '继续设置',
-                            props.onContinueSetup,
-                        )}
+                        action={props.historical
+                            ? buttonAction('创建新学期', props.onContinueSetup)
+                            : buttonAction('添加课节', props.onAddMeeting)}
                         headingLevel="h4"
                         id={`course-${course.courseId}-meetings-empty`}
                         reason={props.historical

@@ -27,8 +27,12 @@ function readModuleFamily(entry: string, directory: string): string {
 const main = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
 const app = readModuleFamily('src/renderer/App.tsx', 'src/renderer/app');
 const setupDialog = readModuleFamily('src/renderer/SetupDialog.tsx', 'src/renderer/setup');
+const managementDialog = readFileSync(
+    path.join(repositoryRoot, 'src/renderer/ManagementDialog.tsx'),
+    'utf8',
+);
 const pages = readModuleFamily('src/renderer/workspace-pages.tsx', 'src/renderer/pages');
-const renderer = [main, app, setupDialog, pages].join('\n');
+const renderer = [main, app, setupDialog, managementDialog, pages].join('\n');
 const styles = readFileSync(path.join(repositoryRoot, 'src/renderer/styles.css'), 'utf8');
 const compactStyles = styles.slice(
     styles.indexOf('@media (max-width: 620px)'),
@@ -48,7 +52,7 @@ const meetingSetup = setupDialog.slice(
     setupDialog.indexOf('function TaskForm'),
 );
 
-test('UI-SETUP-01 exposes Current Term, standalone Course, then a Meeting or Task choice', () => {
+test('UI-SETUP-01 requires only a Current Term and moves every supplement to its own surface', () => {
     assert.match(renderer, /当前学期/);
     assert.match(renderer, /学期名称/);
     assert.match(renderer, /开始日期/);
@@ -80,15 +84,21 @@ test('UI-SETUP-01 exposes Current Term, standalone Course, then a Meeting or Tas
     assert.match(renderer, /课程教学结束日期/);
     assert.match(renderer, /保存课程并继续/);
     assert.match(renderer, /courseFlow\.createCourse/);
-    assert.match(renderer, /选择添加方式/);
-    assert.match(renderer, /添加课节/);
-    assert.match(renderer, /添加任务/);
+    assert.match(managementDialog, /添加课节/);
+    assert.match(managementDialog, /添加任务/);
     assert.match(renderer, /courseFlow\.createMeetingSeries/);
+    // First setup owns the Current Term only; the four supplements live in ManagementDialog.
+    assert.doesNotMatch(setupDialog, /<CourseForm/);
+    assert.doesNotMatch(setupDialog, /<MeetingForm/);
+    assert.doesNotMatch(setupDialog, /<TaskForm/);
+    assert.doesNotMatch(setupDialog, /<HolidayForm/);
+    for (const editor of ['TermForm', 'CourseForm', 'MeetingForm', 'TaskForm', 'HolidayForm']) {
+        assert.match(managementDialog, new RegExp(`<${editor}`));
+    }
     assert.doesNotMatch(termSetup, /overlapDecision/);
     assert.doesNotMatch(courseSetup, /overlapDecision/);
     assert.match(meetingSetup, /overlapDecision:\s*'review'/);
     assert.match(meetingSetup, /overlapDecision:\s*'continue'/);
-    assert.match(renderer, /添加课节或任务/);
     assert.match(renderer, /courseFlow\.createTask/);
     assert.match(renderer, /精确时间/);
     assert.match(renderer, /每周重复/);
@@ -176,7 +186,7 @@ test('WP-R4-06 closes the native modal before restoring focus and gives the skip
     assert.match(app, /<main[\s\S]*id="workspace-content"[\s\S]*tabIndex=\{-1\}/);
 });
 
-test('WP-R4-06 does not let stale completion focus override direct Task entry', () => {
+test('WP-R4-06 does not let stale completion focus override a restorable draft', () => {
     const cancellableFocusPattern = new RegExp(
         'const completionFocusFrame = globalThis\\.requestAnimationFrame'
         + '[\\s\\S]{0,200}return \\(\\) => [^{;]*'
@@ -184,7 +194,10 @@ test('WP-R4-06 does not let stale completion focus override direct Task entry', 
     );
     assert.match(
         setupDialog,
-        /useEffect\(\(\) => \{\s*if \(!props\.open[\s\S]{0,500}props\.entryIntent === 'task'/,
+        new RegExp(
+            'useEffect\\(\\(\\) => \\{\\s*if \\(!props\\.open'
+            + '[\\s\\S]{0,400}checkpoint !== null && !checkpointIsIncompatible',
+        ),
     );
     assert.match(setupDialog, cancellableFocusPattern);
 });
@@ -195,8 +208,12 @@ test('WP-R4-06 blocks competing setup exits and edits while a draft or formal co
     assert.match(setupDialog, /const hasPendingMutation = pendingMutation !== null/);
     assert.match(setupDialog, /disabled=\{savingCheckpoint \|\| commandBusy \|\| hasPendingMutation\}/);
     assert.match(setupDialog, /inputLocked=\{hasPendingMutation\}/);
-    assert.match(setupDialog, /selectionBlocked=\{hasPendingMutation\}/);
     assert.match(setupDialog, /onBusyChange=\{setCommandBusy\}/);
+    // The management surfaces block the same competing edits with their own state machine.
+    assert.match(managementDialog, /useReducer\(\s*reducePendingSetupMutation/);
+    assert.match(managementDialog, /const hasPendingMutation = pendingMutation !== null/);
+    assert.match(managementDialog, /inputLocked=\{hasPendingMutation\}/);
+    assert.match(managementDialog, /blocked=\{editorBlocked\('course'\)\}/);
     assert.match(
         setupDialog,
         /const hasUncommittedDraft = isDirty\.current \|\| \(checkpoint !== null/,
@@ -248,11 +265,16 @@ test('rejected setup command transport keeps its idempotent request and reports 
     );
 });
 
-test('UI-SETUP-01 activity choice supports arrow keys without relying on pointer input', () => {
-    assert.match(setupDialog, /event\.key !== 'ArrowLeft'/);
-    assert.match(setupDialog, /event\.key !== 'ArrowRight'/);
-    assert.match(setupDialog, /activity-choice-meeting/);
-    assert.match(setupDialog, /activity-choice-task/);
+test('UI-MANAGE-01 surface choice supports arrow keys without relying on pointer input', () => {
+    const surfaces = readFileSync(
+        path.join(repositoryRoot, 'src/renderer/management-surfaces.ts'),
+        'utf8',
+    );
+    assert.match(surfaces, /key !== 'ArrowUp' && key !== 'ArrowDown'/);
+    assert.match(surfaces, /key === 'Home'/);
+    assert.match(surfaces, /key === 'End'/);
+    assert.match(managementDialog, /managementSurfaceFromKey\(currentSurface, event\.key\)/);
+    assert.match(managementDialog, /surfaceRefs\.current\.get\(target\)\?\.focus\(\)/);
 });
 
 test('UI-SETUP-01 reports formal minimum completion independently of writable mode', () => {

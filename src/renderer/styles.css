@@ -1922,6 +1922,64 @@ ul {
     display: none;
 }
 
+/* The management surfaces reuse the settings chrome and add one status footer. */
+.management-dialog {
+    width: min(1080px, calc(100vw - 2rem));
+    height: min(760px, calc(100vh - 2rem));
+}
+
+.management-dialog .settings-modal {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.settings-modal-footer {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.85rem 1.2rem;
+    border-top: 1px solid var(--line);
+}
+
+.settings-section-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+}
+
+/* One card is enough: the hosted editor is already inside the settings panel. */
+.management-panel .setup-step-panel {
+    margin-top: 1rem;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.management-panel .setup-step-panel > h2 {
+    margin-top: 0.2rem;
+    font-size: 1.2rem;
+}
+
+.management-fact-list {
+    margin-top: 0.8rem;
+}
+
+.management-fact-list > li {
+    grid-template-columns: minmax(0, 1fr) max-content max-content;
+}
+
+.workspace-page-actions {
+    display: flex;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.45rem;
+}
+
 .settings-section > h2 {
     margin-top: 0.3rem;
     font-size: clamp(1.3rem, 2.6vw, 1.7rem);

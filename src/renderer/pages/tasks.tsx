@@ -18,6 +18,13 @@ export function TasksPage(props: WorkspacePageContentProps): ReactElement {
             className="workspace-page workspace-page--tasks"
         >
             <PageHeader
+                actions={(
+                    <button
+                        className="primary-action"
+                        onClick={props.onCreateTask}
+                        type="button"
+                    >添加任务</button>
+                )}
                 context={termContext(setup)}
                 eyebrow="Tasks"
                 headingId="tasks-page-title"

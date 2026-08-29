@@ -79,10 +79,10 @@ test('A-TERM-001/002: a valid Term is atomically created as the unique Current T
             hasCurrentTerm: true,
             hasCurrentTermCourse: false,
             hasMeetingOrTask: false,
-            isSatisfied: false,
+            isSatisfied: true,
         },
-        everReachedMinimum: false,
-        defaultRoute: 'setup',
+        everReachedMinimum: true,
+        defaultRoute: 'today',
         draftCheckpointVersion: '0',
         draftCheckpoint: null,
         currentTerm: {

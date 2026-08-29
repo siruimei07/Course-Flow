@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactElement } from 'react';
+import type { ManagementSurfaceId } from './management-surfaces';
 import type { WorkspaceNavigationId } from './navigation';
 import type { TaskOccurrenceAction } from './task-occurrence-actions';
 import type { TaskDeadline } from '../shared/workspace-task-contract';
@@ -34,6 +35,7 @@ export type WorkspacePageHandlers = Readonly<{
     onNavigate: (page: WorkspaceNavigationId) => void;
     onContinueSetup: () => void;
     onCreateTask: () => void;
+    onOpenManagement: (surface: ManagementSurfaceId) => void;
     onRetryPlan?: () => void;
     taskActions?: TaskActionPresentation;
 }>;

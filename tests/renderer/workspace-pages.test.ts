@@ -8,6 +8,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
+import type { ManagementSurfaceId } from '../../src/renderer/management-surfaces';
 import type { WorkspaceNavigationId } from '../../src/renderer/navigation';
 import {
     CalendarPage,
@@ -267,6 +268,7 @@ const FRIDAY_ADJACENT_TASK = taskOccurrence({
 const HANDLERS = {
     onContinueSetup(): void {},
     onCreateTask(): void {},
+    onOpenManagement(_surface: ManagementSurfaceId): void {},
     onNavigate(_page: WorkspaceNavigationId): void {},
 };
 

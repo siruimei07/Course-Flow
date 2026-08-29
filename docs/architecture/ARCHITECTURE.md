@@ -127,7 +127,7 @@ flowchart LR
 
 | 事实 | 所有者 | 说明 |
 |---|---|---|
-| WorkspaceLifecycle、SetupProgress、持久草稿检查点 | `MOD-WORKSPACE` | 当前最低条件是 Current Term + 至少一门 Course；曾达标里程碑不因学期归档抹除；草稿与正式事实分层 |
+| WorkspaceLifecycle、SetupProgress、持久草稿检查点 | `MOD-WORKSPACE` | 当前最低条件是 Current Term；Course、MeetingSeries、Task 与 Holiday 都在各自的管理表面补充。曾达标里程碑不因学期归档抹除；草稿与正式事实分层 |
 | Term、HolidayRange、Course | `MOD-PLAN` | 一个 Workspace 可有多个历史学期，最多一个当前学期 |
 | MeetingSeries / TaskSeries、TaskCategory 及规则段 | `MOD-PLAN` | “本次及未来”结束旧段并创建新段，不重写历史段；任务组/类型由用户明确选择 |
 | OccurrenceOverride、TaskOccurrenceState | `MOD-PLAN` | “仅本次”使用实例覆盖；完成、跳过、删除和独立可选进度语义分开 |

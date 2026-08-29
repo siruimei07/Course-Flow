@@ -78,6 +78,7 @@ test('the shell exposes five destinations plus one Settings entry', () => {
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenManagement: noop,
         onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
@@ -103,6 +104,7 @@ test('the shell exposes five destinations plus one Settings entry', () => {
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenManagement: noop,
         onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
@@ -120,6 +122,7 @@ test('the title region exposes three independent window controls outside its dra
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenManagement: noop,
         onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
@@ -241,6 +244,7 @@ test('Task feedback reserves scroll space while keeping the restored control cen
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
+        onOpenManagement: noop,
         onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
@@ -327,6 +331,7 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
         minimum: {
             ...setup.minimum,
             hasCurrentTerm: true,
+            isSatisfied: true,
         },
         currentTerm,
         terms: [currentTerm],
@@ -382,7 +387,7 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
     if (result.kind === 'ready') {
         assert.equal(result.workspaceMode, 'limited');
         assert.equal(result.route, 'setup');
-        assert.equal(result.setup.kind, 'course');
+        assert.equal(result.setup.kind, 'complete');
         assert.equal(result.plan, null);
         assert.match(result.planProblem ?? '', /无法读取统一计划投影/);
     }

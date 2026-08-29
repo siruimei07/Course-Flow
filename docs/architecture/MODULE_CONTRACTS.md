@@ -548,7 +548,7 @@ Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域�
 3. 所有自动行为（如日期越过 Term end 的归档）仍以可审计 Intent 经 FLOW-01 提交。
 4. 次级/外围模块失败只修改相关 capability/health；不把全 Workspace 无条件设为失败。
 5. Workspace 不吞掉模块 ProblemCode，不把 error 转为空，不改写 dataEffect。
-6. Setup 当前最低条件由正式事实计算：存在 Current Term 与至少一门 Course；MeetingSeries、Task、Holiday 和保护设置均可稍后补充。第一次达到时持久推进 `everReachedMinimum`，当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑。
+6. Setup 当前最低条件由正式事实计算：存在 Current Term。Course、MeetingSeries、Task、Holiday 和保护设置均为可稍后补充的非阻塞事实，由已批准的创建/编辑抽屉拥有，不参与最低条件。`hasCurrentTermCourse` 与 `hasMeetingOrTask` 仍作为真实事实投影出去，只是不再决定 `isSatisfied`。第一次达到时持久推进 `everReachedMinimum`，当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑；最低条件当前成立时该里程碑必然成立。
 7. 从未达标的 Workspace 重启默认回到 setup，但仍可明确提前进入 Today；曾达标的 Workspace 重启默认进入 Today，即使当前无 Current Term，并显示“学期已结束/需要新学期”的真实状态与历史/创建入口。
 8. 应用重启后先恢复持久 Operation/DurableFollowUp，再决定普通路由。
 9. 打开 DATA 或启动 Library watcher 前必须先取得 PROTECT 对 Restore 与 MigrationRollback 的统一启动判定；未终结 handoff、激活未收敛、证据冲突或未知协调版本只能路由 maintenance/recovery，不得让 Workspace、Shell 或 Main 解释物理阶段。
