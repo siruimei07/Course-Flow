@@ -3,7 +3,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
@@ -12,10 +12,22 @@ import { BOOTSTRAP_PROTOCOL_VERSION } from '../../src/shared/bootstrap-contract'
 import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-contract';
 
 const repositoryRoot = process.cwd();
+
+function readModuleFamily(entry: string, directory: string): string {
+    const parts = [readFileSync(path.join(repositoryRoot, entry), 'utf8')];
+    const familyRoot = path.join(repositoryRoot, directory);
+    for (const name of readdirSync(familyRoot).sort()) {
+        if (/\.tsx?$/.test(name)) {
+            parts.push(readFileSync(path.join(familyRoot, name), 'utf8'));
+        }
+    }
+    return parts.join('\n');
+}
+
 const main = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
 const app = readFileSync(path.join(repositoryRoot, 'src/renderer/App.tsx'), 'utf8');
-const setupDialog = readFileSync(path.join(repositoryRoot, 'src/renderer/SetupDialog.tsx'), 'utf8');
-const pages = readFileSync(path.join(repositoryRoot, 'src/renderer/workspace-pages.tsx'), 'utf8');
+const setupDialog = readModuleFamily('src/renderer/SetupDialog.tsx', 'src/renderer/setup');
+const pages = readModuleFamily('src/renderer/workspace-pages.tsx', 'src/renderer/pages');
 const renderer = [main, app, setupDialog, pages].join('\n');
 const styles = readFileSync(path.join(repositoryRoot, 'src/renderer/styles.css'), 'utf8');
 const compactStyles = styles.slice(
