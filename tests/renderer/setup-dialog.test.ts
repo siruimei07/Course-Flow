@@ -325,7 +325,7 @@ test('setup is a modal checklist with an inner dark current-step layer and early
     assert.doesNotMatch(html, /保护数据|备份|Grade|Attendance|即将推出/);
 });
 
-test('setup progress nests its real checklist inside the elevated task card over a light pad', () => {
+test('setup progress nests its real checklist inside the elevated task card', () => {
     const html = renderToStaticMarkup(createElement(SetupDialog, {
         open: true,
         state,
@@ -346,8 +346,9 @@ test('setup progress nests its real checklist inside the elevated task card over
     );
     assert.match(
         html,
-        /class="setup-progress-stack"[^>]*>[\s\S]*class="setup-progress-pad"[^>]*aria-hidden="true"/,
+        /class="setup-progress-stack"[^>]*>\s*<div class="setup-current-layer"/,
     );
+    assert.doesNotMatch(html, /setup-progress-pad/);
     assert.match(
         html,
         elevatedChecklistPattern,

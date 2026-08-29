@@ -45,10 +45,6 @@ export function SetupProgress(props: Readonly<{
                 <span />
             </div>
             <div className="setup-progress-stack">
-                <div
-                    className="setup-progress-pad"
-                    aria-hidden="true"
-                />
                 <div className="setup-current-layer">
                     <span className="setup-current-label">{currentLabel}</span>
                     <ol className="setup-step-list">

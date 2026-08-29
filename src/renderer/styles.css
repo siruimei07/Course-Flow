@@ -553,9 +553,7 @@ ul {
     padding: clamp(1rem, 2vw, 1.55rem);
     border-radius: calc(var(--radius-medium) - 0.35rem);
     color: #ffffff;
-    background:
-        radial-gradient(circle at 90% -12%, rgba(245, 212, 87, 0.24), transparent 46%),
-        var(--elevated);
+    background: var(--elevated);
     box-shadow: 0 1rem 2.5rem rgba(25, 24, 20, .2);
 }
 
@@ -1293,8 +1291,10 @@ ul {
 }
 
 .setup-progress-card {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
     align-self: stretch;
-    padding: 0.8rem 0.8rem 0.9rem;
+    padding: 0.8rem;
     overflow-y: auto;
     border-radius: 1.25rem;
     background: var(--card);
@@ -1347,39 +1347,23 @@ ul {
     width: 100%;
 }
 
+/* The stack owns the rest of the progress card, so the elevated layer ends one card padding above
+   the card's bottom edge instead of floating in the middle of the white card. */
 .setup-progress-stack {
-    position: relative;
-    isolation: isolate;
+    display: grid;
+    min-height: 0;
     margin-top: 0.85rem;
-    padding-top: 0.7rem;
-    padding-bottom: 0.55rem;
-}
-
-/* The pad shows an equal sliver above and below the elevated layer, so the black card keeps a
-   visible margin to the white card it is nested in. */
-.setup-progress-pad {
-    position: absolute;
-    z-index: 0;
-    top: 0;
-    right: 0.6rem;
-    bottom: 0;
-    left: 0.6rem;
-    border: 1px solid rgba(216, 205, 172, .55);
-    border-radius: 1rem;
-    background: var(--card-inner);
 }
 
 .setup-current-layer {
-    position: relative;
-    z-index: 1;
     display: grid;
+    align-content: start;
     gap: 0.55rem;
+    min-height: 0;
     padding: 1rem;
     border-radius: 1rem;
     color: #ffffff;
-    background:
-        radial-gradient(circle at 88% -14%, rgba(245, 212, 87, 0.22), transparent 44%),
-        var(--elevated);
+    background: var(--elevated);
     box-shadow: 0 1rem 2.25rem rgba(25, 24, 20, .22);
 }
 
@@ -1410,7 +1394,7 @@ ul {
 }
 
 .setup-step-list li[data-status="当前"] {
-    background: rgba(250, 221, 93, .16);
+    background: rgba(255, 255, 255, .1);
 }
 
 .setup-step-list li > span:first-child {
@@ -1455,7 +1439,7 @@ ul {
 .setup-workspace {
     display: grid;
     gap: 0.8rem;
-    align-content: start;
+    align-content: stretch;
     min-width: 0;
     min-height: 0;
     overflow-y: auto;
@@ -2531,7 +2515,6 @@ h2:focus-visible {
     .status-card,
     .setup-step-panel,
     .setup-progress-card,
-    .setup-progress-pad,
     .setup-modal,
     .settings-modal,
     .settings-panel,
@@ -2586,7 +2569,6 @@ h2:focus-visible {
     .status-card,
     .setup-step-panel,
     .setup-progress-card,
-    .setup-progress-pad,
     .settings-panel,
     .settings-category-nav,
     .field input,
@@ -2607,7 +2589,6 @@ h2:focus-visible {
     .status-card,
     .setup-step-panel,
     .setup-progress-card,
-    .setup-progress-pad,
     .setup-modal,
     .settings-modal,
     .settings-panel,
