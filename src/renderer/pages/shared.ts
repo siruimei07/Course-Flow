@@ -201,6 +201,22 @@ export function agendaItemId(item: AgendaItemProjection): string {
  * @param {string} timeZone Workspace-owned IANA zone.
  * @return {Object} Local date and minute used by the shared Calendar grid.
  */
+export function localInstantLabel(
+    instant: string,
+    timeZone: string,
+): string {
+    const { date, minute } = localInstantParts(instant, timeZone);
+    const hour = String(Math.floor(minute / 60)).padStart(2, '0');
+    return `${date} ${hour}:${String(minute % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Splits one exact Instant into its TermZone date and minute-of-day.
+ *
+ * @param {string} instant Canonical Instant.
+ * @param {string} timeZone IANA TermZone identity.
+ * @return {Readonly<{ date: string; minute: number }>} TermZone date and minute of day.
+ */
 export function localInstantParts(
     instant: string,
     timeZone: string,

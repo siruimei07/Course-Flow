@@ -1,9 +1,10 @@
 import type { ReactElement } from 'react';
-import { meetingItemId, percentageFormatter, remainingTimeLabel, taskClassificationNames, taskItemId, termContext, todayGreetingTitle } from './shared';
+import { localInstantLabel, meetingItemId, percentageFormatter, remainingTimeLabel, taskClassificationNames, taskItemId, termContext, todayGreetingTitle } from './shared';
 import { EmptyState, EndedTermState, MeetingItem, PageHeader, PlanUnavailable, SetupIncompleteNotice, TaskItem, buttonAction } from './widgets';
 import type { WorkspacePageContentProps } from '../workspace-pages';
 import { PlanNextTaskProjection } from '../../shared/workspace-plan-contract';
 import type { PlanProjection } from '../../shared/workspace-plan-contract';
+import type { SetupProjection } from '../../shared/workspace-term-contract';
 /**
  * Renders Today without recalculating PLAN-owned classifications, selections, or summaries.
  *
@@ -42,148 +43,195 @@ export function TodayPage(props: WorkspacePageContentProps): ReactElement {
                 />
             ) : (
                 <>
-                    <section
-                        aria-labelledby="today-summary-title"
-                        className="content-card today-summary-card"
-                    >
-                        <h2 id="today-summary-title">今日概览</h2>
-                        <p className="page-context">
-                            <time dateTime={plan.evaluationContext.applicableDate}>
-                                {plan.evaluationContext.applicableDate}
-                            </time>
-                            {' · '}
-                            {plan.evaluationContext.termZone}
-                        </p>
-                        <dl className="summary-facts">
-                            <div className="summary-fact">
-                                <dt>今日已完成</dt>
-                                <dd>{plan.today.summary.completed}</dd>
-                            </div>
-                            <div className="summary-fact">
-                                <dt>今日待完成</dt>
-                                <dd>{plan.today.summary.pending}</dd>
-                            </div>
-                            <div className="summary-fact summary-fact--progress">
-                                <dt>学期日期进度</dt>
-                                <dd>
-                                    <progress
-                                        aria-label="学期日期进度"
-                                        max={1}
-                                        value={plan.termProgress.ratio}
-                                    >
-                                        {percentageFormatter.format(plan.termProgress.ratio)}
-                                    </progress>
-                                    <span>{percentageFormatter.format(plan.termProgress.ratio)}</span>
-                                    <small>
-                                        {plan.termProgress.elapsedDays} / {plan.termProgress.totalDays} 个学期日
-                                    </small>
-                                </dd>
-                            </div>
-                        </dl>
-                    </section>
+                    <TodayStatBar
+                        plan={plan}
+                        setup={setup}
+                    />
 
                     <div className="workspace-grid workspace-grid--today">
-                        <section
-                            aria-labelledby="today-meetings-title"
-                            className="content-card today-meetings-card"
-                        >
-                            <h2 id="today-meetings-title">今日课节</h2>
-                            {plan.today.meetings.length === 0 ? (
-                                <EmptyState
-                                    action={buttonAction('查看课程', () => props.onNavigate('courses'))}
-                                    id="today-meetings-empty"
-                                    reason="统一计划投影确认今天没有应显示的课节；取消或假期抑制不会伪装成课程。"
-                                    title="今天没有课节"
-                                />
-                            ) : (
-                                <ul className="fact-list meeting-list">
-                                    {plan.today.meetings.map(meeting => (
-                                        <MeetingItem
-                                            key={meetingItemId(meeting)}
-                                            meeting={meeting}
-                                        />
-                                    ))}
-                                </ul>
-                            )}
-                        </section>
+                        <div className="today-column">
+                            <section
+                                aria-labelledby="today-meetings-title"
+                                className="content-card today-meetings-card"
+                            >
+                                <h2 id="today-meetings-title">今日课节</h2>
+                                {plan.today.meetings.length === 0 ? (
+                                    <EmptyState
+                                        action={buttonAction(
+                                            '添加课节',
+                                            () => props.onOpenManagement('meeting'),
+                                        )}
+                                        id="today-meetings-empty"
+                                        reason="统一计划投影确认今天没有应显示的课节；取消或假期抑制不会伪装成课程。"
+                                        secondaryAction={buttonAction(
+                                            '查看课程',
+                                            () => props.onNavigate('courses'),
+                                        )}
+                                        title="今天没有课节"
+                                    />
+                                ) : (
+                                    <ul className="fact-list meeting-list today-timeline">
+                                        {plan.today.meetings.map(meeting => (
+                                            <MeetingItem
+                                                key={meetingItemId(meeting)}
+                                                meeting={meeting}
+                                            />
+                                        ))}
+                                    </ul>
+                                )}
+                            </section>
 
-                        <section
-                            aria-labelledby="today-tasks-title"
-                            className="content-card today-tasks-card"
-                        >
-                            <h2 id="today-tasks-title">今日任务</h2>
-                            {plan.today.tasks.length === 0 ? (
-                                <EmptyState
-                                    action={buttonAction('添加任务', props.onCreateTask)}
-                                    id="today-tasks-empty"
-                                    reason="统一计划投影确认今天没有任务；其他日期和 TBA 任务仍保留在任务页。"
-                                    secondaryAction={buttonAction(
-                                        '查看任务',
-                                        () => props.onNavigate('tasks'),
-                                    )}
-                                    title="今天没有任务"
-                                />
-                            ) : (
-                                <ul className="fact-list task-list">
-                                    {plan.today.tasks.map(task => (
-                                        <TaskItem
-                                            actions={props.taskActions}
-                                            key={taskItemId(task)}
-                                            task={task}
-                                        />
-                                    ))}
-                                </ul>
-                            )}
-                        </section>
-                    </div>
-
-                    <section
-                        aria-labelledby="next-tasks-title"
-                        className="content-card emphasis-card"
-                    >
-                        <div className="emphasis-layer">
-                            <h2 id="next-tasks-title">下一步</h2>
-                            <div className="next-task-grid">
-                                <NextTaskCard
-                                    label="下一个小任务"
-                                    next={plan.next.small}
-                                    onOpenTasks={() => props.onNavigate('tasks')}
-                                />
-                                <NextTaskCard
-                                    label="下一个大任务"
-                                    next={plan.next.large}
-                                    onOpenTasks={() => props.onNavigate('tasks')}
-                                />
-                            </div>
+                            <section
+                                aria-labelledby="today-tasks-title"
+                                className="content-card today-tasks-card"
+                            >
+                                <h2 id="today-tasks-title">今日任务</h2>
+                                {plan.today.tasks.length === 0 ? (
+                                    <EmptyState
+                                        action={buttonAction('添加任务', props.onCreateTask)}
+                                        id="today-tasks-empty"
+                                        reason="统一计划投影确认今天没有任务；其他日期和 TBA 任务仍保留在任务页。"
+                                        secondaryAction={buttonAction(
+                                            '查看任务',
+                                            () => props.onNavigate('tasks'),
+                                        )}
+                                        title="今天没有任务"
+                                    />
+                                ) : (
+                                    <ul className="fact-list task-list">
+                                        {plan.today.tasks.map(task => (
+                                            <TaskItem
+                                                actions={props.taskActions}
+                                                key={taskItemId(task)}
+                                                task={task}
+                                            />
+                                        ))}
+                                    </ul>
+                                )}
+                            </section>
                         </div>
-                    </section>
 
-                    {plan.tba.tasks.length > 0 ? (
-                        <section
-                            aria-labelledby="today-tba-title"
-                            className="content-card today-tba-card"
-                        >
-                            <h2 id="today-tba-title">待确定</h2>
-                            <p className="section-intro">
-                                {plan.tba.tasks.length} 项时间待确定的任务不会进入倒计时。
-                            </p>
-                            <div className="empty-state-actions">
-                                <button
-                                    className="secondary-action"
-                                    onClick={() => props.onNavigate('tasks')}
-                                    type="button"
-                                >查看 TBA 任务</button>
-                            </div>
-                        </section>
-                    ) : null}
+                        <div className="today-column today-column--secondary">
+                            <section
+                                aria-labelledby="next-tasks-title"
+                                className="content-card emphasis-card"
+                            >
+                                <div className="emphasis-layer">
+                                    <h2 id="next-tasks-title">下一步</h2>
+                                    <div className="next-task-grid">
+                                        <NextTaskCard
+                                            label="下一个小任务"
+                                            next={plan.next.small}
+                                            termZone={plan.evaluationContext.termZone}
+                                            onOpenTasks={() => props.onNavigate('tasks')}
+                                        />
+                                        <NextTaskCard
+                                            label="下一个大任务"
+                                            next={plan.next.large}
+                                            termZone={plan.evaluationContext.termZone}
+                                            onOpenTasks={() => props.onNavigate('tasks')}
+                                        />
+                                    </div>
+                                </div>
+                            </section>
 
-                    <WeekSummary
-                        onOpenCalendar={() => props.onNavigate('calendar')}
-                        plan={plan}
-                    />
+                            <WeekSummary
+                                onOpenCalendar={() => props.onNavigate('calendar')}
+                                plan={plan}
+                            />
+
+                            {plan.tba.tasks.length > 0 ? (
+                                <section
+                                    aria-labelledby="today-tba-title"
+                                    className="content-card today-tba-card"
+                                >
+                                    <h2 id="today-tba-title">待确定</h2>
+                                    <p className="section-intro">
+                                        {plan.tba.tasks.length} 项时间待确定的任务不会进入倒计时。
+                                    </p>
+                                    <div className="empty-state-actions">
+                                        <button
+                                            className="secondary-action"
+                                            onClick={() => props.onNavigate('tasks')}
+                                            type="button"
+                                        >查看 TBA 任务</button>
+                                    </div>
+                                </section>
+                            ) : null}
+                        </div>
+                    </div>
                 </>
             )}
         </article>
+    );
+}
+
+/**
+ * Shows the four PLAN-owned counters that answer "how is today going".
+ *
+ * @param {Object} props Unified PLAN projection and Setup facts.
+ * @return {ReactElement} Today stat bar.
+ */
+export function TodayStatBar(props: Readonly<{
+    plan: PlanProjection;
+    setup: SetupProjection;
+}>): ReactElement {
+    const { plan, setup } = props;
+    const currentTermId = setup.currentTerm?.termId;
+    const courseCount = setup.courses.filter(course => (
+        course.termId === currentTermId && !course.archived
+    )).length;
+
+    return (
+        <section
+            aria-labelledby="today-summary-title"
+            className="content-card today-summary-card"
+        >
+            <div className="today-summary-heading">
+                <h2 id="today-summary-title">今日概览</h2>
+                <p className="page-context">
+                    <time dateTime={plan.evaluationContext.applicableDate}>
+                        {plan.evaluationContext.applicableDate}
+                    </time>
+                    {' · '}
+                    {plan.evaluationContext.termZone}
+                </p>
+            </div>
+            <dl className="summary-facts">
+                <div className="summary-fact">
+                    <dt>当前学期课程</dt>
+                    <dd>{courseCount}</dd>
+                </div>
+                <div className="summary-fact">
+                    <dt>今日课节</dt>
+                    <dd>{plan.today.meetings.length}</dd>
+                </div>
+                <div className="summary-fact">
+                    <dt>今日待完成</dt>
+                    <dd>{plan.today.summary.pending}</dd>
+                </div>
+                <div className="summary-fact">
+                    <dt>今日已完成</dt>
+                    <dd>{plan.today.summary.completed}</dd>
+                </div>
+                <div className="summary-fact summary-fact--progress">
+                    <dt>学期日期进度</dt>
+                    <dd>
+                        <progress
+                            aria-label="学期日期进度"
+                            max={1}
+                            value={plan.termProgress.ratio}
+                        >
+                            {percentageFormatter.format(plan.termProgress.ratio)}
+                        </progress>
+                        <span>{percentageFormatter.format(plan.termProgress.ratio)}</span>
+                        <small>
+                            {plan.termProgress.elapsedDays} / {plan.termProgress.totalDays} 个学期日
+                        </small>
+                    </dd>
+                </div>
+            </dl>
+        </section>
     );
 }
 
@@ -196,6 +244,7 @@ export function TodayPage(props: WorkspacePageContentProps): ReactElement {
 export function NextTaskCard(props: Readonly<{
     label: string;
     next: PlanNextTaskProjection;
+    termZone: string;
     onOpenTasks: () => void;
 }>): ReactElement {
     return (
@@ -220,7 +269,9 @@ export function NextTaskCard(props: Readonly<{
                     <p className="status-label">{taskClassificationNames[props.next.task.classification]}</p>
                     <strong>{props.next.task.occurrence.title}</strong>
                     <span>{props.next.task.courseCode}</span>
-                    <time dateTime={props.next.deadlineBoundary}>{props.next.deadlineBoundary}</time>
+                    <time dateTime={props.next.deadlineBoundary}>
+                        {localInstantLabel(props.next.deadlineBoundary, props.termZone)}
+                    </time>
                     <span>{remainingTimeLabel(props.next.remainingMilliseconds)}</span>
                 </div>
             )}

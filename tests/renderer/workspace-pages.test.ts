@@ -406,6 +406,42 @@ test('TodayPage renders only real unified Today, Week, next-task, and term-progr
     assert.equal(typeof TodayPage, 'function');
 });
 
+test('Today opens on one stat bar over a two-column dashboard', () => {
+    const html = renderWorkspacePage('today');
+
+    // The Current Term name stays visible on the home page.
+    assert.match(html, /class="page-context">Fall 2026 · 2026-09-07 – 2026-09-20</);
+    const statBar = html.match(
+        /<section aria-labelledby="today-summary-title"[\s\S]*?<\/section>/,
+    )?.[0] ?? '';
+    assert.match(statBar, /当前学期课程<\/dt><dd>2</);
+    assert.match(statBar, /今日课节<\/dt><dd>2</);
+    assert.match(statBar, /今日待完成<\/dt><dd>\d/);
+    assert.match(statBar, /今日已完成<\/dt><dd>\d/);
+    assert.match(statBar, /学期日期进度/);
+
+    // The stat bar precedes the two columns, and each column owns its own cards.
+    const columns = html.match(/class="today-column[^"]*"/g) ?? [];
+    assert.equal(columns.length, 2);
+    assert.ok(html.indexOf('today-summary-title') < html.indexOf('today-column'));
+    const primary = html.slice(
+        html.indexOf('class="today-column"'),
+        html.indexOf('class="today-column today-column--secondary"'),
+    );
+    assert.match(primary, /id="today-meetings-title"/);
+    assert.match(primary, /id="today-tasks-title"/);
+    assert.doesNotMatch(primary, /id="next-tasks-title"|id="week-summary-title"/);
+    const secondary = html.slice(html.indexOf('class="today-column today-column--secondary"'));
+    assert.match(secondary, /id="next-tasks-title"/);
+    assert.match(secondary, /id="week-summary-title"/);
+    assert.match(secondary, /id="today-tba-title"/);
+
+    // The meeting list is the timeline; a missing meeting still routes to its editor.
+    assert.match(html, /class="fact-list meeting-list today-timeline"/);
+    const withoutMeetings = renderWorkspacePage('today', planProjection({ meetings: [] }));
+    assert.match(withoutMeetings, /<button[^>]*>添加课节<\/button>/);
+});
+
 test('Today greeting uses the PLAN TermZone when UTC is already on the next date', () => {
     const html = renderWorkspacePage('today', planProjection({
         evaluationContext: {

@@ -464,7 +464,8 @@ ul {
 }
 
 .workspace-grid--today {
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    grid-template-columns: minmax(0, 1.15fr) minmax(19rem, 0.85fr);
+    align-items: start;
 }
 
 .workspace-grid--courses {
@@ -481,21 +482,65 @@ ul {
 
 .today-summary-card {
     display: grid;
-    grid-template-columns: minmax(12rem, 1fr) minmax(30rem, 2fr);
-    gap: 0.4rem 1.5rem;
-    align-items: center;
+    gap: 0.75rem;
 }
 
-.today-summary-card .page-context {
-    grid-column: 1;
+.today-summary-heading {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.2rem 0.9rem;
+    align-items: baseline;
+    justify-content: space-between;
 }
 
 .summary-facts {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-row: 1 / span 2;
-    grid-column: 2;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
     gap: 0.6rem;
+}
+
+/* The term-progress tile carries a bar and a caption, so it needs two columns. */
+.today-summary-card .summary-fact--progress {
+    grid-column: span 2;
+}
+
+.today-column {
+    display: grid;
+    align-content: start;
+    gap: 1rem;
+    min-width: 0;
+}
+
+/* One rail down the left edge turns the meeting list into a real timeline. */
+.today-timeline {
+    position: relative;
+    padding-left: 1.1rem;
+}
+
+.today-timeline::before {
+    position: absolute;
+    top: 0.9rem;
+    bottom: 0.9rem;
+    left: 0.32rem;
+    width: 2px;
+    border-radius: 1px;
+    background: rgba(120, 108, 74, 0.22);
+    content: "";
+}
+
+.today-timeline > li::before {
+    position: absolute;
+    left: -0.95rem;
+    width: 0.6rem;
+    height: 0.6rem;
+    border: 2px solid var(--morning);
+    border-radius: 999px;
+    background: var(--card-strong);
+    content: "";
+}
+
+.today-timeline > li {
+    position: relative;
 }
 
 .summary-fact {
@@ -536,6 +581,17 @@ ul {
     border: 0;
     border-radius: 999px;
     accent-color: var(--dark);
+}
+
+/* Chromium ignores accent-color on a styled progress bar, so both parts are explicit. */
+.summary-fact--progress progress::-webkit-progress-bar {
+    border-radius: 999px;
+    background: rgba(120, 108, 74, 0.18);
+}
+
+.summary-fact--progress progress::-webkit-progress-value {
+    border-radius: 999px;
+    background: var(--dark);
 }
 
 .summary-fact--progress small {
