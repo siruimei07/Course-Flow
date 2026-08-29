@@ -291,6 +291,7 @@ body {
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
 | `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `Verification` |
+| `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉：窗口控件伪影修复、暖色不透明卡片材质替换灰色磨砂玻璃、动效（页面进入、对话框弹出、悬停反馈）；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | — | — | `In Progress` |
 
 ## 3. 首发 TEST 主所有权校验
 
@@ -459,6 +460,7 @@ body {
 | 2026-08-29 | `WP-RF-01` | `In Progress`（Stage H） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage H：四个超大契约（course 2,257 / setup 2,216 / task 2,029 / plan 1,271 行）各拆为 `<contract>/{types,guards,makers}.ts`（plan 无 makers），原模块路径保留为聚合导出（38–101 行），公共导出集合不变；请求 kind 清单已在 Stage E3 归契约所有。 |
 | 2026-08-29 | `WP-RF-01` | `In Progress → Verification`（Stage I） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：677 用例（新增依赖方向守卫）= 668 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage I：新增 `tests/architecture/module-dependency.test.ts`，对 `src/` 全部相对导入强制执行计划 §4 依赖方向矩阵（当前实际图为其严格子集：workspace→{protect,data,platform,shared}、protect→{data,platform,shared}、data→{plan,platform,shared}、renderer/main/preload/plan/platform→shared）；`AGENTS.md` §项目状态 移除过期执行点描述，指向 Backlog/Roadmap 事实源。容器内九个阶段全部完成；`WP-RF-01` 进入 `Verification`，等待用户在 Windows x64 / Node 24 复验 `pnpm typecheck`、`pnpm test`、`pnpm package`、`pnpm smoke:packaged` 后关闭。 |
 | 2026-08-29 | `WP-RF-01` | `Verification`（签名剥离重放） | 本行所在提交；重放后链 `dbadb2c…5c0c97d` | `git diff 69a2e01 5c0c97d` 为空（树逐字节等同已全量门禁通过的原链末端）；`git log` 逐提交比对作者、邮箱、作者/提交时间与信息完全一致；`%G?` 确认 18 个提交均无签名；`git diff --check` | 用户批准：执行环境曾以容器 SSH 密钥自动签署 18 个提交（作者身份不受影响），会在 GitHub 显示 Unverified；按用户选择以 `filter-branch` 原位重放剥离签名，内容、信息、作者与时间零改动，仅提交哈希变更（原链 `64fe18c…69a2e01` 废弃）。执行环境已设 `commit.gpgsign=false` 防复发。 |
+| 2026-08-29 | `WP-UI-01` | `— → In Progress`（切片 1） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：677 = 668 通过 / 5 跳过 / 4 已知环境性失败（集合不变，`setup-ui`/`workspace-shell` 的 CSS 契约断言全部保持）；`git diff --check` | 用户报告并授权两项：①窗口控件边框交界白色伪影——根因是半透明 1px 边框 + inset 高光在分数像素尺寸（2.35rem）圆形上的抗锯齿泄漏；改为 38px 无边框实心圆（黄/白/墨），悬停提升、按下缩放。②整体视觉对齐用户提供的参考图——内容卡片由灰色半透明磨砂（`backdrop-filter blur(24px)`）改为暖白近不透明材质 + 柔和暖阴影（用户明确允许更换实现），毛玻璃只保留在标题栏、浮层与对话框；全局令牌暖化（画布渐变、暖色描边、更大圆角、暖阴影）；新增页面进入、状态卡上浮、对话框弹出、背景遮罩淡入动效与按钮悬停/按下反馈，全部受既有 `prefers-reduced-motion` 全局覆盖约束；forced-colors / prefers-contrast / prefers-reduced-transparency 分支同步。仅改 `styles.css`（2,363→2,467 行）。`WP-GA-01` 计划针对的布局属性（body 留白、根滚动、`.workspace-content` 滚动所有权）未触碰。 |
 
 ## 7. 拆包与变更规则
 
