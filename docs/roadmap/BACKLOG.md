@@ -290,7 +290,7 @@ body {
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `In Progress` |
+| `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `Verification` |
 
 ## 3. 首发 TEST 主所有权校验
 
@@ -457,6 +457,7 @@ body {
 | 2026-08-29 | `WP-RF-01` | `In Progress`（Stage F3，Stage F 完成） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage F3：`App.tsx`（1,575 行）的装载与任务动作运行时拆入 `renderer/app/{load-workspace,task-actions}.ts`；`App.tsx` 保留 `App`/`WorkspaceShell`/`WelcomeSurface` 组合层（约 900 行）并聚合导出既有公共名；`setup-ui` 的 `app` 原文扫描同步为"入口 + `renderer/app/` 并集"。Renderer 三个超大文件拆分完成：1,980/3,387/1,575 → 组合层 146/807/902 + 15 个内聚模块。 |
 | 2026-08-29 | `WP-RF-01` | `In Progress`（Stage G） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage G：两个数据安全内核按协议层拆分——`restore-activation.ts`（2,621 行）拆为 `restore-activation/{protocol,records,evidence,activation}`，`migration-rollback-handoff.ts`（2,306 行）拆为 `migration-rollback-handoff/{protocol,records,evidence,handoff}`；两个原模块路径保留为公共聚合导出（各约 100 行），公共导出集合、控制流与记录协议零改动。 |
 | 2026-08-29 | `WP-RF-01` | `In Progress`（Stage H） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：676 = 667 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage H：四个超大契约（course 2,257 / setup 2,216 / task 2,029 / plan 1,271 行）各拆为 `<contract>/{types,guards,makers}.ts`（plan 无 makers），原模块路径保留为聚合导出（38–101 行），公共导出集合不变；请求 kind 清单已在 Stage E3 归契约所有。 |
+| 2026-08-29 | `WP-RF-01` | `In Progress → Verification`（Stage I） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：677 用例（新增依赖方向守卫）= 668 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage I：新增 `tests/architecture/module-dependency.test.ts`，对 `src/` 全部相对导入强制执行计划 §4 依赖方向矩阵（当前实际图为其严格子集：workspace→{protect,data,platform,shared}、protect→{data,platform,shared}、data→{plan,platform,shared}、renderer/main/preload/plan/platform→shared）；`AGENTS.md` §项目状态 移除过期执行点描述，指向 Backlog/Roadmap 事实源。容器内九个阶段全部完成；`WP-RF-01` 进入 `Verification`，等待用户在 Windows x64 / Node 24 复验 `pnpm typecheck`、`pnpm test`、`pnpm package`、`pnpm smoke:packaged` 后关闭。 |
 
 ## 7. 拆包与变更规则
 
