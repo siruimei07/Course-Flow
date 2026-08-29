@@ -471,7 +471,7 @@ export class WorkspaceApplication {
             case 'workspace.setup-draft.discard':
                 return discardSetupDraftCheckpoint(this.host, request.requestId, request.expectedVersion);
             case 'workspace.plan.query':
-                return queryPlan(this.host, request.requestId);
+                return queryPlan(this.host, request.requestId, request.requestedWindow);
             case 'workspace.protection.query':
                 return queryDataProtection(this.host, request.requestId);
             case 'workspace.protection.configure-selected':

@@ -149,14 +149,22 @@ export function makePlanQueryRequest(
     requestId: string,
     appBuildId: string,
     workspaceEpoch: string,
+    requestedWindow?: MeetingOccurrenceWindow,
 ): PlanQueryRequest {
-    return {
+    const base = {
         kind: 'workspace.plan.query',
         protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
         appBuildId,
         requestId,
         workspaceEpoch,
-    };
+    } as const;
+    if (requestedWindow === undefined) {
+        return base;
+    }
+    if (!isMeetingOccurrenceWindow(requestedWindow)) {
+        throw new TypeError('PLAN requested window must be a canonical LocalDate range');
+    }
+    return { ...base, requestedWindow: { ...requestedWindow } };
 }
 
 /**

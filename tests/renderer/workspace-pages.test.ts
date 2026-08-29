@@ -564,6 +564,62 @@ test('CalendarPage keeps seven day columns and separates Calendar, Agenda, confl
     assert.match(onlyTbaHtml, /Confirm research topic/);
 });
 
+test('A-CALENDAR-001: Calendar week controls move the grid without moving today', () => {
+    const shifts: number[] = [];
+    const nextWeekPlan = planProjection({
+        evaluationContext: {
+            ...EVALUATION_CONTEXT,
+            requestedWindow: { startDate: '2026-09-14', endDate: '2026-09-20' },
+        },
+    });
+    const html = renderToStaticMarkup(createElement(CalendarPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan: planProjection(),
+        setupIncomplete: false,
+        calendarWeek: {
+            offset: 1,
+            busy: false,
+            problem: null,
+            plan: nextWeekPlan,
+            onShift(weeks: number): void {
+                shifts.push(weeks);
+            },
+            onReturnToCurrentWeek(): void {},
+        },
+    }));
+
+    assert.match(html, /aria-label="日历周导航"/);
+    assert.match(html, />上一周<\/button>/);
+    assert.match(html, />下一周<\/button>/);
+    assert.match(html, /<button(?![^>]*disabled)[^>]*>回到本周<\/button>/);
+    assert.match(html, /1 周后/);
+    assert.match(html, /2026-09-14/);
+    assert.match(html, /2026-09-20/);
+    // The requested week does not contain the applicable date, so no column claims 今天.
+    assert.doesNotMatch(html, /class="calendar-current-label"/);
+    assert.deepEqual(shifts, []);
+
+    const currentWeekHtml = renderToStaticMarkup(createElement(CalendarPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan: planProjection(),
+        setupIncomplete: false,
+        calendarWeek: {
+            offset: 0,
+            busy: true,
+            problem: '无法读取该周的统一计划投影；正式数据没有改变。',
+            plan: null,
+            onShift(): void {},
+            onReturnToCurrentWeek(): void {},
+        },
+    }));
+    assert.match(currentWeekHtml, /正在读取…/);
+    assert.match(currentWeekHtml, /<button(?=[^>]*disabled)[^>]*>回到本周<\/button>/);
+    assert.match(currentWeekHtml, /无法读取该周的统一计划投影/);
+    assert.match(currentWeekHtml, /class="calendar-current-label"/);
+});
+
 test('CalendarPage places real items in shared date columns with truthful vertical time and holiday spans', () => {
     const html = renderToStaticMarkup(createElement(CalendarPage, {
         ...HANDLERS,

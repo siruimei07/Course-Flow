@@ -13,7 +13,10 @@ import type { PlanProjection } from '../../shared/workspace-plan-contract';
  * @return {ReactElement} Calendar page.
  */
 export function CalendarPage(props: WorkspacePageContentProps): ReactElement {
-    const { plan, setup, setupIncomplete } = props;
+    const { calendarWeek, plan, setup, setupIncomplete } = props;
+    // The Calendar may show another week; Today, the week summary and TBA keep the
+    // projection evaluated for today, so the two never disagree about "今天".
+    const visiblePlan = calendarWeek?.plan ?? plan ?? null;
 
     return (
         <article
@@ -21,13 +24,22 @@ export function CalendarPage(props: WorkspacePageContentProps): ReactElement {
             className="workspace-page workspace-page--calendar"
         >
             <PageHeader
+                actions={calendarWeek === undefined || !plan ? undefined : (
+                    <CalendarWeekControls week={calendarWeek} />
+                )}
                 context={termContext(setup)}
                 eyebrow="Calendar"
                 headingId="calendar-page-title"
                 title="日历"
             />
             {setupIncomplete ? <SetupIncompleteNotice onContinueSetup={props.onContinueSetup} /> : null}
-            {!plan ? (
+            {calendarWeek?.problem ? (
+                <p
+                    className="empty-state-reason calendar-week-problem"
+                    role="alert"
+                >{calendarWeek.problem}</p>
+            ) : null}
+            {!visiblePlan ? (
                 <PlanUnavailable
                     {...props}
                     fallbackActionLabel="返回 Today"
@@ -35,11 +47,58 @@ export function CalendarPage(props: WorkspacePageContentProps): ReactElement {
                 />
             ) : (
                 <CalendarContent
+                    applicableDate={plan?.evaluationContext.applicableDate ?? null}
                     onNavigate={props.onNavigate}
-                    plan={plan}
+                    plan={visiblePlan}
                 />
             )}
         </article>
+    );
+}
+
+/**
+ * Renders the explicit week controls without inventing a date the projection lacks.
+ *
+ * @param {Object} props Calendar week presentation owned by the Shell.
+ * @return {ReactElement} Previous, current and next week commands.
+ */
+export function CalendarWeekControls(props: Readonly<{
+    week: NonNullable<WorkspacePageContentProps['calendarWeek']>;
+}>): ReactElement {
+    const { week } = props;
+    const offsetLabel = week.offset === 0
+        ? '本周'
+        : week.offset > 0 ? `${week.offset} 周后` : `${-week.offset} 周前`;
+
+    return (
+        <div
+            aria-label="日历周导航"
+            className="calendar-week-controls"
+            role="group"
+        >
+            <button
+                className="secondary-action"
+                disabled={week.busy}
+                onClick={() => week.onShift(-1)}
+                type="button"
+            >上一周</button>
+            <span
+                aria-live="polite"
+                className="calendar-week-offset"
+            >{week.busy ? '正在读取…' : offsetLabel}</span>
+            <button
+                className="secondary-action"
+                disabled={week.busy}
+                onClick={() => week.onShift(1)}
+                type="button"
+            >下一周</button>
+            <button
+                className="secondary-action"
+                disabled={week.busy || week.offset === 0}
+                onClick={week.onReturnToCurrentWeek}
+                type="button"
+            >回到本周</button>
+        </div>
     );
 }
 
@@ -51,8 +110,12 @@ export function CalendarPage(props: WorkspacePageContentProps): ReactElement {
  */
 export function CalendarContent(props: Readonly<{
     plan: PlanProjection;
+    applicableDate?: string | null;
     onNavigate: (page: WorkspaceNavigationId) => void;
 }>): ReactElement {
+    const todayDate = props.applicableDate === undefined || props.applicableDate === null
+        ? props.plan.evaluationContext.applicableDate
+        : props.applicableDate;
     const { calendar, agenda, tba } = props.plan;
     const dates = sevenDayDates(calendar.window.startDate);
     const timedPlacements = calendarTimedPlacements(
@@ -95,7 +158,7 @@ export function CalendarContent(props: Readonly<{
                                 <li
                                     className="calendar-day-column"
                                     data-current={
-                                        date === props.plan.evaluationContext.applicableDate
+                                        date === todayDate
                                             ? 'true'
                                             : undefined
                                     }
@@ -104,13 +167,13 @@ export function CalendarContent(props: Readonly<{
                                 >
                                     <time
                                         aria-current={
-                                            date === props.plan.evaluationContext.applicableDate
+                                            date === todayDate
                                                 ? 'date'
                                                 : undefined
                                         }
                                         dateTime={date}
                                     >{date}</time>
-                                    {date === props.plan.evaluationContext.applicableDate ? (
+                                    {date === todayDate ? (
                                         <span className="calendar-current-label">今天</span>
                                     ) : null}
                                 </li>
@@ -153,7 +216,7 @@ export function CalendarContent(props: Readonly<{
                                 className="calendar-time-column"
                                 data-calendar-date={date}
                                 data-current={
-                                    date === props.plan.evaluationContext.applicableDate
+                                    date === todayDate
                                         ? 'true'
                                         : undefined
                                 }

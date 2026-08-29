@@ -698,8 +698,9 @@ test('preload exposes separate bounded Workspace and window capabilities on fixe
       'cancelMeetingOccurrence',
     ],
   );
+  // queryPlan (index 21) takes one optional Calendar window; every other capability is fixed.
   const expectedParameterCounts = [
-    0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1,
+    0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
     1, 1, 1,
     1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1,
   ];

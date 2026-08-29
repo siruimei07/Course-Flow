@@ -62,13 +62,14 @@ export type MigrationProtectionLoad = Readonly<{
 export async function loadPlan(
     bridge: Window['courseFlow'],
     setup: SetupProjection,
+    requestedWindow?: Readonly<{ startDate: string; endDate: string }>,
 ): Promise<PlanLoadResult> {
     if (setup.currentTerm === null) {
         return { plan: null, planProblem: null };
     }
 
     try {
-        const planState = planProjectionStateFrom(await bridge.queryPlan());
+        const planState = planProjectionStateFrom(await bridge.queryPlan(requestedWindow));
         if (planState.kind === 'unavailable') {
             return { plan: null, planProblem: planState.message };
         }

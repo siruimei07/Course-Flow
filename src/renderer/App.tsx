@@ -67,8 +67,10 @@ import {
 import {
     TaskActionNotice,
     WorkspacePage,
+    type CalendarWeekPresentation,
     type TaskActionPresentation,
 } from './workspace-pages';
+import { addCalendarDays } from './pages/shared';
 
 type ResolvedSetupState = Extract<SetupState, { projection: SetupProjection }>;
 
@@ -82,6 +84,7 @@ export type WorkspaceShellProps = Readonly<{
     plan: PlanProjection | null;
     planProblem: string | null;
     taskActions: TaskActionPresentation;
+    calendarWeek: CalendarWeekPresentation;
     onNavigate(page: WorkspaceNavigationId): void;
     onCreateTask(): void;
     onOpenManagement(surface: ManagementSurfaceId): void;
@@ -159,6 +162,10 @@ export function App(): ReactElement {
     const [activePage, setActivePage] = useState<WorkspaceNavigationId>('today');
     const [setupOpen, setSetupOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
+    const [calendarWeekOffset, setCalendarWeekOffset] = useState(0);
+    const [calendarWeekPlan, setCalendarWeekPlan] = useState<PlanProjection | null>(null);
+    const [calendarWeekBusy, setCalendarWeekBusy] = useState(false);
+    const [calendarWeekProblem, setCalendarWeekProblem] = useState<string | null>(null);
     const [managementOpen, setManagementOpen] = useState(false);
     const [managementSurface, setManagementSurface] = useState<ManagementSurfaceId>('course');
     const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
@@ -493,6 +500,10 @@ export function App(): ReactElement {
     };
 
     const refreshPlan = useCallback((setup: SetupProjection): void => {
+        // A committed change invalidates any week the Calendar wandered to.
+        setCalendarWeekOffset(0);
+        setCalendarWeekPlan(null);
+        setCalendarWeekProblem(null);
         void loadPlan(window.courseFlow, setup).then(result => {
             setState(current => current.kind === 'ready'
                 && current.setup.projection.workspaceRevision === setup.workspaceRevision
@@ -500,6 +511,48 @@ export function App(): ReactElement {
                 : current);
         });
     }, []);
+
+    /**
+     * Asks Workspace for one explicit Calendar week without moving Today or the week summary.
+     *
+     * @param {number} offset Whole weeks away from the week that contains today.
+     * @return {void}
+     */
+    const showCalendarWeek = (offset: number): void => {
+        if (state.kind !== 'ready' || state.plan === null || calendarWeekBusy) {
+            return;
+        }
+        if (offset === 0) {
+            setCalendarWeekOffset(0);
+            setCalendarWeekPlan(null);
+            setCalendarWeekProblem(null);
+            return;
+        }
+
+        const currentWeekStart = addCalendarDays(
+            state.plan.calendar.window.startDate,
+            -calendarWeekOffset * 7,
+        );
+        const startDate = addCalendarDays(currentWeekStart, offset * 7);
+        const requestedWindow = { startDate, endDate: addCalendarDays(startDate, 6) };
+        setCalendarWeekBusy(true);
+        setCalendarWeekProblem(null);
+        void loadPlan(window.courseFlow, state.setup.projection, requestedWindow)
+            .then(result => {
+                if (result.plan === null) {
+                    setCalendarWeekProblem(
+                        result.planProblem ?? '无法读取该周的统一计划投影；正式数据没有改变。',
+                    );
+                    return;
+                }
+                setCalendarWeekOffset(offset);
+                setCalendarWeekPlan(result.plan);
+            })
+            .catch(() => setCalendarWeekProblem(
+                '无法读取该周的统一计划投影；正式数据没有改变。',
+            ))
+            .finally(() => setCalendarWeekBusy(false));
+    };
 
     const acceptSetupProjection = (setup: ResolvedSetupState): void => {
         setState(current => current.kind === 'ready'
@@ -785,6 +838,14 @@ export function App(): ReactElement {
         <>
             <WorkspaceShell
                 activePage={activePage}
+                calendarWeek={{
+                    offset: calendarWeekOffset,
+                    busy: calendarWeekBusy,
+                    problem: calendarWeekProblem,
+                    plan: calendarWeekPlan,
+                    onShift: weeks => showCalendarWeek(calendarWeekOffset + weeks),
+                    onReturnToCurrentWeek: () => showCalendarWeek(0),
+                }}
                 dataMode={state.setup.dataMode}
                 onNavigate={setActivePage}
                 onCreateTask={() => openManagement('task')}
@@ -940,6 +1001,7 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
                 tabIndex={-1}
             >
                 <WorkspacePage
+                    calendarWeek={props.calendarWeek}
                     onContinueSetup={props.onOpenSetup}
                     onCreateTask={props.onCreateTask}
                     onOpenManagement={props.onOpenManagement}

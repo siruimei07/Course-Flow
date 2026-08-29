@@ -56,11 +56,23 @@ export type TaskActionPresentation = Readonly<{
     onUndoFocusChange(focused: boolean): void;
 }>;
 
+export type CalendarWeekPresentation = Readonly<{
+    /** Whole weeks away from the Current Term week that contains today. */
+    offset: number;
+    busy: boolean;
+    problem: string | null;
+    /** PLAN projection for the requested week, or null while the default week is shown. */
+    plan: PlanProjection | null;
+    onShift(weeks: number): void;
+    onReturnToCurrentWeek(): void;
+}>;
+
 export type WorkspacePageContentProps = WorkspacePageHandlers & Readonly<{
     setup: SetupProjection;
     plan?: PlanProjection | null;
     planProblem?: string | null;
     setupIncomplete: boolean;
+    calendarWeek?: CalendarWeekPresentation;
 }>;
 
 export type WorkspacePageProps = WorkspacePageContentProps & Readonly<{

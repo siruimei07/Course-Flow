@@ -1980,6 +1980,25 @@ ul {
     padding-top: 0.45rem;
 }
 
+.calendar-week-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+.calendar-week-offset {
+    min-width: 4.5rem;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.calendar-week-problem {
+    margin-top: 0.4rem;
+}
+
 .settings-section > h2 {
     margin-top: 0.3rem;
     font-size: clamp(1.3rem, 2.6vw, 1.7rem);

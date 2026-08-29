@@ -194,6 +194,40 @@ test('A-VIEW-001–006: Workspace returns one Clock-bound Today and Week project
         totalDays: 30,
         ratio: 1 / 3,
     });
+
+    // A-CALENDAR-001: an explicit Calendar week moves only the window, never "today".
+    const nextWeek = await application.handle(makePlanQueryRequest(
+        'query-next-week',
+        APP_BUILD_ID,
+        epoch,
+        { startDate: '2026-09-14', endDate: '2026-09-20' },
+    ));
+    assert.equal(nextWeek.ok, true);
+    if (!nextWeek.ok || nextWeek.value.kind !== 'workspace.plan-projection') {
+        throw new Error('Expected a windowed PLAN projection');
+    }
+    const nextWeekProjection = nextWeek.value.projection;
+    assert.deepEqual(nextWeekProjection.evaluationContext, {
+        evaluatedAt: '2026-09-10T13:30:00.000Z',
+        termZone: 'America/Toronto',
+        applicableDate: '2026-09-10',
+        requestedWindow: { startDate: '2026-09-14', endDate: '2026-09-20' },
+    });
+    assert.deepEqual(nextWeekProjection.calendar.window, {
+        startDate: '2026-09-14',
+        endDate: '2026-09-20',
+    });
+    // Today keeps the facts evaluated for the real applicable date.
+    assert.deepEqual(nextWeekProjection.today.summary, projection.today.summary);
+    assert.equal(nextWeekProjection.today.meetings.length, projection.today.meetings.length);
+    assert.equal(
+        nextWeekProjection.calendar.timedItems.every(item => (
+            'date' in item.occurrence
+                ? item.occurrence.date >= '2026-09-14' && item.occurrence.date <= '2026-09-20'
+                : true
+        )),
+        true,
+    );
     await application.close();
 });
 

@@ -431,11 +431,35 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: unified PLAN query validates its exac
         workspaceEpoch: WORKSPACE_EPOCH,
     });
     assert.equal(isWorkspaceSetupRequest(request, APP_BUILD_ID, WORKSPACE_EPOCH), true);
+
+    // The Calendar may name one explicit week; nothing else about the envelope moves.
+    const windowed = makePlanQueryRequest(REQUEST_ID, APP_BUILD_ID, WORKSPACE_EPOCH, {
+        startDate: '2026-09-14',
+        endDate: '2026-09-20',
+    });
+    assert.deepEqual(windowed, {
+        kind: 'workspace.plan.query',
+        protocolVersion: 3,
+        appBuildId: APP_BUILD_ID,
+        requestId: REQUEST_ID,
+        workspaceEpoch: WORKSPACE_EPOCH,
+        requestedWindow: { startDate: '2026-09-14', endDate: '2026-09-20' },
+    });
+    assert.equal(isWorkspaceSetupRequest(windowed, APP_BUILD_ID, WORKSPACE_EPOCH), true);
     assert.equal(isWorkspaceSetupRequest(
-        { ...request, requestedWindow: TASK_WINDOW },
+        { ...request, requestedWindow: { startDate: '2026-09-20', endDate: '2026-09-14' } },
         APP_BUILD_ID,
         WORKSPACE_EPOCH,
     ), false);
+    assert.equal(isWorkspaceSetupRequest(
+        { ...request, requestedWindow: TASK_WINDOW, extra: 1 },
+        APP_BUILD_ID,
+        WORKSPACE_EPOCH,
+    ), false);
+    assert.throws(() => makePlanQueryRequest(REQUEST_ID, APP_BUILD_ID, WORKSPACE_EPOCH, {
+        startDate: '2026-09-20',
+        endDate: '2026-09-14',
+    }), TypeError);
 
     const outcome = {
         ok: true,

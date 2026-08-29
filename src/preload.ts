@@ -488,9 +488,9 @@ function discardSetupDraftCheckpoint(expectedVersion: string): Promise<Workspace
  * Queries the unified PLAN view projection.
  * @return {Promise<WorkspaceSetupOutcome>} Validated Workspace outcome.
  */
-function queryPlan(): Promise<WorkspaceSetupOutcome> {
+function queryPlan(requestedWindow?: MeetingOccurrenceWindow): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
-    makePlanQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch)
+    makePlanQueryRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, requestedWindow)
   ));
 }
 

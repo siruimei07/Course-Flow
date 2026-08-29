@@ -10,7 +10,11 @@ import type { MeetingOccurrenceImpactRequest, MeetingSeriesQueryRequest, PlanQue
 import { SYSTEM_CLOCK } from './host';
 import type { WorkspaceHost } from './host';
 import { problem } from './outcomes';
-export function queryPlan(host: WorkspaceHost, requestId: PlanQueryRequest['requestId']): WorkspaceSetupOutcome {
+export function queryPlan(
+    host: WorkspaceHost,
+    requestId: PlanQueryRequest['requestId'],
+    requestedWindow?: PlanQueryRequest['requestedWindow'],
+): WorkspaceSetupOutcome {
     const openedStore = host.dataState().store;
     if (!openedStore) {
         const code = host.dataState().status.kind === 'recovery'
@@ -22,7 +26,11 @@ export function queryPlan(host: WorkspaceHost, requestId: PlanQueryRequest['requ
     try {
         const evaluatedAt = (host.options.clock ?? SYSTEM_CLOCK).now();
         const source = openedStore.readPlanProjectionSource();
-        const context = createPlanEvaluationContext(evaluatedAt, source.term.timeZone);
+        const context = createPlanEvaluationContext(
+            evaluatedAt,
+            source.term.timeZone,
+            requestedWindow,
+        );
         return {
             ok: true,
             value: {

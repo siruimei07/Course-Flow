@@ -89,9 +89,28 @@ export function isWorkspaceSetupRequest(
         return false;
     }
 
+    if (value.kind === 'workspace.plan.query') {
+        // The Calendar may ask for an explicit week; every other fact still comes
+        // from the same single evaluation, so this is the only optional key.
+        const planQueryWindow = value.requestedWindow;
+        return hasExactDataKeys(value, [
+            'kind',
+            'protocolVersion',
+            'appBuildId',
+            'requestId',
+            'workspaceEpoch',
+        ])
+            || (hasExactDataKeys(value, [
+                'kind',
+                'protocolVersion',
+                'appBuildId',
+                'requestId',
+                'workspaceEpoch',
+                'requestedWindow',
+            ]) && isMeetingOccurrenceWindow(planQueryWindow));
+    }
     if (value.kind === 'workspace.initialize'
         || value.kind === 'workspace.setup.query'
-        || value.kind === 'workspace.plan.query'
         || value.kind === 'workspace.protection.query') {
         return hasExactDataKeys(value, [
             'kind',

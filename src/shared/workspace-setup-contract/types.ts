@@ -78,6 +78,8 @@ export type DiscardSetupDraftCheckpointRequest = WorkspaceRequestBase & Readonly
 
 export type PlanQueryRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.plan.query';
+    /** Explicit Calendar window; absent means the Current Term week that contains today. */
+    requestedWindow?: MeetingOccurrenceWindow;
 }>;
 
 export type DataProtectionQueryRequest = WorkspaceRequestBase & Readonly<{

@@ -78,7 +78,7 @@ declare global {
       rollbackRestoreSession(command: RestoreSessionActionCommand): Promise<WorkspaceSetupOutcome>;
       saveSetupDraftCheckpoint(input: SaveSetupDraftCheckpointInput): Promise<WorkspaceSetupOutcome>;
       discardSetupDraftCheckpoint(expectedVersion: string): Promise<WorkspaceSetupOutcome>;
-      queryPlan(): Promise<WorkspaceSetupOutcome>;
+      queryPlan(requestedWindow?: MeetingOccurrenceWindow): Promise<WorkspaceSetupOutcome>;
       createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
       createHolidayRange(command: CreateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
