@@ -16,6 +16,7 @@ import { LEVEL_13_PROTECTION_DDL } from './levels/level-13';
 import { LEVEL_14_PROTECTION_DDL } from './levels/level-14';
 import { LEVEL_15_RESTORE_DDL } from './levels/level-15';
 import { LEVEL_16_RESTORE_COMPLETION_DDL, LEVEL_16_RESTORE_SESSION_DDL } from './levels/level-16';
+import { LEVEL_17_RECEIPT_DDL, LEVEL_17_RESTORE_COMPLETION_DDL, LEVEL_17_RESTORE_SESSION_DDL } from './levels/level-17';
 import { rejectSchema, weeklyTaskBoundaryAnchors } from './validation';
 import { normalizeTaskSchedule } from '../../shared/workspace-task-contract';
 export function migrateLevel0To1(database: DatabaseSync): void {
@@ -1126,5 +1127,80 @@ export function migrateLevel15To16(database: DatabaseSync): void {
             )
             WHERE singleton = 1;
         PRAGMA user_version = 16;
+    `);
+}
+
+/**
+ * Widens the receipt ledger for the explicit Current Term reset.
+ *
+ * No fact table changes, so every existing receipt, effect and follow-up row is
+ * copied across unchanged; only the accepted intent and effect codes grow.
+ *
+ * @param {DatabaseSync} database - Database inside the caller-owned migration transaction.
+ * @return {void}
+ */
+export function migrateLevel16To17(database: DatabaseSync): void {
+    database.exec(`
+        -- backup_configuration (level 12) references command_receipts and is not rebuilt
+        -- here, so the rename must not rewrite its foreign key to the temporary name.
+        PRAGMA legacy_alter_table = ON;
+        ALTER TABLE task_state_history RENAME TO task_state_history_level_16;
+        DROP INDEX task_state_history_by_command;
+        ALTER TABLE durable_followups RENAME TO durable_followups_level_16;
+        DROP INDEX durable_followups_by_command;
+        ALTER TABLE command_receipts RENAME TO command_receipts_level_16;
+        ALTER TABLE receipt_effects RENAME TO receipt_effects_level_16;
+        PRAGMA legacy_alter_table = OFF;
+
+        ${LEVEL_17_RECEIPT_DDL}
+
+        CREATE TABLE durable_followups (
+            follow_up_id TEXT PRIMARY KEY CHECK (${followUpIdCheck}),
+            originating_command_id TEXT NOT NULL CHECK (${originatingCommandIdCheck}),
+            owner TEXT NOT NULL CHECK (owner = 'protect'),
+            kind TEXT NOT NULL CHECK (kind = 'backup-needed-through'),
+            prerequisite_revision INTEGER NOT NULL CHECK (prerequisite_revision > 0),
+            state TEXT NOT NULL CHECK (state IN ('pending', 'completed')),
+            follow_up_version INTEGER NOT NULL CHECK (follow_up_version IN (0, 1)),
+            FOREIGN KEY (originating_command_id) REFERENCES command_receipts(command_id) ON DELETE RESTRICT
+        ) STRICT;
+        CREATE INDEX durable_followups_by_command
+            ON durable_followups(originating_command_id);
+
+        ${LEVEL_10_TASK_STATE_HISTORY_DDL}
+
+        INSERT INTO command_receipts SELECT * FROM command_receipts_level_16;
+        INSERT INTO receipt_effects SELECT * FROM receipt_effects_level_16;
+        INSERT INTO durable_followups SELECT * FROM durable_followups_level_16;
+        INSERT INTO task_state_history SELECT * FROM task_state_history_level_16;
+
+        DROP TABLE task_state_history_level_16;
+        DROP TABLE receipt_effects_level_16;
+        DROP TABLE durable_followups_level_16;
+        DROP TABLE command_receipts_level_16;
+
+        ALTER TABLE restore_completion_receipts RENAME TO restore_completion_receipts_level_16;
+        ALTER TABLE restore_command_receipts RENAME TO restore_command_receipts_level_16;
+        ALTER TABLE restore_sessions RENAME TO restore_sessions_level_16;
+        DROP INDEX restore_command_receipts_by_session;
+
+        ${LEVEL_17_RESTORE_SESSION_DDL}
+        ${LEVEL_17_RESTORE_COMPLETION_DDL}
+
+        INSERT INTO restore_sessions SELECT * FROM restore_sessions_level_16;
+        INSERT INTO restore_command_receipts SELECT * FROM restore_command_receipts_level_16;
+        INSERT INTO restore_completion_receipts SELECT * FROM restore_completion_receipts_level_16;
+
+        DROP TABLE restore_completion_receipts_level_16;
+        DROP TABLE restore_command_receipts_level_16;
+        DROP TABLE restore_sessions_level_16;
+
+        UPDATE workspace_state SET revision = revision + 1 WHERE singleton = 1;
+        UPDATE protection_watermarks
+            SET backup_needed_through = (
+                SELECT revision FROM workspace_state WHERE singleton = 1
+            )
+            WHERE singleton = 1;
+        PRAGMA user_version = 17;
     `);
 }

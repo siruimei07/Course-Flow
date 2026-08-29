@@ -25,6 +25,7 @@ import {
     validateSchemaLevel14,
     validateSchemaLevel15,
     validateSchemaLevel16,
+    validateSchemaLevel17,
     type SchemaFacts,
 } from './schema';
 import {
@@ -354,6 +355,7 @@ function validateSchema(database: DatabaseSync, schemaLevel: number): SchemaFact
     if (schemaLevel === 14) return validateSchemaLevel14(database);
     if (schemaLevel === 15) return validateSchemaLevel15(database);
     if (schemaLevel === 16) return validateSchemaLevel16(database);
+    if (schemaLevel === 17) return validateSchemaLevel17(database);
     throw new Error('Migration safety schema level is unsupported');
 }
 

@@ -30,7 +30,7 @@ import { normalizeAcceptedConfigureBackupDestinationCommand } from '../../shared
 import type { DataProtectionProjection } from '../../shared/workspace-protection-contract';
 import { TaskOccurrenceImpactDraft, TaskOccurrenceWindow, normalizeChangeTaskOccurrenceCommand, normalizeCompleteTaskCommand, normalizeCreateTaskCommand, normalizeDeleteTaskCommand, normalizeDeleteTaskOccurrenceOrSeriesCommand, normalizeSetTaskOccurrenceStatusCommand, normalizeSetTaskProgressCommand, normalizeUndoTaskOccurrenceStateCommand, normalizeUpdateTaskCommand } from '../../shared/workspace-task-contract';
 import type { TaskOccurrenceImpactProjection, TaskSeriesDetailProjection } from '../../shared/workspace-task-contract';
-import { MAX_SETUP_DRAFT_PAYLOAD_BYTES, normalizeCreateTermCommand, normalizeReconcileWorkspaceLifecycleCommand, normalizeRestoreTermAsCurrentCommand, normalizeUpdateTermEndDateCommand } from '../../shared/workspace-term-contract';
+import { MAX_SETUP_DRAFT_PAYLOAD_BYTES, normalizeCreateTermCommand, normalizeReconcileWorkspaceLifecycleCommand, normalizeResetCurrentTermCommand, normalizeRestoreTermAsCurrentCommand, normalizeUpdateTermEndDateCommand } from '../../shared/workspace-term-contract';
 import type { SetupProjection } from '../../shared/workspace-term-contract';
 export class SqliteDataStoreImplementation {
     private accepting = true;
@@ -216,6 +216,9 @@ export class SqliteDataStoreImplementation {
                 break;
             case 'plan.restore-term-as-current':
                 command = normalizeRestoreTermAsCurrentCommand(candidate);
+                break;
+            case 'plan.reset-current-term':
+                command = normalizeResetCurrentTermCommand(candidate);
                 break;
             case 'plan.create-holiday-range':
                 command = normalizeCreateHolidayRangeCommand(candidate);

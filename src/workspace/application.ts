@@ -12,7 +12,7 @@ import type { WorkspaceApplicationOptions, WorkspaceDataState, WorkspaceHost } f
 import { bootstrap, initialize } from './lifecycle-routing';
 import { cancelMigrationRollback, confirmMigrationRollback, continueMigrationRollback, deleteMigrationSafetyCopy, previewMigrationRollback, queryMigrationRollback, queryMigrationSafetyCopy } from './migration-rollback';
 import { problem } from './outcomes';
-import { commitHolidayRange, commitMeetingOccurrence, commitTask, createCourse, createCourseWithMeeting, createMeetingSeries, createTerm, restoreTermAsCurrent, updateTermEndDate } from './plan-commands';
+import { commitHolidayRange, commitMeetingOccurrence, commitTask, createCourse, createCourseWithMeeting, createMeetingSeries, createTerm, resetCurrentTerm, restoreTermAsCurrent, updateTermEndDate } from './plan-commands';
 import { previewMeetingOccurrence, previewTaskOccurrence, queryMeetingSeries, queryPlan, queryTaskSeries } from './plan-queries';
 import { migrationRollbackEvidenceProblem, migrationRollbackProblem, requestIdFrom, requestKindFrom, restoreActivationProblem } from './projections';
 import { queryDataProtection } from './protection';
@@ -360,6 +360,7 @@ export class WorkspaceApplication {
                     : (requestKind === 'workspace.term.create'
                         || requestKind === 'workspace.term.update-end-date'
                         || requestKind === 'workspace.term.restore-as-current'
+                        || requestKind === 'workspace.term.reset-current'
                         || requestKind === 'workspace.holiday-range.create'
                         || requestKind === 'workspace.holiday-range.update'
                         || requestKind === 'workspace.holiday-range.delete'
@@ -498,6 +499,8 @@ export class WorkspaceApplication {
                 return updateTermEndDate(this.host, request.requestId, request.command);
             case 'workspace.term.restore-as-current':
                 return restoreTermAsCurrent(this.host, request.requestId, request.command);
+            case 'workspace.term.reset-current':
+                return resetCurrentTerm(this.host, request.requestId, request.command);
             case 'workspace.holiday-range.create':
                 return commitHolidayRange(this.host, request.requestId, request.command);
             case 'workspace.holiday-range.update':

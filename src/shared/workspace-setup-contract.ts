@@ -43,6 +43,7 @@ export {
     type UpdateHolidayRangeRequest,
     type UpdateTaskRequest,
     type UpdateTermEndDateRequest,
+    type ResetCurrentTermRequest,
     WORKSPACE_SETUP_CHANNEL,
     WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS,
     type WorkspaceCommandResult,
@@ -98,4 +99,5 @@ export {
     makeUpdateHolidayRangeRequest,
     makeUpdateTaskRequest,
     makeUpdateTermEndDateRequest,
+    makeResetCurrentTermRequest,
 } from './workspace-setup-contract/makers';

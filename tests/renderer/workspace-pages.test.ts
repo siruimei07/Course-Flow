@@ -700,6 +700,41 @@ test('CalendarPage places real items in shared date columns with truthful vertic
     );
 });
 
+test('the Calendar hour band defaults to 07:00–22:00 and widens for real outliers', () => {
+    const html = renderWorkspacePage('calendar');
+
+    assert.match(html, /class="calendar-hour-band-probe"|--calendar-hour-count:\s*15/);
+    assert.match(html, />07:00<\/li>/);
+    assert.match(html, />21:00<\/li>/);
+    assert.doesNotMatch(html, />00:00<\/li>/);
+    assert.doesNotMatch(html, />23:00<\/li>/);
+    // 13:00 sits six hours into the band, not thirteen.
+    assert.match(html, /--calendar-event-top:\s*198px/);
+
+    const lateMeeting = {
+        ...TODAY_MEETING,
+        occurrenceId: {
+            meetingSeriesId: '19191919-1919-4919-8919-191919191919',
+            originalLogicalAnchor: '2026-09-10',
+        },
+        segmentId: '20202020-2020-4020-8020-202020202020',
+        localStart: '22:30',
+        localEnd: '23:30',
+        startInstant: '2026-09-11T02:30:00.000Z',
+        endInstant: '2026-09-11T03:30:00.000Z',
+    };
+    const widened = renderToStaticMarkup(createElement(CalendarPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan: planProjection({ meetings: [lateMeeting], tasks: [], holidayRanges: [] }),
+        setupIncomplete: false,
+    }));
+    // A real 22:30 item is never hidden; the band grows to contain it.
+    assert.match(widened, />22:00<\/li>/);
+    assert.match(widened, />23:00<\/li>/);
+    assert.match(widened, /--calendar-hour-count:\s*17/);
+});
+
 test('CalendarPage gives every simultaneous item a visible lane and groups Agenda facts by date', () => {
     const html = renderToStaticMarkup(createElement(CalendarPage, {
         ...HANDLERS,

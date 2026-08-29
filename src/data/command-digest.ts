@@ -36,10 +36,12 @@ import {
 import {
     createTermDigestProjection,
     reconcileWorkspaceLifecycleDigestProjection,
+    resetCurrentTermDigestProjection,
     restoreTermAsCurrentDigestProjection,
     updateTermEndDateDigestProjection,
     type CreateTermCommand,
     type ReconcileWorkspaceLifecycleCommand,
+    type ResetCurrentTermCommand,
     type RestoreTermAsCurrentCommand,
     type UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
@@ -143,6 +145,16 @@ export function digestUpdateTermEndDate(command: UpdateTermEndDateCommand): Uint
 
 export function digestRestoreTermAsCurrent(command: RestoreTermAsCurrentCommand): Uint8Array {
     const canonicalText = canonicalJson(restoreTermAsCurrentDigestProjection(command));
+    return createHash('sha256').update(canonicalText, 'utf8').digest();
+}
+
+/**
+ * Hashes the canonical Current Term reset receipt payload.
+ * @param {ResetCurrentTermCommand} command - Normalized reset command.
+ * @return {Uint8Array} SHA-256 digest bytes.
+ */
+export function digestResetCurrentTerm(command: ResetCurrentTermCommand): Uint8Array {
+    const canonicalText = canonicalJson(resetCurrentTermDigestProjection(command));
     return createHash('sha256').update(canonicalText, 'utf8').digest();
 }
 

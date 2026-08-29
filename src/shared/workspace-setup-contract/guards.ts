@@ -15,7 +15,7 @@ import { hasExactDataKeys, sameTermProjection } from './types';
 import type { WorkspaceCommandEffect } from './types';
 import { TaskProjection, isTaskOccurrenceWindow, normalizeChangeTaskOccurrenceCommand, normalizeCompleteTaskCommand, normalizeCreateTaskCommand, normalizeDeleteTaskCommand, normalizeDeleteTaskOccurrenceOrSeriesCommand, normalizeSetTaskOccurrenceStatusCommand, normalizeSetTaskProgressCommand, normalizeTaskOccurrenceImpactDraft, normalizeUndoTaskOccurrenceStateCommand, normalizeUpdateTaskCommand } from '../workspace-task-contract';
 import { isTaskOccurrenceImpactProjection, isTaskProjection, isTaskSeriesDetailProjection } from '../workspace-task-contract/guards';
-import { MAX_SETUP_DRAFT_PAYLOAD_BYTES, SETUP_DRAFT_SCHEMA_VERSION, SetupDraftCheckpoint, SetupProjection, TermProjection, isCanonicalLocalDate, normalizeCreateTermCommand, normalizeUpdateTermEndDateCommand } from '../workspace-term-contract';
+import { MAX_SETUP_DRAFT_PAYLOAD_BYTES, SETUP_DRAFT_SCHEMA_VERSION, SetupDraftCheckpoint, SetupProjection, TermProjection, isCanonicalLocalDate, normalizeCreateTermCommand, normalizeResetCurrentTermCommand, normalizeUpdateTermEndDateCommand } from '../workspace-term-contract';
 export function isPlainObject(value: unknown): value is Record<string, unknown> {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return false;
@@ -221,6 +221,7 @@ export function isWorkspaceSetupRequest(
     if ((value.kind !== 'workspace.term.create'
             && value.kind !== 'workspace.term.update-end-date'
             && value.kind !== 'workspace.term.restore-as-current'
+            && value.kind !== 'workspace.term.reset-current'
             && value.kind !== 'workspace.holiday-range.create'
             && value.kind !== 'workspace.holiday-range.update'
             && value.kind !== 'workspace.holiday-range.delete'
@@ -282,6 +283,9 @@ export function isWorkspaceSetupRequest(
         }
         else if (value.kind === 'workspace.term.restore-as-current') {
             normalizeRestoreTermAsCurrentRequestCommand(value.command);
+        }
+        else if (value.kind === 'workspace.term.reset-current') {
+            normalizeResetCurrentTermCommand(value.command);
         }
         else if (value.kind === 'workspace.holiday-range.create') {
             normalizeCreateHolidayRangeCommand(value.command);
@@ -536,6 +540,7 @@ export function isWorkspaceCommandResult(value: unknown): value is WorkspaceComm
         ? isEffect(value.effects[0], 'plan.term-created-current', 'term')
             || isEffect(value.effects[0], 'plan.term-end-date-updated', 'term')
             || isEffect(value.effects[0], 'plan.term-restored-current', 'term')
+            || isEffect(value.effects[0], 'plan.current-term-reset', 'term')
             || isEffect(value.effects[0], 'plan.course-created', 'course')
             || isEffect(value.effects[0], 'plan.meeting-series-created', 'meeting-series')
             || isEffect(value.effects[0], 'plan.meeting-occurrence-changed', 'meeting-series')

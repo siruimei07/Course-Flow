@@ -9,7 +9,14 @@ import {
     createTermDigestProjection,
     localDateInTermZone,
     normalizeCreateTermCommand,
+    normalizeResetCurrentTermCommand,
+    resetCurrentTermDigestProjection,
 } from '../../src/shared/workspace-term-contract';
+import {
+    WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS,
+    isWorkspaceSetupRequest,
+    makeResetCurrentTermRequest,
+} from '../../src/shared/workspace-setup-contract';
 
 const VALID_COMMAND = {
     commandId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -105,5 +112,84 @@ test('TEST-DATA-002: CreateTerm digest projection excludes CommandId and include
                 payload: { ...VALID_COMMAND.intent.payload, name: 'Winter 2027' },
             },
         })),
+    );
+});
+
+const VALID_RESET = {
+    commandId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    followUpId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    expectedRevision: '4',
+    expectedPlanVersion: '3',
+    expectedTermVersion: '1',
+    intent: {
+        kind: 'plan.reset-current-term',
+        intentSchemaVersion: 1,
+        payload: {
+            termId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+            confirmedTermName: 'Fall 2026',
+        },
+    },
+} as const;
+
+test('ResetCurrentTerm normalizes a confirmed reset and rejects every unconfirmed shape', () => {
+    assert.deepEqual(normalizeResetCurrentTermCommand(VALID_RESET), VALID_RESET);
+
+    for (const invalid of [
+        // A blank confirmation is not a confirmation.
+        { ...VALID_RESET, intent: { ...VALID_RESET.intent, payload: { ...VALID_RESET.intent.payload, confirmedTermName: '' } } },
+        // The Term must be addressed by canonical identity, never by name alone.
+        { ...VALID_RESET, intent: { ...VALID_RESET.intent, payload: { ...VALID_RESET.intent.payload, termId: 'Fall 2026' } } },
+        // Optimistic concurrency is mandatory for a destructive Term command.
+        { ...VALID_RESET, expectedTermVersion: undefined },
+        { ...VALID_RESET, intent: { ...VALID_RESET.intent, intentSchemaVersion: 2 } },
+        { ...VALID_RESET, intent: { ...VALID_RESET.intent, kind: 'plan.delete-term' } },
+        // Unknown payload fields never reach DATA.
+        { ...VALID_RESET, intent: { ...VALID_RESET.intent, payload: { ...VALID_RESET.intent.payload, cascade: true } } },
+    ]) {
+        assert.throws(() => normalizeResetCurrentTermCommand(invalid), TypeError);
+    }
+});
+
+test('the reset digest binds the Term identity and both expected versions, never the CommandId', () => {
+    const projection = resetCurrentTermDigestProjection(normalizeResetCurrentTermCommand(VALID_RESET));
+
+    assert.deepEqual(projection, {
+        encoding: 'courseflow-canonical-json-v1',
+        intent: VALID_RESET.intent,
+        expectedRevision: '4',
+        expectedEntityVersions: [
+            { entityKind: 'plan-state', entityId: 'singleton', version: '3' },
+            { entityKind: 'term', entityId: VALID_RESET.intent.payload.termId, version: '1' },
+        ],
+        durableFollowUps: [{
+            followUpId: VALID_RESET.followUpId,
+            owner: 'protect',
+            kind: 'backup-needed-through',
+        }],
+    });
+    assert.equal(JSON.stringify(projection).includes(VALID_RESET.commandId), false);
+});
+
+test('the reset request envelope is accepted only in its exact declared shape', () => {
+    const request = makeResetCurrentTermRequest(
+        'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        'development:abc123',
+        '99999999-9999-4999-8999-999999999999',
+        normalizeResetCurrentTermCommand(VALID_RESET),
+    );
+
+    assert.equal(request.kind, 'workspace.term.reset-current');
+    assert.equal(isWorkspaceSetupRequest(request, 'development:abc123', '99999999-9999-4999-8999-999999999999'), true);
+    // A malformed reset is a validation failure, not an unknown request kind.
+    assert.equal(
+        (WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS as readonly string[])
+            .includes('workspace.term.reset-current'),
+        true,
+    );
+    assert.equal(isWorkspaceSetupRequest({ ...request, command: { ...VALID_RESET, intent: { ...VALID_RESET.intent, payload: { termId: VALID_RESET.intent.payload.termId, confirmedTermName: '' } } } }, 'development:abc123', '99999999-9999-4999-8999-999999999999'), false);
+    assert.equal(isWorkspaceSetupRequest({ ...request, extra: 1 }, 'development:abc123', '99999999-9999-4999-8999-999999999999'), false);
+    assert.throws(
+        () => makeResetCurrentTermRequest('ffffffff-ffff-4fff-8fff-ffffffffffff', 'development:abc123', '99999999-9999-4999-8999-999999999999', { ...VALID_RESET, expectedTermVersion: '-1' } as never),
+        TypeError,
     );
 });

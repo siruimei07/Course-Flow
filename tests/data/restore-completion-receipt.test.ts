@@ -66,7 +66,7 @@ function input(overrides: Partial<RestoreCompletionReceiptInput> = {}): RestoreC
         sourceSnapshotId: SNAPSHOT_ID,
         sourceRootDigest: DIGEST_A,
         sourceSchemaLevel: '15',
-        postMigrationSchemaLevel: '16',
+        postMigrationSchemaLevel: '17',
         activeWorkspaceId: WORKSPACE_ID,
         activeRevision: '0',
         library: Object.freeze({state: 'absent'}),

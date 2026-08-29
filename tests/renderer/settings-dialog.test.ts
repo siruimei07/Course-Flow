@@ -104,6 +104,7 @@ function settingsProps(overrides: Partial<SettingsProps> = {}): SettingsProps {
         onClose: noop,
         onOpenDataProtection: noop,
         onOpenManagement: noop,
+        onProjection: noop,
         onOpenSetup: noop,
         ...overrides,
     };
@@ -216,4 +217,33 @@ test('the about category reports the exact build identity, or its absence', () =
 
     assert.doesNotMatch(withoutStatus, /development:abc123/);
     assert.match(withoutStatus, /当前无法读取精确构建身份/);
+});
+
+test('the Current Term reset stays disabled until the exact Term name is retyped', () => {
+    const html = render();
+
+    assert.match(html, /重置当前学期/);
+    assert.match(html, /name="reset-term-confirmation"/);
+    // A disabled destructive button is the resting state: nothing is typed yet.
+    assert.match(html, /<button class="destructive-action" disabled=""/);
+    assert.match(html, /永久删除/);
+    assert.match(html, /其他学期与本地备份不受影响/);
+});
+
+test('read-only data cannot reach the reset, and a missing Term offers nothing to reset', () => {
+    const readOnly = render({dataMode: 'read-only'});
+    assert.match(readOnly, /只读模式不能重置当前学期。/);
+    assert.match(readOnly, /<button class="destructive-action" disabled=""/);
+
+    const withoutTerm = render({
+        setup: {
+            ...setup,
+            minimum: {...setup.minimum, hasCurrentTerm: false},
+            currentTerm: null,
+            terms: [],
+        },
+    });
+    assert.match(withoutTerm, /尚无当前学期，没有可以重置的正式数据。/);
+    assert.doesNotMatch(withoutTerm, /name="reset-term-confirmation"/);
+    assert.doesNotMatch(withoutTerm, /destructive-action/);
 });

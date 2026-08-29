@@ -383,7 +383,7 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
                     workspaceData: {
                         kind: 'ready',
                         workspaceId: '22222222-2222-4222-8222-222222222222',
-                        schemaLevel: 16,
+                        schemaLevel: 17,
                         revision: '0',
                     },
                     workspaceLifecycle: {
@@ -541,7 +541,7 @@ for (const route of ['maintenance', 'recovery'] as const) {
                         workspaceData: {
                             kind: 'ready',
                             workspaceId: '22222222-2222-4222-8222-222222222222',
-                            schemaLevel: 16,
+                            schemaLevel: 17,
                             revision: '4',
                         },
                         workspaceLifecycle: {

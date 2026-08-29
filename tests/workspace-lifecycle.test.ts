@@ -20,7 +20,7 @@ function readyInput(overrides: Partial<WorkspaceLifecycleInput> = {}): Workspace
         workspaceData: {
             kind: 'ready',
             workspaceId,
-            schemaLevel: 16,
+            schemaLevel: 17,
             revision: '7',
         },
         setupRoute: 'setup',
@@ -54,7 +54,7 @@ test('FLOW-00 routes absent, unfinished, milestone, and read-only DATA without c
         workspaceData: {
             kind: 'read-only',
             workspaceId,
-            schemaLevel: 16,
+            schemaLevel: 17,
             revision: '7',
             problem: {
                 code: 'permission',

@@ -6,12 +6,12 @@ import { isCanonicalUnsignedSqliteInteger, isCanonicalUuid } from '../workspace-
 import { CreateHolidayRangeCommand, DeleteHolidayRangeCommand, UpdateHolidayRangeCommand, normalizeCreateHolidayRangeCommand, normalizeDeleteHolidayRangeCommand, normalizeUpdateHolidayRangeCommand } from '../workspace-holiday-contract';
 import { ConfigureBackupDestinationCommand, ConfirmRestoreSessionCommand, StartRestoreSessionCommand, normalizeCancelRestoreSessionCommand, normalizeConfigureBackupDestinationCommand, normalizeConfirmRestoreSessionCommand, normalizeResumeRestoreSessionCommand, normalizeRollbackRestoreSessionCommand, normalizeStartRestoreSessionCommand } from '../workspace-protection-contract';
 import type { CancelRestoreSessionCommand, ResumeRestoreSessionCommand, RollbackRestoreSessionCommand } from '../workspace-protection-contract';
-import type { CancelMeetingOccurrenceRequest, CancelRestoreSessionRequest, ChangeMeetingOccurrenceRequest, ChangeTaskOccurrenceRequest, CompleteTaskRequest, ConfirmRestoreSessionRequest, CreateCourseRequest, CreateCourseWithMeetingRequest, CreateHolidayRangeRequest, CreateMeetingSeriesRequest, CreateTaskRequest, CreateTermRequest, DeleteHolidayRangeRequest, DeleteTaskOccurrenceOrSeriesRequest, DeleteTaskRequest, DiscardSetupDraftCheckpointRequest, MeetingOccurrenceImpactRequest, MeetingSeriesQueryRequest, PlanQueryRequest, RestoreSessionQueryRequest, RestoreTermAsCurrentRequest, RestoreTermAsCurrentRequestCommand, ResumeRestoreSessionRequest, RollbackRestoreSessionRequest, SaveSetupDraftCheckpointInput, SaveSetupDraftCheckpointRequest, SelectedBackupDestinationRequest, SetTaskOccurrenceStatusRequest, SetTaskProgressRequest, StartRestoreSessionRequest, TaskOccurrenceImpactRequest, TaskSeriesQueryRequest, UndoTaskOccurrenceStateRequest, UpdateHolidayRangeRequest, UpdateTaskRequest, UpdateTermEndDateRequest } from '../workspace-setup-contract';
+import type { CancelMeetingOccurrenceRequest, CancelRestoreSessionRequest, ChangeMeetingOccurrenceRequest, ChangeTaskOccurrenceRequest, CompleteTaskRequest, ConfirmRestoreSessionRequest, CreateCourseRequest, CreateCourseWithMeetingRequest, CreateHolidayRangeRequest, CreateMeetingSeriesRequest, CreateTaskRequest, CreateTermRequest, DeleteHolidayRangeRequest, DeleteTaskOccurrenceOrSeriesRequest, DeleteTaskRequest, DiscardSetupDraftCheckpointRequest, MeetingOccurrenceImpactRequest, MeetingSeriesQueryRequest, PlanQueryRequest, RestoreSessionQueryRequest, ResetCurrentTermRequest, RestoreTermAsCurrentRequest, RestoreTermAsCurrentRequestCommand, ResumeRestoreSessionRequest, RollbackRestoreSessionRequest, SaveSetupDraftCheckpointInput, SaveSetupDraftCheckpointRequest, SelectedBackupDestinationRequest, SetTaskOccurrenceStatusRequest, SetTaskProgressRequest, StartRestoreSessionRequest, TaskOccurrenceImpactRequest, TaskSeriesQueryRequest, UndoTaskOccurrenceStateRequest, UpdateHolidayRangeRequest, UpdateTaskRequest, UpdateTermEndDateRequest } from '../workspace-setup-contract';
 import { isSetupDraftPayload } from './guards';
 import { hasExactDataKeys } from './types';
 import type { ConfigureBackupDestinationRequest, DataProtectionQueryRequest, InitializeWorkspaceRequest, SetupQueryRequest } from './types';
 import { ChangeTaskOccurrenceCommand, CompleteTaskCommand, CreateTaskCommand, DeleteTaskCommand, DeleteTaskOccurrenceOrSeriesCommand, SetTaskOccurrenceStatusCommand, SetTaskProgressCommand, TaskOccurrenceImpactDraft, TaskOccurrenceWindow, UndoTaskOccurrenceStateCommand, UpdateTaskCommand, isTaskOccurrenceWindow, normalizeChangeTaskOccurrenceCommand, normalizeCompleteTaskCommand, normalizeCreateTaskCommand, normalizeDeleteTaskCommand, normalizeDeleteTaskOccurrenceOrSeriesCommand, normalizeSetTaskOccurrenceStatusCommand, normalizeSetTaskProgressCommand, normalizeTaskOccurrenceImpactDraft, normalizeUndoTaskOccurrenceStateCommand, normalizeUpdateTaskCommand } from '../workspace-task-contract';
-import { CreateTermCommand, SETUP_DRAFT_SCHEMA_VERSION, UpdateTermEndDateCommand, normalizeCreateTermCommand, normalizeUpdateTermEndDateCommand } from '../workspace-term-contract';
+import { CreateTermCommand, ResetCurrentTermCommand, SETUP_DRAFT_SCHEMA_VERSION, UpdateTermEndDateCommand, normalizeCreateTermCommand, normalizeResetCurrentTermCommand, normalizeUpdateTermEndDateCommand } from '../workspace-term-contract';
 export function normalizeRestoreTermAsCurrentRequestCommand(
     value: unknown,
 ): RestoreTermAsCurrentRequestCommand {
@@ -394,6 +394,30 @@ export function makeUpdateTermEndDateRequest(
         requestId,
         workspaceEpoch,
         command: normalizeUpdateTermEndDateCommand(command),
+    };
+}
+
+/**
+ * Builds the exact Current Term reset request envelope.
+ * @param {string} requestId - Correlation identity.
+ * @param {string} appBuildId - Current build identity.
+ * @param {string} workspaceEpoch - Active Workspace process epoch.
+ * @param {ResetCurrentTermCommand} command - Candidate reset command.
+ * @return {ResetCurrentTermRequest} Normalized Workspace request.
+ */
+export function makeResetCurrentTermRequest(
+    requestId: string,
+    appBuildId: string,
+    workspaceEpoch: string,
+    command: ResetCurrentTermCommand,
+): ResetCurrentTermRequest {
+    return {
+        kind: 'workspace.term.reset-current',
+        protocolVersion: BOOTSTRAP_PROTOCOL_VERSION,
+        appBuildId,
+        requestId,
+        workspaceEpoch,
+        command: normalizeResetCurrentTermCommand(command),
     };
 }
 

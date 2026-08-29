@@ -11,13 +11,22 @@ import {
     type SyntheticEvent,
 } from 'react';
 
+import type { ResolvedSetupState } from './SetupDialog';
+import { setupStateFrom } from './setup-state';
+import { focusStatus } from './setup/field-errors';
+import type { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
+import {
+    normalizeResetCurrentTermCommand,
+    type ResetCurrentTermCommand,
+} from '../shared/workspace-term-contract';
+
 import type {
     ApplicationBuildStatus,
     MigrationSafetyCopyProjection,
 } from '../shared/workspace-migration-contract';
 import type { SetupProjection } from '../shared/workspace-term-contract';
 import type { ManagementSurfaceId } from './management-surfaces';
-import { currentTermHolidayCount } from './setup/checklist';
+import { currentTermFacts, currentTermHolidayCount } from './setup/checklist';
 
 /**
  * Confirmed settings categories in their visible order.
@@ -43,6 +52,7 @@ export type SettingsDialogProps = Readonly<{
     onOpenDataProtection(): void;
     onOpenManagement(surface: ManagementSurfaceId): void;
     onOpenSetup(): void;
+    onProjection(state: ResolvedSetupState): void;
 }>;
 
 /**
@@ -270,6 +280,159 @@ export function TermSettings(props: SettingsDialogProps): ReactElement {
                     type="button"
                 >管理假期</button>
             </div>
+            <CurrentTermReset {...props} />
+        </div>
+    );
+}
+
+/**
+ * Offers the one irreversible entry that deletes the Current Term and everything under it.
+ *
+ * The button stays disabled until the exact Term name is retyped, so the destructive
+ * request can only leave the Shell after a deliberate confirmation. An unknown result is
+ * never guessed: the exact command is retained and retried rather than rebuilt.
+ *
+ * @param {SettingsDialogProps} props Validated projections and Shell callbacks.
+ * @return {ReactElement} Current Term reset panel.
+ */
+export function CurrentTermReset(props: SettingsDialogProps): ReactElement {
+    const currentTerm = props.setup.currentTerm;
+    const [confirmation, setConfirmation] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [message, setMessage] = useState('');
+    const [pendingCommand, setPendingCommand] = useState<ResetCurrentTermCommand | null>(null);
+    const statusRef = useRef<HTMLParagraphElement | null>(null);
+
+    if (currentTerm === null) {
+        return (
+            <div className="settings-section settings-section--danger">
+                <h3>重置当前学期</h3>
+                <p>尚无当前学期，没有可以重置的正式数据。</p>
+            </div>
+        );
+    }
+
+    const writable = props.dataMode === 'ready';
+    const confirmed = confirmation === currentTerm.name;
+    const facts = currentTermFacts(props.setup);
+
+    /**
+     * Sends, or exactly retries, the confirmed Current Term reset.
+     *
+     * @return {Promise<void>}
+     */
+    const submitReset = async (): Promise<void> => {
+        if (!writable || busy || (pendingCommand === null && !confirmed)) {
+            return;
+        }
+
+        let command = pendingCommand;
+        try {
+            command ??= normalizeResetCurrentTermCommand({
+                commandId: globalThis.crypto.randomUUID(),
+                followUpId: globalThis.crypto.randomUUID(),
+                expectedRevision: props.setup.workspaceRevision,
+                expectedPlanVersion: props.setup.planEntityVersion,
+                expectedTermVersion: currentTerm.entityVersion,
+                intent: {
+                    kind: 'plan.reset-current-term',
+                    intentSchemaVersion: 1,
+                    payload: {
+                        termId: currentTerm.termId,
+                        confirmedTermName: confirmation,
+                    },
+                },
+            });
+        }
+        catch {
+            setMessage('确认名称与当前学期不一致；正式数据没有改变。');
+            focusStatus(statusRef);
+            return;
+        }
+
+        setBusy(true);
+        setMessage('正在重置当前学期…');
+        let outcome: WorkspaceSetupOutcome;
+        try {
+            outcome = await window.courseFlow.resetCurrentTerm(command);
+        }
+        catch {
+            setBusy(false);
+            setPendingCommand(command);
+            setMessage('无法连接本地 Workspace；重置结果尚无法确认，本次请求仍保留，请精确重试。');
+            focusStatus(statusRef);
+            return;
+        }
+        if (!outcome.ok) {
+            setBusy(false);
+            setPendingCommand(outcome.problem.dataEffect === 'unknown' ? command : null);
+            setMessage(outcome.problem.dataEffect === 'unknown'
+                ? `${outcome.problem.message} 结果尚无法确认；本次请求仍保留，请精确重试。`
+                : `${outcome.problem.message} 正式数据没有改变。`);
+            focusStatus(statusRef);
+            return;
+        }
+
+        setPendingCommand(null);
+        let refreshed: WorkspaceSetupOutcome;
+        try {
+            refreshed = await window.courseFlow.querySetup();
+        }
+        catch {
+            setBusy(false);
+            setConfirmation('');
+            setMessage('当前学期已重置，但无法刷新这个页面；请关闭设置后重新打开。');
+            focusStatus(statusRef);
+            return;
+        }
+        const nextState = setupStateFrom(refreshed);
+        setBusy(false);
+        setConfirmation('');
+        if (nextState.kind === 'problem' || nextState.kind === 'loading') {
+            setMessage('当前学期已重置，但无法刷新这个页面；请关闭设置后重新打开。');
+            focusStatus(statusRef);
+            return;
+        }
+
+        setMessage('当前学期及其课程、课节、任务和假期已删除；可以重新完成首次设置。');
+        props.onProjection(nextState);
+    };
+
+    return (
+        <div className="settings-section settings-section--danger">
+            <h3>重置当前学期</h3>
+            <p>
+                <span>这会永久删除 </span>
+                <strong>{currentTerm.name}</strong>
+                <span>{`，以及它下面的 ${facts.courseCount} 门课程、${facts.meetingCount} 条课节、`
+                    + `${facts.taskCount} 条任务和 ${facts.holidayCount} 个假期。`
+                    + '其他学期与本地备份不受影响，但这一步不能撤销。'}</span>
+            </p>
+            <label className="field field--full">
+                <span>输入学期名称「{currentTerm.name}」以确认</span>
+                <input
+                    autoComplete="off"
+                    disabled={!writable || busy}
+                    name="reset-term-confirmation"
+                    onChange={event => setConfirmation(event.currentTarget.value)}
+                    type="text"
+                    value={confirmation}
+                />
+            </label>
+            <div className="settings-section-actions">
+                <button
+                    className="destructive-action"
+                    disabled={!writable || busy || (pendingCommand === null && !confirmed)}
+                    onClick={() => void submitReset()}
+                    type="button"
+                >{pendingCommand === null ? '重置当前学期' : '精确重试重置'}</button>
+            </div>
+            <p
+                aria-live="polite"
+                className="form-status"
+                ref={statusRef}
+                tabIndex={-1}
+            >{message === '' && !writable ? '只读模式不能重置当前学期。' : message}</p>
         </div>
     );
 }

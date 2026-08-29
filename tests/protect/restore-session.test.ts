@@ -3,6 +3,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { LEVEL_13_DDL } from '../../src/data/schema/levels/level-13';
+import { rebuildReceiptLedgerAtLevel } from '../data/schema-level.fixture';
 import {createHash} from 'node:crypto';
 import {
     appendFileSync,
@@ -274,6 +276,7 @@ function createCandidateVariants(fixture: RestoreFixture): void {
         path.join(oldDirectory, 'workspace.sqlite'),
     );
     const oldDatabase = new DatabaseSync(path.join(oldDirectory, 'workspace.sqlite'));
+    rebuildReceiptLedgerAtLevel(oldDatabase, LEVEL_13_DDL);
     oldDatabase.exec(`
         DROP TABLE IF EXISTS restore_completion_receipts;
         DROP TABLE IF EXISTS restore_command_receipts;

@@ -117,6 +117,18 @@ export type RestoreTermAsCurrentCommand = TermMutationCommandBase & Readonly<{
     }>;
 }>;
 
+export type ResetCurrentTermCommand = TermMutationCommandBase & Readonly<{
+    intent: Readonly<{
+        kind: 'plan.reset-current-term';
+        intentSchemaVersion: 1;
+        payload: Readonly<{
+            termId: string;
+            /** Exact Term name the user retyped; DATA refuses a mismatch. */
+            confirmedTermName: string;
+        }>;
+    }>;
+}>;
+
 const LOCAL_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const MAX_TERM_NAME_LENGTH = 120;
@@ -315,6 +327,41 @@ export function normalizeUpdateTermEndDateCommand(value: unknown): UpdateTermEnd
 }
 
 /**
+ * Normalizes an explicit Current Term reset and its retyped confirmation.
+ *
+ * @param {unknown} value Untrusted command from the Shell.
+ * @return {ResetCurrentTermCommand} Validated reset command.
+ */
+export function normalizeResetCurrentTermCommand(value: unknown): ResetCurrentTermCommand {
+    const base = normalizeTermMutationBase(value);
+    if (!hasExactDataKeys(base.intent, ['kind', 'intentSchemaVersion', 'payload'])
+        || base.intent.kind !== 'plan.reset-current-term'
+        || base.intent.intentSchemaVersion !== 1
+        || !hasExactDataKeys(base.intent.payload, ['termId', 'confirmedTermName'])
+        || !isCanonicalUuid(base.intent.payload.termId)
+        || typeof base.intent.payload.confirmedTermName !== 'string'
+        || base.intent.payload.confirmedTermName.length === 0
+        || base.intent.payload.confirmedTermName.length > MAX_TERM_NAME_LENGTH) {
+        throw new TypeError('Reset Current Term command has invalid fields');
+    }
+    return {
+        commandId: base.commandId,
+        followUpId: base.followUpId,
+        expectedRevision: base.expectedRevision,
+        expectedPlanVersion: base.expectedPlanVersion,
+        expectedTermVersion: base.expectedTermVersion,
+        intent: {
+            kind: 'plan.reset-current-term',
+            intentSchemaVersion: 1,
+            payload: {
+                termId: base.intent.payload.termId,
+                confirmedTermName: base.intent.payload.confirmedTermName,
+            },
+        },
+    };
+}
+
+/**
  * Normalizes an explicit restore using the Workspace-derived EvaluationContext.
  */
 export function normalizeRestoreTermAsCurrentCommand(value: unknown): RestoreTermAsCurrentCommand {
@@ -412,7 +459,10 @@ export function createTermDigestProjection(command: CreateTermCommand): Canonica
  * retries bind the same Term/versions/follow-up while Workspace may advance its Clock.
  */
 function termMutationDigestProjection(
-    command: ReconcileWorkspaceLifecycleCommand | UpdateTermEndDateCommand | RestoreTermAsCurrentCommand,
+    command: ReconcileWorkspaceLifecycleCommand
+        | UpdateTermEndDateCommand
+        | RestoreTermAsCurrentCommand
+        | ResetCurrentTermCommand,
 ): CanonicalValue {
     return {
         encoding: 'courseflow-canonical-json-v1',
@@ -449,5 +499,14 @@ export function updateTermEndDateDigestProjection(command: UpdateTermEndDateComm
 }
 
 export function restoreTermAsCurrentDigestProjection(command: RestoreTermAsCurrentCommand): CanonicalValue {
+    return termMutationDigestProjection(command);
+}
+
+/**
+ * Builds the canonical receipt digest projection for the Current Term reset.
+ * @param {ResetCurrentTermCommand} command Validated reset command.
+ * @return {CanonicalValue} Canonical digest projection.
+ */
+export function resetCurrentTermDigestProjection(command: ResetCurrentTermCommand): CanonicalValue {
     return termMutationDigestProjection(command);
 }

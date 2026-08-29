@@ -5,7 +5,7 @@ import type { HolidayRangeCommand } from '../../shared/workspace-holiday-contrac
 import type { AcceptedConfigureBackupDestinationCommand } from '../../shared/workspace-protection-contract';
 import { ChangeTaskOccurrenceCommand, CompleteTaskCommand, CreateTaskCommand, DeleteTaskCommand, DeleteTaskOccurrenceOrSeriesCommand, SetTaskOccurrenceStatusCommand, SetTaskProgressCommand, TaskCommand, UndoTaskOccurrenceStateCommand, UpdateTaskCommand } from '../../shared/workspace-task-contract';
 import { CreateTermCommand, UpdateTermEndDateCommand } from '../../shared/workspace-term-contract';
-import type { ReconcileWorkspaceLifecycleCommand, RestoreTermAsCurrentCommand } from '../../shared/workspace-term-contract';
+import type { ReconcileWorkspaceLifecycleCommand, ResetCurrentTermCommand, RestoreTermAsCurrentCommand } from '../../shared/workspace-term-contract';
 
 export type TermMutationCommand =
     | ReconcileWorkspaceLifecycleCommand
@@ -41,6 +41,7 @@ export type WorkspaceDataCommand =
     | HolidayRangeCommand
     | TaskCommand
     | TermMutationCommand
+    | ResetCurrentTermCommand
     | AcceptedConfigureBackupDestinationCommand;
 
 export type CurrentVersions = Readonly<{
@@ -115,6 +116,12 @@ export function isTermMutationCommand(command: WorkspaceDataCommand): command is
     return command.intent.kind === 'workspace.reconcile-lifecycle'
         || command.intent.kind === 'plan.update-term-end-date'
         || command.intent.kind === 'plan.restore-term-as-current';
+}
+
+export function isResetCurrentTermCommand(
+    command: WorkspaceDataCommand,
+): command is ResetCurrentTermCommand {
+    return command.intent.kind === 'plan.reset-current-term';
 }
 
 export function isHolidayRangeCommand(command: WorkspaceDataCommand): command is HolidayRangeCommand {

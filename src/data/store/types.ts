@@ -52,7 +52,7 @@ export type DataOpenProblem =
         affectedCapabilities: readonly ['workspace.read', 'workspace.write'];
         allowedActions: readonly [];
         context: Readonly<Record<never, never>>;
-        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 16 }>;
+        details: Readonly<{ actualSchemaLevel: number; requiredSchemaLevel: 17 }>;
     }>
     | Readonly<{
         code: 'integrity';
@@ -88,13 +88,13 @@ export type WorkspaceDataStatus =
     | Readonly<{
         kind: 'ready';
         workspaceId: string;
-        schemaLevel: 16;
+        schemaLevel: 17;
         revision: string;
     }>
     | Readonly<{
         kind: 'read-only';
         workspaceId: string;
-        schemaLevel: 16;
+        schemaLevel: 17;
         revision: string;
         problem: DataOpenProblem;
     }>;
@@ -152,6 +152,7 @@ export type ReceiptEffect = Readonly<{
         | 'plan.term-auto-archived'
         | 'plan.term-end-date-updated'
         | 'plan.term-restored-current'
+        | 'plan.current-term-reset'
         | 'plan.course-created'
         | 'plan.meeting-series-created'
         | 'plan.meeting-occurrence-changed'

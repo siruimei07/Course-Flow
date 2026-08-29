@@ -2,11 +2,12 @@ import { commitBackupConfigurationSynchronously } from './backup-configuration';
 import { commitCourseSynchronously, commitCourseWithMeetingSynchronously } from './course';
 import { commitHolidayRangeSynchronously } from './holiday';
 import { commitMeetingOccurrenceMutationSynchronously, commitMeetingSeriesSynchronously } from './meeting';
+import { commitResetCurrentTermSynchronously } from './reset';
 import { commitSetupSynchronously } from './setup';
 import { commitTaskOccurrenceRuleSynchronously, commitTaskOccurrenceStateSynchronously, commitTaskSynchronously } from './task';
 import { commitTermMutationSynchronously, commitTermSynchronously } from './term';
 import type { StoreContext } from '../context';
-import { isConfigureBackupDestinationCommand, isCourseWithMeetingCommand, isCreateCourseCommand, isCreateMeetingSeriesCommand, isHolidayRangeCommand, isMeetingOccurrenceMutationCommand, isTaskCommand, isTaskOccurrenceRuleMutationCommand, isTaskOccurrenceStateMutationCommand, isTermMutationCommand } from '../guards';
+import { isResetCurrentTermCommand, isConfigureBackupDestinationCommand, isCourseWithMeetingCommand, isCreateCourseCommand, isCreateMeetingSeriesCommand, isHolidayRangeCommand, isMeetingOccurrenceMutationCommand, isTaskCommand, isTaskOccurrenceRuleMutationCommand, isTaskOccurrenceStateMutationCommand, isTermMutationCommand } from '../guards';
 import type { WorkspaceDataCommand } from '../guards';
 import type { CommitOptions, DataCommitResult } from '../types';
 export function commitSynchronously(ctx: StoreContext, 
@@ -30,6 +31,9 @@ export function commitSynchronously(ctx: StoreContext,
     }
     if (isMeetingOccurrenceMutationCommand(command)) {
         return commitMeetingOccurrenceMutationSynchronously(ctx, command, options);
+    }
+    if (isResetCurrentTermCommand(command)) {
+        return commitResetCurrentTermSynchronously(ctx, command, options);
     }
     if (isTermMutationCommand(command)) {
         return commitTermMutationSynchronously(ctx, command, options);

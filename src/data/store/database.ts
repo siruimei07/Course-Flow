@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { DatabaseSyncOptions } from 'node:sqlite';
-import { validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16 } from '../schema';
+import { validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17 } from '../schema';
 import { freezePair } from './results';
 import type { CommitFailpoint, CommitOptions, InitializeFailpoint, RestoreDatabaseFacts } from './types';
 
@@ -142,6 +142,9 @@ export function validateSupportedRestoreSchema(
     }
     if (schemaLevel === 16) {
         return validateSchemaLevel16(database);
+    }
+    if (schemaLevel === 17) {
+        return validateSchemaLevel17(database);
     }
     return null;
 }

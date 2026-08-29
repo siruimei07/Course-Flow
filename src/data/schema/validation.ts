@@ -16,6 +16,7 @@ import { LEVEL_13_DDL, LEVEL_13_TABLES } from './levels/level-13';
 import { LEVEL_14_DDL, LEVEL_14_TABLES } from './levels/level-14';
 import { LEVEL_15_DDL, LEVEL_15_TABLES } from './levels/level-15';
 import { LEVEL_16_DDL, LEVEL_16_TABLES } from './levels/level-16';
+import { LEVEL_17_DDL, LEVEL_17_TABLES } from './levels/level-17';
 import { INTL_ZONE_RULES, isCanonicalInstant } from '../../shared/meeting-time';
 import { isCanonicalUuid } from '../../shared/workspace-data-contract';
 import { normalizeTaskSchedule } from '../../shared/workspace-task-contract';
@@ -82,7 +83,10 @@ export function tableNames(level: SchemaLevel): readonly CurrentTable[] {
     if (level === 14) {
         return LEVEL_14_TABLES;
     }
-    return level === 15 ? LEVEL_15_TABLES : LEVEL_16_TABLES;
+    if (level === 15) {
+        return LEVEL_15_TABLES;
+    }
+    return level === 16 ? LEVEL_16_TABLES : LEVEL_17_TABLES;
 }
 
 export function pragmaValue(database: DatabaseSync, pragma: string, field: string): unknown {
@@ -133,7 +137,9 @@ export function expectedTableSql(table: CurrentTable, level: SchemaLevel): strin
                                                             ? LEVEL_14_DDL
                                                             : level === 15
                                                                 ? LEVEL_15_DDL
-                                                                : LEVEL_16_DDL;
+                                                                : level === 16
+                                                                    ? LEVEL_16_DDL
+                                                                    : LEVEL_17_DDL;
     const statement = ddl
         .split(';')
         .find((candidate) => candidate.includes(`CREATE TABLE ${table} `));
@@ -1229,4 +1235,13 @@ export function validateSchemaLevel15(database: DatabaseSync): SchemaFacts {
  */
 export function validateSchemaLevel16(database: DatabaseSync): SchemaFacts {
     return validateSchema(database, 16);
+}
+
+/**
+ * Validates the current level 17 schema, which only widens the receipt ledger.
+ * @param {DatabaseSync} database - Opened workspace database.
+ * @return {SchemaFacts} Validated bootstrap facts.
+ */
+export function validateSchemaLevel17(database: DatabaseSync): SchemaFacts {
+    return validateSchema(database, 17);
 }

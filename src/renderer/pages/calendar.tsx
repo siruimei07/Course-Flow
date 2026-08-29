@@ -127,6 +127,10 @@ export function CalendarContent(props: Readonly<{
         props.plan.evaluationContext.termZone,
         calendar.window.startDate,
     );
+    const hourWindow = calendarHourWindow(timedPlacements);
+    const gridStyle: CalendarGridStyle = {
+        '--calendar-hour-count': `${hourWindow.endHour - hourWindow.startHour}`,
+    };
     const hasCalendarFacts = calendar.timedItems.length > 0
         || calendar.allDayItems.length > 0
         || calendar.holidaySegments.length > 0;
@@ -148,7 +152,10 @@ export function CalendarContent(props: Readonly<{
                     className="calendar-scroll-region"
                     tabIndex={0}
                 >
-                    <div className="calendar-grid-shell">
+                    <div
+                        className="calendar-grid-shell"
+                        style={gridStyle}
+                    >
                         <div
                             aria-hidden="true"
                             className="calendar-grid-corner"
@@ -203,7 +210,10 @@ export function CalendarContent(props: Readonly<{
                             aria-hidden="true"
                             className="calendar-time-labels"
                         >
-                            {calendarHourLabels().map(label => (
+                            {calendarHourLabels(
+                                hourWindow.startHour,
+                                hourWindow.endHour,
+                            ).map(label => (
                                 <li key={label}>{label}</li>
                             ))}
                         </ol>
@@ -232,6 +242,7 @@ export function CalendarContent(props: Readonly<{
                                             <CalendarTimedItem
                                                 key={`${planItemId(placement.item)}:${placement.date}`}
                                                 placement={placement}
+                                                startHour={hourWindow.startHour}
                                             />
                                         ),
                                     )}
@@ -372,6 +383,10 @@ export type CalendarTimedPlacement = Readonly<{
     overlapLaneCount: number;
 }>;
 
+export type CalendarGridStyle = CSSProperties & Readonly<{
+    '--calendar-hour-count': string;
+}>;
+
 export type CalendarEventStyle = CSSProperties & Readonly<{
     '--calendar-event-top': string;
     '--calendar-event-height': string;
@@ -380,12 +395,59 @@ export type CalendarEventStyle = CSSProperties & Readonly<{
     '--calendar-event-width': string;
 }>;
 
-export const CALENDAR_MINUTE_HEIGHT = 0.55;
+/** Height of one visible hour row; mirrors `.calendar-time-grid` in styles.css. */
+export const CALENDAR_HOUR_HEIGHT = 33;
+
+/**
+ * Converts a minute count to its exact pixel offset inside the hour grid.
+ *
+ * Multiplying first keeps the result on integer arithmetic, so a whole number of hours
+ * renders as a whole number of pixels instead of a binary-float approximation.
+ *
+ * @param {number} minutes Minutes measured from the first visible hour.
+ * @return {number} Pixel offset inside the hour grid.
+ */
+export function calendarMinutePixels(minutes: number): number {
+    return (minutes * CALENDAR_HOUR_HEIGHT) / 60;
+}
+
+/** Default first visible hour; 2026-08-29 user instruction. */
+export const CALENDAR_DEFAULT_START_HOUR = 7;
+
+/** Default last visible hour boundary; 2026-08-29 user instruction. */
+export const CALENDAR_DEFAULT_END_HOUR = 22;
+
+/**
+ * Chooses the visible hour band, widened only by items that fall outside it.
+ *
+ * The default band answers "when are classes"; an item scheduled outside it is a real
+ * fact, so the band grows to contain it rather than hiding it.
+ *
+ * @param {readonly CalendarTimedPlacement[]} placements Positioned timed items.
+ * @return {Readonly<{ startHour: number; endHour: number }>} Inclusive-exclusive hour band.
+ */
+export function calendarHourWindow(
+    placements: readonly CalendarTimedPlacement[],
+): Readonly<{ startHour: number; endHour: number }> {
+    let startHour = CALENDAR_DEFAULT_START_HOUR;
+    let endHour = CALENDAR_DEFAULT_END_HOUR;
+    for (const placement of placements) {
+        startHour = Math.min(startHour, Math.floor(placement.startMinute / 60));
+        endHour = Math.max(
+            endHour,
+            Math.ceil((placement.startMinute + placement.durationMinutes) / 60),
+        );
+    }
+    return Object.freeze({
+        startHour: Math.max(0, startHour),
+        endHour: Math.min(24, Math.max(endHour, startHour + 1)),
+    });
+}
 
 export const CALENDAR_EVENT_MIN_HEIGHT = 30;
 
 export const CALENDAR_EVENT_MIN_DURATION = Math.ceil(
-    CALENDAR_EVENT_MIN_HEIGHT / CALENDAR_MINUTE_HEIGHT,
+    (CALENDAR_EVENT_MIN_HEIGHT * 60) / CALENDAR_HOUR_HEIGHT,
 );
 
 /**
@@ -396,12 +458,15 @@ export const CALENDAR_EVENT_MIN_DURATION = Math.ceil(
  */
 export function CalendarTimedItem(props: Readonly<{
     placement: CalendarTimedPlacement;
+    startHour?: number;
 }>): ReactElement {
     const { placement } = props;
     const item = placement.item;
+    const startHour = props.startHour ?? 0;
     const style: CalendarEventStyle = {
-        '--calendar-event-top': `${placement.startMinute * CALENDAR_MINUTE_HEIGHT}px`,
-        '--calendar-event-height': `${placement.durationMinutes * CALENDAR_MINUTE_HEIGHT}px`,
+        '--calendar-event-top':
+            `${calendarMinutePixels(placement.startMinute - startHour * 60)}px`,
+        '--calendar-event-height': `${calendarMinutePixels(placement.durationMinutes)}px`,
         '--calendar-event-left': `${placement.overlapLane / placement.overlapLaneCount * 100}%`,
         '--calendar-event-min-height': `${CALENDAR_EVENT_MIN_HEIGHT}px`,
         '--calendar-event-width': `${100 / placement.overlapLaneCount}%`,
@@ -717,8 +782,14 @@ export function assignCalendarOverlapLanes(
  *
  * @return {readonly string[]} One label per hour.
  */
-export function calendarHourLabels(): readonly string[] {
-    return Array.from({ length: 24 }, (_value, hour) => `${String(hour).padStart(2, '0')}:00`);
+export function calendarHourLabels(
+    startHour = 0,
+    endHour = 24,
+): readonly string[] {
+    return Array.from(
+        { length: Math.max(0, endHour - startHour) },
+        (_value, offset) => `${String(startHour + offset).padStart(2, '0')}:00`,
+    );
 }
 
 /**

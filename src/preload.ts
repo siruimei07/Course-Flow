@@ -46,6 +46,7 @@ import {
   makeCompleteTaskRequest,
   makeSetupQueryRequest,
     makeSaveSetupDraftCheckpointRequest,
+  makeResetCurrentTermRequest,
   makeUpdateTermEndDateRequest,
   makeUpdateHolidayRangeRequest,
   makeUpdateTaskRequest,
@@ -57,6 +58,7 @@ import {
 } from './shared/workspace-setup-contract';
 import type {
   CreateTermCommand,
+  ResetCurrentTermCommand,
   UpdateTermEndDateCommand,
 } from './shared/workspace-term-contract';
 import {
@@ -500,6 +502,12 @@ function createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome> 
   ));
 }
 
+function resetCurrentTerm(command: ResetCurrentTermCommand): Promise<WorkspaceSetupOutcome> {
+  return invokeSetup((requestId, epoch) => (
+    makeResetCurrentTermRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
+  ));
+}
+
 function updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome> {
   return invokeSetup((requestId, epoch) => (
     makeUpdateTermEndDateRequest(requestId, __COURSEFLOW_APP_BUILD_ID__, epoch, command)
@@ -816,6 +824,7 @@ contextBridge.exposeInMainWorld(
     queryPlan,
     createTerm,
     updateTermEndDate,
+    resetCurrentTerm,
     createHolidayRange,
     updateHolidayRange,
     deleteHolidayRange,

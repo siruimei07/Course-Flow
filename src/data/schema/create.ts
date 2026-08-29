@@ -14,6 +14,7 @@ import { LEVEL_13_DDL } from './levels/level-13';
 import { LEVEL_14_DDL } from './levels/level-14';
 import { LEVEL_15_DDL } from './levels/level-15';
 import { LEVEL_16_DDL } from './levels/level-16';
+import { LEVEL_17_DDL } from './levels/level-17';
 export function createSchemaLevel2(database: DatabaseSync): void {
     database.exec(LEVEL_2_DDL);
 }
@@ -132,4 +133,13 @@ export function createSchemaLevel15(database: DatabaseSync): void {
  */
 export function createSchemaLevel16(database: DatabaseSync): void {
     database.exec(LEVEL_16_DDL);
+}
+
+/**
+ * Creates the complete current level 17 schema in an empty database.
+ * @param {DatabaseSync} database - Database inside the caller-owned initialization transaction.
+ * @return {void}
+ */
+export function createSchemaLevel17(database: DatabaseSync): void {
+    database.exec(LEVEL_17_DDL);
 }

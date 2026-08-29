@@ -10,6 +10,7 @@ import type {
 } from '../shared/workspace-setup-contract';
 import type {
   CreateTermCommand,
+  ResetCurrentTermCommand,
   UpdateTermEndDateCommand,
 } from '../shared/workspace-term-contract';
 import type {
@@ -81,6 +82,7 @@ declare global {
       queryPlan(requestedWindow?: MeetingOccurrenceWindow): Promise<WorkspaceSetupOutcome>;
       createTerm(command: CreateTermCommand): Promise<WorkspaceSetupOutcome>;
       updateTermEndDate(command: UpdateTermEndDateCommand): Promise<WorkspaceSetupOutcome>;
+      resetCurrentTerm(command: ResetCurrentTermCommand): Promise<WorkspaceSetupOutcome>;
       createHolidayRange(command: CreateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
       updateHolidayRange(command: UpdateHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;
       deleteHolidayRange(command: DeleteHolidayRangeCommand): Promise<WorkspaceSetupOutcome>;

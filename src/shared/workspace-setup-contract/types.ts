@@ -7,7 +7,7 @@ import { ConfigureBackupDestinationCommand, ConfirmRestoreSessionCommand, StartR
 import type { CancelRestoreSessionCommand, DataProtectionProjection, RestoreSessionView, ResumeRestoreSessionCommand, RollbackRestoreSessionCommand } from '../workspace-protection-contract';
 import { isPlainObject } from './guards';
 import { ChangeTaskOccurrenceCommand, CompleteTaskCommand, CreateTaskCommand, DeleteTaskCommand, DeleteTaskOccurrenceOrSeriesCommand, SetTaskOccurrenceStatusCommand, SetTaskProgressCommand, TaskOccurrenceImpactDraft, TaskOccurrenceImpactProjection, TaskOccurrenceWindow, TaskSeriesDetailProjection, TaskUndoCapability, UndoTaskOccurrenceStateCommand, UpdateTaskCommand } from '../workspace-task-contract';
-import { CreateTermCommand, SETUP_DRAFT_SCHEMA_VERSION, SetupProjection, TermProjection, UpdateTermEndDateCommand } from '../workspace-term-contract';
+import { CreateTermCommand, ResetCurrentTermCommand, SETUP_DRAFT_SCHEMA_VERSION, SetupProjection, TermProjection, UpdateTermEndDateCommand } from '../workspace-term-contract';
 export const WORKSPACE_SETUP_CHANNEL = 'courseflow:workspace-setup' as const;
 
 /**
@@ -18,6 +18,7 @@ export const WORKSPACE_SETUP_VALIDATION_REQUEST_KINDS = Object.freeze([
     'workspace.term.create',
     'workspace.term.update-end-date',
     'workspace.term.restore-as-current',
+    'workspace.term.reset-current',
     'workspace.holiday-range.create',
     'workspace.holiday-range.update',
     'workspace.holiday-range.delete',
@@ -135,6 +136,11 @@ export type CreateTermRequest = WorkspaceRequestBase & Readonly<{
 export type UpdateTermEndDateRequest = WorkspaceRequestBase & Readonly<{
     kind: 'workspace.term.update-end-date';
     command: UpdateTermEndDateCommand;
+}>;
+
+export type ResetCurrentTermRequest = WorkspaceRequestBase & Readonly<{
+    kind: 'workspace.term.reset-current';
+    command: ResetCurrentTermCommand;
 }>;
 
 export type CreateHolidayRangeRequest = WorkspaceRequestBase & Readonly<{
@@ -278,6 +284,7 @@ export type WorkspaceSetupRequest =
     | RollbackRestoreSessionRequest
     | CreateTermRequest
     | UpdateTermEndDateRequest
+    | ResetCurrentTermRequest
     | CreateHolidayRangeRequest
     | UpdateHolidayRangeRequest
     | DeleteHolidayRangeRequest
@@ -311,6 +318,7 @@ export type WorkspaceCommandEffect = Readonly<{
         | 'plan.term-created-current'
         | 'plan.term-end-date-updated'
         | 'plan.term-restored-current'
+        | 'plan.current-term-reset'
         | 'plan.course-created'
         | 'plan.meeting-series-created'
         | 'plan.meeting-occurrence-changed'

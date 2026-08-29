@@ -2,7 +2,7 @@ import { openWorkspaceDataWithMigrations } from '../data/store/open';
 import { CommittedCommandOutcomeUnknownError } from '../data/store/types';
 import type { CommandReceiptOutcome } from '../data/store/types';
 import { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
-import type { CancelMeetingOccurrenceRequest, ChangeMeetingOccurrenceRequest, ChangeTaskOccurrenceRequest, CompleteTaskRequest, CreateCourseRequest, CreateCourseWithMeetingRequest, CreateHolidayRangeRequest, CreateMeetingSeriesRequest, CreateTaskRequest, CreateTermRequest, DeleteHolidayRangeRequest, DeleteTaskOccurrenceOrSeriesRequest, DeleteTaskRequest, RestoreTermAsCurrentRequest, SetTaskOccurrenceStatusRequest, SetTaskProgressRequest, UndoTaskOccurrenceStateRequest, UpdateHolidayRangeRequest, UpdateTaskRequest, UpdateTermEndDateRequest } from '../shared/workspace-setup-contract';
+import type { CancelMeetingOccurrenceRequest, ChangeMeetingOccurrenceRequest, ChangeTaskOccurrenceRequest, CompleteTaskRequest, CreateCourseRequest, CreateCourseWithMeetingRequest, CreateHolidayRangeRequest, CreateMeetingSeriesRequest, CreateTaskRequest, CreateTermRequest, DeleteHolidayRangeRequest, DeleteTaskOccurrenceOrSeriesRequest, DeleteTaskRequest, ResetCurrentTermRequest, RestoreTermAsCurrentRequest, SetTaskOccurrenceStatusRequest, SetTaskProgressRequest, UndoTaskOccurrenceStateRequest, UpdateHolidayRangeRequest, UpdateTaskRequest, UpdateTermEndDateRequest } from '../shared/workspace-setup-contract';
 import { localDateInTermZone, normalizeRestoreTermAsCurrentCommand } from '../shared/workspace-term-contract';
 import type { RestoreTermAsCurrentCommand } from '../shared/workspace-term-contract';
 import { SYSTEM_CLOCK, dataStateFrom, migrationOpenOptions } from './host';
@@ -20,6 +20,19 @@ export async function updateTermEndDate(host: WorkspaceHost,
     command: UpdateTermEndDateRequest['command'],
 ): Promise<WorkspaceSetupOutcome> {
     return commitTermCommand(host, requestId, command, '学期结束日未更新，正式数据没有改变。');
+}
+
+/**
+ * Commits the explicit Current Term reset through the shared Term command path.
+ * @param {string} requestId - Request correlation identity.
+ * @param {ResetCurrentTermRequest['command']} command - Normalized reset command.
+ * @return {Promise<WorkspaceSetupOutcome>} Command outcome or structured problem.
+ */
+export async function resetCurrentTerm(host: WorkspaceHost,
+    requestId: string,
+    command: ResetCurrentTermRequest['command'],
+): Promise<WorkspaceSetupOutcome> {
+    return commitTermCommand(host, requestId, command, '学期未重置，正式数据没有改变。');
 }
 
 export async function restoreTermAsCurrent(host: WorkspaceHost, 
@@ -68,6 +81,7 @@ export async function commitTermCommand(host: WorkspaceHost,
     command:
         | CreateTermRequest['command']
         | UpdateTermEndDateRequest['command']
+        | ResetCurrentTermRequest['command']
         | RestoreTermAsCurrentCommand,
     unchangedMessage: string,
 ): Promise<WorkspaceSetupOutcome> {

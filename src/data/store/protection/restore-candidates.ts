@@ -2,7 +2,7 @@ import { constants as fsConstants } from 'node:fs';
 import { copyFileSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import { backup } from 'node:sqlite';
-import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16 } from '../../schema';
+import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, migrateLevel16To17, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17 } from '../../schema';
 import type { StoreContext } from '../context';
 import { normalizeBackupDatabaseCopy, openDatabase, readDatabaseIdentity, readRestoreImpactCounts, readRestoreSourceBackup, validateSupportedRestoreSchema } from '../database';
 import type { BackupDatabaseFacts, PreparedRestoreDatabaseFacts, RestoreDatabaseFacts } from '../types';
@@ -62,6 +62,9 @@ export function prepareRestoreCandidateDatabaseCopy(ctx: StoreContext,
     copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
     const prepared = openDatabase(destinationPath, false);
     try {
+        // Migration steps rebuild referenced tables, so they run with foreign keys off
+        // and the whole copy is rechecked once the chain finishes, as ordinary open does.
+        prepared.exec('PRAGMA foreign_keys = OFF');
         let schemaLevel = Number(sourceFacts.schemaLevel);
         while (schemaLevel < CURRENT_SCHEMA_LEVEL) {
             prepared.exec('BEGIN IMMEDIATE');
@@ -81,8 +84,16 @@ export function prepareRestoreCandidateDatabaseCopy(ctx: StoreContext,
                     migrateLevel15To16(prepared);
                     validateSchemaLevel16(prepared);
                 }
+                else if (schemaLevel === 16) {
+                    validateSchemaLevel16(prepared);
+                    migrateLevel16To17(prepared);
+                    validateSchemaLevel17(prepared);
+                }
                 else {
                     throw new Error('Restore candidate schema is unsupported');
+                }
+                if ((prepared.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
+                    throw new Error('Restore candidate migration broke a foreign key');
                 }
                 prepared.exec('COMMIT');
                 schemaLevel += 1;
@@ -93,6 +104,13 @@ export function prepareRestoreCandidateDatabaseCopy(ctx: StoreContext,
                 }
                 throw error;
             }
+        }
+        prepared.exec('PRAGMA foreign_keys = ON');
+        const restoredForeignKeys = prepared.prepare('PRAGMA foreign_keys').get() as {
+            foreign_keys: number;
+        };
+        if (restoredForeignKeys.foreign_keys !== 1) {
+            throw new Error('Restore candidate migration could not restore foreign keys');
         }
     }
     finally {
@@ -220,7 +238,9 @@ export function validateBackupDatabaseCopy(ctx: StoreContext,
                     ? validateSchemaLevel15(copied)
                     : identity.schemaLevel === 16
                         ? validateSchemaLevel16(copied)
-                        : null;
+                        : identity.schemaLevel === 17
+                            ? validateSchemaLevel17(copied)
+                            : null;
         if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
             || facts === null
             || facts.workspaceId !== ctx.workspaceId

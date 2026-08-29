@@ -165,7 +165,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
             async prepare(dataSlotsRoot: string) {
                 await initializeAndClose(dataSlotsRoot);
                 const database = new DatabaseSync(join(dataSlotsRoot, 'active', 'workspace.sqlite'));
-                database.exec('PRAGMA user_version = 17');
+                database.exec('PRAGMA user_version = 18');
                 database.close();
             },
             options: undefined,
@@ -178,7 +178,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                     affectedCapabilities: ['workspace.read', 'workspace.write'],
                     allowedActions: [],
                     context: {},
-                    details: { actualSchemaLevel: 17, requiredSchemaLevel: 16 },
+                    details: { actualSchemaLevel: 18, requiredSchemaLevel: 17 },
                 },
             },
         },
@@ -343,7 +343,7 @@ test('TEST-DATA-005: existing data opens into one safe mode without reset', asyn
                 assert.deepEqual(opened.store.status(), {
                     kind: 'read-only',
                     workspaceId: WORKSPACE_ID,
-                    schemaLevel: 16,
+                    schemaLevel: 17,
                     revision: '0',
                     problem: {
                         code: 'permission',

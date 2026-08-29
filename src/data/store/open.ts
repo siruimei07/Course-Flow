@@ -8,7 +8,7 @@ import { lstatSync, mkdirSync, renameSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ensureMigrationSafetyCopy } from '../migration-safety-copy';
-import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, SchemaValidationError, createSchemaLevel16, migrateLevel10To11, migrateLevel11To12, migrateLevel12To13, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, migrateLevel1To2, migrateLevel2To3, migrateLevel3To4, migrateLevel4To5, migrateLevel5To6, migrateLevel6To7, migrateLevel7To8, migrateLevel8To9, migrateLevel9To10, validateSchemaLevel1, validateSchemaLevel10, validateSchemaLevel11, validateSchemaLevel12, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel2, validateSchemaLevel3, validateSchemaLevel4, validateSchemaLevel5, validateSchemaLevel6, validateSchemaLevel7, validateSchemaLevel8, validateSchemaLevel9 } from '../schema';
+import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, SchemaValidationError, createSchemaLevel17, migrateLevel10To11, migrateLevel11To12, migrateLevel12To13, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, migrateLevel16To17, migrateLevel1To2, migrateLevel2To3, migrateLevel3To4, migrateLevel4To5, migrateLevel5To6, migrateLevel6To7, migrateLevel7To8, migrateLevel8To9, migrateLevel9To10, validateSchemaLevel1, validateSchemaLevel10, validateSchemaLevel11, validateSchemaLevel12, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17, validateSchemaLevel2, validateSchemaLevel3, validateSchemaLevel4, validateSchemaLevel5, validateSchemaLevel6, validateSchemaLevel7, validateSchemaLevel8, validateSchemaLevel9 } from '../schema';
 import type { SchemaFacts } from '../schema';
 import { DATABASE_FILE_NAME, SQLITE_VERSION, activeDirectory, classifySqliteFailure, closeBestEffort, databasePath, hasSchemaObjects, openDatabase, readDatabaseIdentity, throwFailpoint } from './database';
 import { SqliteDataStoreImplementation } from './kernel';
@@ -51,7 +51,7 @@ export function inspectRestoreDataSlot(
             || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL) {
             throw new Error('Restore DataSlot database identity is invalid');
         }
-        const facts = validateSchemaLevel16(candidate);
+        const facts = validateSchemaLevel17(candidate);
         return Object.freeze({
             workspaceId: facts.workspaceId,
             schemaLevel: identity.schemaLevel.toString(),
@@ -92,7 +92,7 @@ export function inspectRestoreCompletionReceipt(
             || identity.schemaLevel !== CURRENT_SCHEMA_LEVEL) {
             throw new Error('Restore receipt DATA identity is invalid');
         }
-        validateSchemaLevel16(database);
+        validateSchemaLevel17(database);
         const row = database.prepare(`
             SELECT *
             FROM restore_completion_receipts
@@ -139,7 +139,7 @@ export function initializeWorkspaceData(
         stagingDatabase = openDatabase(stagingDatabasePath, false);
         stagingDatabase.exec('BEGIN IMMEDIATE');
         stagingDatabase.exec(`PRAGMA application_id = ${COURSEFLOW_APPLICATION_ID}`);
-        createSchemaLevel16(stagingDatabase);
+        createSchemaLevel17(stagingDatabase);
         throwFailpoint(options.failpoint, 'initialize.after-schema');
         stagingDatabase.prepare(
             'INSERT INTO workspace_state (singleton, workspace_id, revision) VALUES (1, ?, 0)',
@@ -188,7 +188,7 @@ export function initializeWorkspaceData(
 
         const validationDatabase = openDatabase(stagingDatabasePath, true);
         try {
-            validateSchemaLevel16(validationDatabase);
+            validateSchemaLevel17(validationDatabase);
         } finally {
             validationDatabase.close();
         }
@@ -197,7 +197,7 @@ export function initializeWorkspaceData(
         renameSync(stagingDirectory, activeDirectory(dataSlotsRoot));
         activated = true;
         const activeDatabase = openDatabase(databasePath(dataSlotsRoot), false);
-        const facts = validateSchemaLevel16(activeDatabase);
+        const facts = validateSchemaLevel17(activeDatabase);
         return new SqliteDataStoreImplementation(activeDatabase, facts.workspaceId, facts.revision);
     } catch (error) {
         if (stagingDatabase?.isTransaction) {
@@ -270,7 +270,7 @@ export function openWorkspaceData(
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
 
-        const facts = validateSchemaLevel16(validationDatabase);
+        const facts = validateSchemaLevel17(validationDatabase);
         expectedWorkspaceId = facts.workspaceId;
         expectedRevision = facts.revision;
     } catch (error) {
@@ -320,7 +320,7 @@ export function openWorkspaceData(
             closeBestEffort(validationDatabase);
             return recoveryResult(integrityProblem('schema-mismatch'));
         }
-        const facts = validateSchemaLevel16(activeDatabase);
+        const facts = validateSchemaLevel17(activeDatabase);
         if (facts.workspaceId !== expectedWorkspaceId || facts.revision !== expectedRevision) {
             closeBestEffort(activeDatabase);
             closeBestEffort(validationDatabase);
@@ -525,10 +525,15 @@ export async function openWorkspaceDataWithMigrations(
                         migrateLevel14To15(maintenance);
                         validateSchemaLevel15(maintenance);
                     }
-                    else {
+                    else if (schemaLevel === 15) {
                         validateSchemaLevel15(maintenance);
                         migrateLevel15To16(maintenance);
                         validateSchemaLevel16(maintenance);
+                    }
+                    else {
+                        validateSchemaLevel16(maintenance);
+                        migrateLevel16To17(maintenance);
+                        validateSchemaLevel17(maintenance);
                     }
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
@@ -552,7 +557,7 @@ export async function openWorkspaceDataWithMigrations(
             if (enabledForeignKeys.foreign_keys !== 1) {
                 throw new Error('Migration could not restore foreign keys');
             }
-            validateSchemaLevel16(maintenance);
+            validateSchemaLevel17(maintenance);
         }
         finally {
             closeBestEffort(maintenance);

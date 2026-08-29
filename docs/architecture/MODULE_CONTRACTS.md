@@ -548,7 +548,7 @@ Shell 局部渲染失败只能影响相应表面，不得提交补偿性领域�
 3. 所有自动行为（如日期越过 Term end 的归档）仍以可审计 Intent 经 FLOW-01 提交。
 4. 次级/外围模块失败只修改相关 capability/health；不把全 Workspace 无条件设为失败。
 5. Workspace 不吞掉模块 ProblemCode，不把 error 转为空，不改写 dataEffect。
-6. Setup 当前最低条件由正式事实计算：存在 Current Term。Course、MeetingSeries、Task、Holiday 和保护设置均为可稍后补充的非阻塞事实，由已批准的创建/编辑抽屉拥有，不参与最低条件。`hasCurrentTermCourse` 与 `hasMeetingOrTask` 仍作为真实事实投影出去，只是不再决定 `isSatisfied`。第一次达到时持久推进 `everReachedMinimum`，当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑；最低条件当前成立时该里程碑必然成立。
+6. Setup 当前最低条件由正式事实计算：存在 Current Term。Course、MeetingSeries、Task、Holiday 和保护设置均为可稍后补充的非阻塞事实，由已批准的创建/编辑抽屉拥有，不参与最低条件。`hasCurrentTermCourse` 与 `hasMeetingOrTask` 仍作为真实事实投影出去，只是不再决定 `isSatisfied`。第一次达到时持久推进 `everReachedMinimum`，当前事实后来不满足（包括学期自动归档）不得抹掉该里程碑；最低条件当前成立时该里程碑必然成立。唯一例外是用户明确确认的 `ResetCurrentTerm` 删除了库中最后一个 Term：此时不再存在可回到的历史学期，里程碑随之清零，默认路由回到首次设置；只要仍有任何 Term 留存，里程碑保持已达成。
 7. 从未达标的 Workspace 重启默认回到 setup，但仍可明确提前进入 Today；曾达标的 Workspace 重启默认进入 Today，即使当前无 Current Term，并显示“学期已结束/需要新学期”的真实状态与历史/创建入口。
 8. 应用重启后先恢复持久 Operation/DurableFollowUp，再决定普通路由。
 9. 打开 DATA 或启动 Library watcher 前必须先取得 PROTECT 对 Restore 与 MigrationRollback 的统一启动判定；未终结 handoff、激活未收敛、证据冲突或未知协调版本只能路由 maintenance/recovery，不得让 Workspace、Shell 或 Main 解释物理阶段。
@@ -644,7 +644,7 @@ ClockPort、ZoneRules、确定性 ID、任意日期窗口与纯 evaluator；性�
 
 **Trace**
 
-`A-TERM-001–005`、`A-COURSE-001–007`、`A-TASK-001–010`、`A-VIEW-001–006`、`A-CALENDAR-001–003`；`FLOW-00–02`；`Q-CONSIST-01`、`Q-TIME-01`、`Q-STATE-01`；`TEST-PLAN-001–008`。
+`A-TERM-001–006`、`A-COURSE-001–007`、`A-TASK-001–010`、`A-VIEW-001–006`、`A-CALENDAR-001–003`；`FLOW-00–02`；`Q-CONSIST-01`、`Q-TIME-01`、`Q-STATE-01`；`TEST-PLAN-001–008`。
 
 ### 5.4 `MOD-ATTEND` — 可选出席记录
 
@@ -1039,7 +1039,7 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 
 | Intent family | 变体 |
 |---|---|
-| Term | `CreateTerm`、`UpdateTerm`、`SetCurrentTerm`、`ArchiveTerm`、`RestoreTermAsCurrent` |
+| Term | `CreateTerm`、`UpdateTerm`、`SetCurrentTerm`、`ArchiveTerm`、`RestoreTermAsCurrent`、`ResetCurrentTerm` |
 | Holiday | `CreateHolidayRange`、`UpdateHolidayRange`、`DeleteHolidayRange` |
 | Course | `CreateCourse`、`CreateCourseWithMeetings`、`UpdateCourse`、`ArchiveCourse`、`RestoreCourse` |
 | Meeting | `CreateMeetingSeries`、`UpdateMeetingSeries`、`ChangeMeetingOccurrence(scope=only-this|this-and-future)`、`CancelMeetingOccurrence`、`DeleteMeetingSeries` |
@@ -1049,6 +1049,8 @@ Queries：`WorkspaceStatus`、`ApplicationBuildStatus`、`SetupProjection`、`Op
 Queries：`TermList/TermDetail`、`CourseList/CourseDetail`、`MeetingSeriesDetail`、`TaskList/TaskDetail/TaskSeriesDetail`、`TodayProjection`、`WeekProjection`、`CalendarWindowProjection`、`AgendaProjection`、`TbaProjection`、`PlanImpactProjection`。
 
 `CreateCourseWithMeetings` 是当前原子 setup/创建变体：在已有 Current Term 中一次创建 Course 与零至多条 MeetingSeries；空列表表示明确稍后添加，不表示 TBA Meeting。每个 Time Slot 恰好一个 weekday，显式携带 `endDayOffset` 和 `overlapDecision=review|continue`，整批 validation/decision-required/commit 全有或全无。既有 `CreateCourseWithFirstMeeting` schema 只用于持久回执重放。该变体不表示 Meeting 拥有 instructor override，也不改变 occurrence 或规则分段的生命周期语义。
+
+`ResetCurrentTerm` 是 PLAN 唯一的用户发起破坏性 Term 变体：它删除 Current Term 本身及其全部下级正式事实（Course、MeetingSeries 与其分段/例外、TaskSeries 与其分段/例外/状态历史、HolidayRange），并把 `plan_state` 的 Current Term 置空。它只接受当前 `plan_state.current_term_id` 指向的 Term，必须携带 `expectedRevision`、`expectedPlanVersion` 与 `expectedTermVersion`，并要求用户重新输入完全一致的学期名称作为确认；名称不符按 validation 拒绝，正式数据不变。它不触碰其他学期、command receipt/DurableFollowUp 历史、保护水位或任何本地备份与快照；重放同一 CommandId 返回原 outcome，不二次删除。
 
 ### 6.3 ATTEND
 
@@ -1615,12 +1617,13 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 为保持密集矩阵可读，§11 的 TEST 列允许省略共同前缀：例如 `PLAN-001/007` 精确展开为 `TEST-PLAN-001` 与 `TEST-PLAN-007`。roadmap、backlog、测试报告和 Agent 工作包必须使用 §10 定义的完整 `TEST-*` ID。
 
-首发剖面追溯 MVP-A、MVP-A-P 与 MVP-B 的 61 条需求；`C-GRADE-001–014` 的 14 条需求保留在完整已批准设计中，作为 MVP-C1 的未来契约，不进入首发构建。
+首发剖面追溯 MVP-A、MVP-A-P 与 MVP-B 的 62 条需求；`C-GRADE-001–014` 的 14 条需求保留在完整已批准设计中，作为 MVP-C1 的未来契约，不进入首发构建。
 
 | Requirement | MOD owner / coordinator | IF | FLOW | 关键 Q | TEST obligation |
 |---|---|---|---|---|---|
 | `A-TERM-001–003` | PLAN / WORKSPACE | IF-PLAN-COMMAND/QUERY、IF-WORKSPACE | 00、01、02 | TRUTH、TIME、CONTINUITY | PLAN-001/007、WORKSPACE-004、FLOW-00 |
 | `A-TERM-004–005` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | CONSIST、TIME、STATE | PLAN-003/008、FLOW-02 |
+| `A-TERM-006` | PLAN / WORKSPACE / SHELL | IF-PLAN-COMMAND、IF-WORKSPACE | 00、01 | TRUTH、PROTECT、STATE | PLAN-001、WORKSPACE-004、FLOW-01-COMMIT |
 | `A-COURSE-001` | PLAN / WORKSPACE | IF-PLAN-COMMAND、IF-IMPACT-PREVIEW | 01 | TRUTH、PROTECT | PLAN-001、WORKSPACE-002/006 |
 | `A-COURSE-002–004` | PLAN | IF-PLAN-COMMAND/QUERY | 01、02 | TIME、STATE、ACCESS | PLAN-001/002/007 |
 | `A-COURSE-005–007` | PLAN | IF-PLAN-COMMAND/IMPACT | 01、02 | CONSIST、TRUTH、TIME | PLAN-002/004/005 |

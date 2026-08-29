@@ -224,7 +224,12 @@ export function termCommandOutcome(host: WorkspaceHost,
     committed: CommandReceiptOutcome,
 ): WorkspaceSetupOutcome {
     return singleEffectCommandOutcome(host, requestId, committed,
-        ['plan.term-created-current', 'plan.term-end-date-updated', 'plan.term-restored-current'],
+        [
+            'plan.term-created-current',
+            'plan.term-end-date-updated',
+            'plan.term-restored-current',
+            'plan.current-term-reset',
+        ],
         'term',
         '命令回执与学期事实不一致。',
     );

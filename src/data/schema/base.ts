@@ -1,6 +1,6 @@
 export const COURSEFLOW_APPLICATION_ID = 0x43464C57;
 
-export const CURRENT_SCHEMA_LEVEL = 16;
+export const CURRENT_SCHEMA_LEVEL = 17;
 
 export const UUID_CHECK = `
     length(%COLUMN%) = 36

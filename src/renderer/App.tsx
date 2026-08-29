@@ -865,6 +865,7 @@ export function App(): ReactElement {
                 onOpenDataProtection={openDataProtection}
                 onOpenManagement={openManagement}
                 onOpenSetup={openSetup}
+                onProjection={acceptSetupProjection}
                 open={settingsOpen}
                 safetyCopy={state.migrationSafetyCopy}
                 setup={state.setup.projection}
