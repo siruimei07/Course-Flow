@@ -310,8 +310,8 @@ test('setup is a modal checklist with an inner dark current-step layer and early
 
     assert.match(html, /<dialog/);
     assert.match(html, /aria-modal="true"/);
-    assert.match(html, /aria-label="窗口控件"/);
-    assert.match(html, /aria-label="关闭窗口"/);
+    assert.doesNotMatch(html, /aria-label="窗口控件"/);
+    assert.doesNotMatch(html, /aria-label="关闭窗口"/);
     assert.match(html, /完成首次设置/);
     assert.match(html, /当前学期/);
     assert.match(html, /添加课程/);
@@ -334,8 +334,7 @@ test('setup progress nests its real checklist inside the elevated task card over
     }));
     const elevatedChecklistPattern = new RegExp([
         'class="setup-current-layer"[^>]*>',
-        '当前任务',
-        '0/3',
+        'class="setup-current-label"',
         '当前学期',
         'class="setup-step-list"',
         '</ol></div></div></aside>',
@@ -353,6 +352,7 @@ test('setup progress nests its real checklist inside the elevated task card over
         html,
         elevatedChecklistPattern,
     );
+    assert.doesNotMatch(html, /当前任务/);
 });
 
 test('setup checklist navigation reaches only completed facts and the current step', () => {

@@ -97,7 +97,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. 领取本包后先按 TDD 完成两个独立 UI 切片，再用同一 clean source 的 Windows x64 与 macOS arm64 packaged app 取得真实观察证据，最后运行 A-only G1–G7。不得用模拟截图、DOM 注入或自动生成的指针事件替代人工视觉与物理鼠标验收。
 
-**目标：** 默认恢复窗口为显式 `1120×720`，Renderer 只呈现一个贴合窗口客户区的视觉外壳；正常窗口的四边保持一致，内容较长或窗口较矮时底边仍始终可见，右侧不显示垂直滚动条但滚轮、触控板和键盘滚动继续可用。
+**目标：** 默认恢复窗口为显式 `1280×800`、最小窗口为 `960×640`（2026-08-29 用户直接指令，取代原计划的 `1120×720` 且不再排除最小尺寸），Renderer 只呈现一个贴合窗口客户区的视觉外壳；正常窗口的四边保持一致，内容较长或窗口较矮时底边仍始终可见，右侧不显示垂直滚动条但滚轮、触控板和键盘滚动继续可用。
+
+> **实施状态（2026-08-29）：** 切片 1 与切片 2 的代码已按上述数值在 `WP-UI-01` 切片 2 中实现并通过自动化检查，证据见台账；`WP-GA-01` 本身仍为 `—`，其未完成部分只剩“Packaged 人工验收与 Gate”。
 
 **架构：** Main 继续拥有原生窗口尺寸和 `thickFrame`；Renderer 技术根节点只约束客户区，现有 `.workspace-frame` 拥有唯一视觉边界，现有 `.workspace-content` 拥有唯一纵向滚动。设置对话框和业务页面不改变事实或 DOM 所有权。
 
@@ -105,7 +107,7 @@
 
 **批准依据：** 2026-08-25 用户对 Windows packaged app 截图和实际边界观察的诊断审批；本节是该 UI 优化的唯一执行计划，Roadmap 只同步顺序与 Gate。
 
-**实现边界：** 复用现有 `BrowserWindow`、`.workspace-frame`、`.startup-frame` 与 `.workspace-content`；保留 `titleBarStyle: 'hidden'`、`thickFrame: true`、自绘窗口按钮、drag/no-drag 区和平台菜单差异。不新增依赖、包装组件、窗口状态持久化、最小窗口尺寸、透明窗口、业务功能、Workspace/DATA 接口或新 Requirement/TEST 主所有权。
+**实现边界：** 复用现有 `BrowserWindow`、`.workspace-frame`、`.startup-frame` 与 `.workspace-content`；保留 `titleBarStyle: 'hidden'`、`thickFrame: true`、自绘窗口按钮、drag/no-drag 区和平台菜单差异。除用户 2026-08-29 直接批准的 `minWidth`/`minHeight` 两个常量外，不新增依赖、包装组件、窗口状态持久化、透明窗口、业务功能、Workspace/DATA 接口或新 Requirement/TEST 主所有权。
 
 **预计文件：**
 
@@ -117,25 +119,27 @@
 
 ##### 切片 1：显式增大默认恢复窗口
 
-- [ ] 在 `runtime-boundaries.test.ts` 先增加 RED：`BrowserWindow` 的 `width` 必须为 `1120`、`height` 必须为 `720`，`thickFrame` 仍为 `true`，且仍没有 `frame: false` 或 `transparent: true`。
+- [x] 在 `runtime-boundaries.test.ts` 先增加 RED：`BrowserWindow` 的 `width`/`height`/`minWidth`/`minHeight` 必须为 `1280`/`800`/`960`/`640`，`thickFrame` 仍为 `true`，且仍没有 `frame: false` 或 `transparent: true`。
 
 ```typescript
-const width = objectProperty(state, options, 'width');
-const height = objectProperty(state, options, 'height');
-assert.ok(width && state.is.isNumericLiteral(width));
-assert.ok(height && state.is.isNumericLiteral(height));
-assert.equal(width.text, '1120');
-assert.equal(height.text, '720');
+const sizes = { width: '1280', height: '800', minWidth: '960', minHeight: '640' };
+for (const [name, text] of Object.entries(sizes)) {
+  const property = objectProperty(state, options, name);
+  assert.ok(property && state.is.isNumericLiteral(property));
+  assert.equal(property.text, text);
+}
 assert.equal(objectProperty(state, options, 'transparent'), undefined);
 ```
 
-- [ ] 运行该聚焦测试并确认它只因当前缺少显式 `width`/`height` 而失败。
-- [ ] 在 `src/main.ts` 的现有唯一 `BrowserWindow` options 中加入两个数值，不增加尺寸计算、显示器探测、持久化或 fallback。
+- [x] 运行该聚焦测试并确认它只因当前缺少显式尺寸而失败。
+- [x] 在 `src/main.ts` 的现有唯一 `BrowserWindow` options 中加入四个数值，不增加尺寸计算、显示器探测、持久化或 fallback。
 
 ```typescript
 const window = new BrowserWindow({
-  width: 1120,
-  height: 720,
+  width: 1280,
+  height: 800,
+  minWidth: 960,
+  minHeight: 640,
   show: options?.show ?? true,
   thickFrame: true,
   title: 'CourseFlow',
@@ -150,11 +154,11 @@ const window = new BrowserWindow({
 });
 ```
 
-- [ ] 重跑聚焦测试并确认通过。
+- [x] 重跑聚焦测试并确认通过。
 
 ##### 切片 2：单一视口外壳与内部滚动
 
-- [ ] 在 `workspace-shell.test.ts` 先增加 RED，锁定：`body` 无外围 padding 且不再拥有文档滚动；`html`、`body`、`#root` 与现有 frame 受窗口客户区高度约束；`.workspace-content` 具有 `min-height: 0` 和 `overflow-y: auto`；可见垂直 scrollbar 被隐藏但不得使用 `overflow-y: hidden` 禁止内容滚动。
+- [x] 在 `workspace-shell.test.ts` 先增加 RED，锁定：`body` 无外围 padding 且不再拥有文档滚动；`html`、`body`、`#root` 与现有 frame 受窗口客户区高度约束；`.workspace-content` 具有 `min-height: 0` 和 `overflow-y: auto`；可见垂直 scrollbar 被隐藏但不得使用 `overflow-y: hidden` 禁止内容滚动。
 
 ```typescript
 const bodyRule = /body\s*\{[^}]*\}/s.exec(styles)?.[0] ?? '';
@@ -167,8 +171,8 @@ assert.match(contentRule, /scrollbar-width:\s*none;/);
 assert.match(styles, /\.workspace-content::\-webkit-scrollbar\s*\{[^}]*display:\s*none;/s);
 ```
 
-- [ ] 运行该聚焦测试，确认失败分别指向当前 `body` 外围 padding、frame 仅有 `min-height`、以及根页面承担滚动。
-- [ ] 在 `styles.css` 只重分配布局所有权：技术根节点占满客户区且不滚动，现有 frame 成为唯一可见外壳，顶部栏保持可达，`.workspace-content` 成为唯一纵向滚动区，内容底部 padding 保证最后一项完整可见。
+- [x] 运行该聚焦测试，确认失败分别指向当前 `body` 外围 padding、frame 仅有 `min-height`、以及根页面承担滚动。
+- [x] 在 `styles.css` 只重分配布局所有权：技术根节点占满客户区且不滚动，现有 frame 成为唯一可见外壳，顶部栏保持可达，`.workspace-content` 成为唯一纵向滚动区，内容底部 padding 保证最后一项完整可见。
 
 ```css
 html,
@@ -219,8 +223,8 @@ body {
 }
 ```
 
-- [ ] 为 `.workspace-content` 同时提供 Chromium/WebKit 与标准 scrollbar 隐藏规则；保留 wheel、touchpad、`PageUp`/`PageDown`、`Home`/`End`、焦点跟随和 skip-link 导航。
-- [ ] 重跑聚焦测试；再运行 `pnpm test`、`pnpm typecheck` 与 `git diff --check`，确认既有窗口控制、键盘、forced-colors、对比度、透明度和 reduced-motion 回归仍通过。
+- [x] 为 `.workspace-content` 同时提供 Chromium/WebKit 与标准 scrollbar 隐藏规则；保留 wheel、touchpad、`PageUp`/`PageDown`、`Home`/`End`、焦点跟随和 skip-link 导航。
+- [x] 重跑聚焦测试；再运行 `pnpm test`、`pnpm typecheck` 与 `git diff --check`，确认既有窗口控制、键盘、forced-colors、对比度、透明度和 reduced-motion 回归仍通过。
 
 ##### Packaged 人工验收与 Gate
 
@@ -291,7 +295,7 @@ body {
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
 | `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `Verification` |
-| `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉：窗口控件伪影修复、暖色不透明卡片材质替换灰色磨砂玻璃、动效（页面进入、对话框弹出、悬停反馈）；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | — | — | `In Progress` |
+| `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉，并修复用户逐项列出的桌面显示缺陷：窗口控件伪影、卡片圆角白斑、多余外缘与根滚动、低分辨率滚动条与错位、首次设置页多余窗口按钮、进度卡黑卡位置，以及把「设置」改为含分类导航的独立设置表面；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | — | — | `In Progress` |
 
 ## 3. 首发 TEST 主所有权校验
 
@@ -461,6 +465,7 @@ body {
 | 2026-08-29 | `WP-RF-01` | `In Progress → Verification`（Stage I） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：677 用例（新增依赖方向守卫）= 668 通过 / 5 跳过 / 4 已知环境性失败（集合不变）；`git diff --check` | Stage I：新增 `tests/architecture/module-dependency.test.ts`，对 `src/` 全部相对导入强制执行计划 §4 依赖方向矩阵（当前实际图为其严格子集：workspace→{protect,data,platform,shared}、protect→{data,platform,shared}、data→{plan,platform,shared}、renderer/main/preload/plan/platform→shared）；`AGENTS.md` §项目状态 移除过期执行点描述，指向 Backlog/Roadmap 事实源。容器内九个阶段全部完成；`WP-RF-01` 进入 `Verification`，等待用户在 Windows x64 / Node 24 复验 `pnpm typecheck`、`pnpm test`、`pnpm package`、`pnpm smoke:packaged` 后关闭。 |
 | 2026-08-29 | `WP-RF-01` | `Verification`（签名剥离重放） | 本行所在提交；重放后链 `dbadb2c…5c0c97d` | `git diff 69a2e01 5c0c97d` 为空（树逐字节等同已全量门禁通过的原链末端）；`git log` 逐提交比对作者、邮箱、作者/提交时间与信息完全一致；`%G?` 确认 18 个提交均无签名；`git diff --check` | 用户批准：执行环境曾以容器 SSH 密钥自动签署 18 个提交（作者身份不受影响），会在 GitHub 显示 Unverified；按用户选择以 `filter-branch` 原位重放剥离签名，内容、信息、作者与时间零改动，仅提交哈希变更（原链 `64fe18c…69a2e01` 废弃）。执行环境已设 `commit.gpgsign=false` 防复发。 |
 | 2026-08-29 | `WP-UI-01` | `— → In Progress`（切片 1） | 本行所在提交 | `tsc --noEmit`（主/测试配置）；全量 `node --test`：677 = 668 通过 / 5 跳过 / 4 已知环境性失败（集合不变，`setup-ui`/`workspace-shell` 的 CSS 契约断言全部保持）；`git diff --check` | 用户报告并授权两项：①窗口控件边框交界白色伪影——根因是半透明 1px 边框 + inset 高光在分数像素尺寸（2.35rem）圆形上的抗锯齿泄漏；改为 38px 无边框实心圆（黄/白/墨），悬停提升、按下缩放。②整体视觉对齐用户提供的参考图——内容卡片由灰色半透明磨砂（`backdrop-filter blur(24px)`）改为暖白近不透明材质 + 柔和暖阴影（用户明确允许更换实现），毛玻璃只保留在标题栏、浮层与对话框；全局令牌暖化（画布渐变、暖色描边、更大圆角、暖阴影）；新增页面进入、状态卡上浮、对话框弹出、背景遮罩淡入动效与按钮悬停/按下反馈，全部受既有 `prefers-reduced-motion` 全局覆盖约束；forced-colors / prefers-contrast / prefers-reduced-transparency 分支同步。仅改 `styles.css`（2,363→2,467 行）。`WP-GA-01` 计划针对的布局属性（body 留白、根滚动、`.workspace-content` 滚动所有权）未触碰。 |
+| 2026-08-29 | `WP-UI-01` | `In Progress`（切片 2） | 本行所在提交 | `tsc --noEmit`（主/测试配置）PASS；分块全量 `node --test`：692 项 = 685 通过 / 5 跳过 / 2 已知环境性失败（`ADR-07/TEST-PROTECT-003` 大小写不敏感 FS 假设、`TEST-WORKSPACE-007/PROTECT-007` 的 `ApplicationReleaseDescriptor` 只接受 `darwin`/`win32` 而当前 Linux 容器挂载主机为 `linux`）；`git diff --check` PASS；改动路径无新增超 120 字符行、tab 或尾随空白；以真实组件 SSR + 真实 `styles.css` 在 Chromium `1280×800` 与 `960×640` 两个视口取得布局度量：`documentElement.scrollHeight === clientHeight`（无根滚动条）、`.workspace-frame` 为 `x=0,y=0` 且等于视口尺寸（无外缘）、`.setup-progress-card` `scrollHeight === clientHeight`（无侧栏滚动条）、黑卡底与白卡底间距 `144px`/`36px` | 用户 2026-08-29 逐项授权的七项桌面缺陷修复：①`BrowserWindow` 显式 `1280×800` + 最小 `960×640`（取代 `WP-GA-01` 计划的 `1120×720`，计划文本已同步）；②`.setup-modal` 与 `.migration-dialog-surface` 的半透明白边框 + 白色 inset 高光在圆角处抗锯齿泄漏成白斑，改为暖色 hairline 并去掉 inset 高光；③`.workspace-content`、`.startup-surface`、`.setup-progress-card`、`.setup-workspace`、`.migration-dialog-body`、`.primary-nav` 只隐藏可见 scrollbar，不使用 `overflow: hidden`，滚轮/触控板/键盘滚动保留；`.form-footer` 与 `.setup-modal-footer` 改为可换行并让说明文字可收缩，消除低分辨率下说明与命令按钮重叠；④首次设置对话框头部移除 `WindowControls` 与小 `×` 图标按钮，只保留「保存进度并退出」，窗口控件只留在 Workspace 顶栏与 startup 标题栏（`setup-ui`、`setup-dialog` 契约已反向锁定）；⑤`body` 去外围 padding 与文档滚动，`html`/`body`/`#root`/`.workspace-frame`/`.startup-frame` 受客户区高度约束，frame 去掉自有边框与圆角，成为贴合客户区的唯一视觉外壳；⑥新增 `SettingsDialog`：含左侧分类导航（学期与课程、数据与备份、关于与版本）的独立设置表面，顶栏「设置」改为打开它，原顶栏「数据与备份」入口收入其中，学期设置与数据保护由该表面转交既有对话框；⑦删除进度卡「当前任务 n/3」整行，只保留「设置进度」列，并给黑卡相对白卡底部留出可见间距 | 设置表面按已批准 `UI-SETTINGS-01`「独立页面和左侧分类导航」实现为窗口级模态页，保持五项主导航不变；MVP-A 只交付三个真实分类，`学期与历史`（C1）与`文件资料库`（R11）不建占位。`WP-GA-01` 计划的切片 1/2 代码已在本切片落地，其状态仍为 `—`，剩余的双平台 packaged 人工验收与 A-only G1–G7 未进入。本切片未在 Windows 运行 `pnpm test`/`pnpm typecheck`/`pnpm package`/`pnpm smoke:packaged`，也未做真实 packaged 应用的人工视觉、物理鼠标 Snap/最大化、High Contrast/Reduce Transparency/Reduced Motion 观察；上述截图度量来自 Chromium 无头渲染，不冒充 packaged Electron 证据。 |
 
 ## 7. 拆包与变更规则
 

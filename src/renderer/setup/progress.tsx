@@ -50,10 +50,6 @@ export function SetupProgress(props: Readonly<{
                     aria-hidden="true"
                 />
                 <div className="setup-current-layer">
-                    <div className="setup-current-heading">
-                        <p>当前任务</p>
-                        <strong>{completedCount}/3</strong>
-                    </div>
                     <span className="setup-current-label">{currentLabel}</span>
                     <ol className="setup-step-list">
                         <ProgressStep

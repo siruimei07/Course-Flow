@@ -158,11 +158,13 @@ test('WP-R4-06 exposes interruptible setup over the five-page Workspace shell', 
     assert.match(styles, /@media \(forced-colors:\s*active\)/);
 });
 
-test('custom title chrome remains reachable during startup, rollback, and setup modality', () => {
+test('window controls stay in the Workspace shell and startup chrome only', () => {
     assert.equal(app.match(/<WindowTitlebar \/>/g)?.length, 5);
+    assert.equal(app.match(/<WindowControls \/>/g)?.length, 1);
+    assert.doesNotMatch(setupDialog, /WindowControls/);
     assert.match(
         setupDialog,
-        /<header className="setup-modal-header">[\s\S]*<WindowControls \/>[\s\S]*<\/header>/,
+        /<header className="setup-modal-header">[\s\S]*保存进度并退出[\s\S]*<\/header>/,
     );
     assert.match(styles, /\.startup-titlebar\s*\{[^}]*app-region:\s*drag;/s);
     assert.match(styles, /\.setup-modal-header\s*\{[^}]*app-region:\s*drag;/s);

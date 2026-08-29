@@ -859,6 +859,19 @@ test('BrowserWindow hides title chrome without disabling the native resize frame
   assert.equal(objectProperty(state, options, 'titleBarOverlay'), undefined);
 });
 
+test('BrowserWindow opens at an explicit restored size with a usable minimum', async () => {
+  const state = await compilerState();
+  const options = browserWindowOptions(state);
+  const sizes = { width: '1280', height: '800', minWidth: '960', minHeight: '640' };
+
+  for (const [name, text] of Object.entries(sizes)) {
+    const property = objectProperty(state, options, name);
+    assert.ok(property && state.is.isNumericLiteral(property), `${name} must be an explicit numeric literal`);
+    assert.equal(property.text, text);
+  }
+  assert.equal(objectProperty(state, options, 'transparent'), undefined);
+});
+
 test('Main removes only the Windows application menu and hides only native macOS window buttons', async () => {
   const state = await compilerState();
   const main = sourceFor(state, mainPath);

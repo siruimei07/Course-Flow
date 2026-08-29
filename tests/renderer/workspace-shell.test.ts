@@ -69,7 +69,7 @@ function setupOutcome(projection: SetupProjection = setup): WorkspaceSetupOutcom
     };
 }
 
-test('the shell exposes five destinations plus separate data-protection and Settings actions', () => {
+test('the shell exposes five destinations plus one Settings entry', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'calendar',
         dataMode: 'ready',
@@ -78,7 +78,7 @@ test('the shell exposes five destinations plus separate data-protection and Sett
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
-        onOpenDataProtection: noop,
+        onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions,
@@ -91,8 +91,7 @@ test('the shell exposes five destinations plus separate data-protection and Sett
     assert.match(html, /aria-label="主导航"/);
     assert.match(html, /aria-current="page"[^>]*>Calendar/);
     assert.match(html, /aria-label="打开设置"/);
-    assert.match(html, /aria-label="打开数据与备份"/);
-    assert.ok(html.indexOf('打开数据与备份') < html.indexOf('打开设置'));
+    assert.doesNotMatch(html, /aria-label="打开数据与备份"/);
     assert.match(html, /设置未完成/);
     assert.doesNotMatch(html, /Grade|Attendance|Protect|即将推出/);
 
@@ -104,7 +103,7 @@ test('the shell exposes five destinations plus separate data-protection and Sett
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
-        onOpenDataProtection: noop,
+        onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions: { ...taskActions, writable: false },
@@ -121,7 +120,7 @@ test('the title region exposes three independent window controls outside its dra
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
-        onOpenDataProtection: noop,
+        onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions,
@@ -167,6 +166,34 @@ test('the title region exposes three independent window controls outside its dra
     );
 });
 
+test('one visual shell fills the window client area and owns the only vertical scroll', () => {
+    const rule = (selector: string): string => {
+        const start = styles.indexOf(`${selector} {`);
+        assert.ok(start >= 0, `${selector} must exist`);
+        return styles.slice(start, styles.indexOf('}', start) + 1);
+    };
+
+    assert.match(rule('body'), /padding:\s*0;/);
+    assert.match(rule('body'), /overflow:\s*hidden;/);
+    assert.match(rule('body'), /height:\s*100%;/);
+    assert.match(rule('#root'), /height:\s*100%;/);
+    assert.match(rule('.workspace-frame'), /height:\s*100%;/);
+    assert.match(rule('.workspace-frame'), /min-height:\s*0;/);
+    assert.match(rule('.workspace-frame'), /grid-template-rows:\s*auto minmax\(0, 1fr\);/);
+    assert.doesNotMatch(rule('.workspace-frame'), /border-radius:/);
+    assert.match(rule('.startup-frame'), /height:\s*100%;/);
+
+    const content = rule('.workspace-content');
+    assert.match(content, /min-height:\s*0;/);
+    assert.match(content, /overflow-y:\s*auto;/);
+    assert.match(content, /scrollbar-width:\s*none;/);
+    assert.doesNotMatch(content, /overflow-y:\s*hidden;/);
+    assert.match(
+        styles,
+        /\.workspace-content::-webkit-scrollbar[^{]*\{[^}]*display:\s*none;/s,
+    );
+});
+
 test('Task feedback reserves scroll space while keeping the restored control centered', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'tasks',
@@ -176,7 +203,7 @@ test('Task feedback reserves scroll space while keeping the restored control cen
         planProblem: null,
         onNavigate: noop,
         onCreateTask: noop,
-        onOpenDataProtection: noop,
+        onOpenSettings: noop,
         onOpenSetup: noop,
         onRetryPlan: noop,
         taskActions: {

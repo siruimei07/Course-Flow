@@ -92,6 +92,10 @@ function invalidSetupRequestOutcome(value: unknown): WorkspaceSetupOutcome {
 
 export async function createWindow(options?: { show?: boolean }): Promise<BrowserWindow> {
   const window = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 960,
+    minHeight: 640,
     show: options?.show ?? true,
     thickFrame: true,
     title: 'CourseFlow',

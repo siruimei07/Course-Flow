@@ -1,5 +1,6 @@
 import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
 import type {WorkspaceMode} from '../shared/workspace-lifecycle-contract';
+import { SettingsDialog } from './SettingsDialog';
 import { SetupDialog } from './SetupDialog';
 import { setupStateFrom, type SetupState } from './setup-state';
 import {planProjectionStateFrom} from './workspace-view-state';
@@ -81,7 +82,7 @@ export type WorkspaceShellProps = Readonly<{
     taskActions: TaskActionPresentation;
     onNavigate(page: WorkspaceNavigationId): void;
     onCreateTask(): void;
-    onOpenDataProtection(): void;
+    onOpenSettings(): void;
     onOpenSetup(): void;
     onRetryPlan(): void;
 }>;
@@ -154,6 +155,7 @@ export function App(): ReactElement {
     const [state, setState] = useState<AppState>({ kind: 'loading' });
     const [activePage, setActivePage] = useState<WorkspaceNavigationId>('today');
     const [setupOpen, setSetupOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [setupEntryIntent, setSetupEntryIntent] = useState<'default' | 'task'>('default');
     const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
     const [migrationDialogMode, setMigrationDialogMode] = useState<MigrationProtectionDialogMode>(
@@ -168,6 +170,7 @@ export function App(): ReactElement {
     const [taskActionBusyItemId, setTaskActionBusyItemId] = useState<string | null>(null);
     const [taskActionProblem, setTaskActionProblem] = useState<string | null>(null);
     const returnFocusRef = useRef<HTMLElement | null>(null);
+    const settingsReturnFocusRef = useRef<HTMLElement | null>(null);
     const migrationReturnFocusRef = useRef<HTMLElement | null>(null);
     const taskActionInFlightRef = useRef(false);
     const taskActionFocusRef = useRef<Readonly<{
@@ -182,6 +185,7 @@ export function App(): ReactElement {
         setTaskActionState(null);
         setTaskActionBusyItemId(null);
         setTaskActionProblem(null);
+        setSettingsOpen(false);
         setMigrationDialogOpen(false);
         setMigrationDialogMode('overview');
         setMigrationRollbackPreview(null);
@@ -233,8 +237,26 @@ export function App(): ReactElement {
         returnFocusRef.current = document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null;
+        setSettingsOpen(false);
         setSetupEntryIntent(entryIntent);
         setSetupOpen(true);
+    };
+
+    const openSettings = (): void => {
+        settingsReturnFocusRef.current = document.activeElement instanceof HTMLElement
+            ? document.activeElement
+            : null;
+        setSettingsOpen(true);
+    };
+
+    const closeSettings = (): void => {
+        setSettingsOpen(false);
+        const returnTarget = settingsReturnFocusRef.current;
+        globalThis.requestAnimationFrame(() => {
+            if (returnTarget?.isConnected) {
+                returnTarget.focus();
+            }
+        });
     };
 
     const openSetup = (): void => openSetupWithIntent('default');
@@ -272,6 +294,7 @@ export function App(): ReactElement {
         migrationReturnFocusRef.current = document.activeElement instanceof HTMLElement
             ? document.activeElement
             : null;
+        setSettingsOpen(false);
         setMigrationDialogMode('overview');
         setMigrationRollbackPreview(null);
         setMigrationActionProblem(state.migrationProblem);
@@ -740,13 +763,23 @@ export function App(): ReactElement {
                 dataMode={state.setup.dataMode}
                 onNavigate={setActivePage}
                 onCreateTask={openTaskSetup}
-                onOpenDataProtection={openDataProtection}
+                onOpenSettings={openSettings}
                 onOpenSetup={openSetup}
                 onRetryPlan={() => refreshPlan(state.setup.projection)}
                 plan={state.plan}
                 planProblem={state.planProblem}
                 setup={state.setup.projection}
                 taskActions={taskActions}
+            />
+            <SettingsDialog
+                buildStatus={state.buildStatus}
+                dataMode={state.setup.dataMode}
+                onClose={closeSettings}
+                onOpenDataProtection={openDataProtection}
+                onOpenSetup={openSetup}
+                open={settingsOpen}
+                safetyCopy={state.migrationSafetyCopy}
+                setup={state.setup.projection}
             />
             <SetupDialog
                 entryIntent={setupEntryIntent}
@@ -858,15 +891,9 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
                         <span className="setup-status-text">设置未完成</span>
                     ) : null}
                     <button
-                        aria-label="打开数据与备份"
-                        className="settings-button"
-                        onClick={props.onOpenDataProtection}
-                        type="button"
-                    >数据与备份</button>
-                    <button
                         aria-label="打开设置"
                         className="settings-button"
-                        onClick={props.onOpenSetup}
+                        onClick={props.onOpenSettings}
                         type="button"
                     >设置</button>
                 </div>
