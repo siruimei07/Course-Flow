@@ -157,7 +157,7 @@ test('the title region exposes three independent window controls outside its dra
     );
     assert.match(
         reducedTransparency,
-        /\.window-control-button--close\s*\{[^}]*color:\s*#fff;[^}]*background:\s*#292a27;/s,
+        /\.window-control-button--close\s*\{[^}]*color:\s*#fff;[^}]*background:\s*#303030;/s,
     );
     const forcedColors = styles.slice(styles.indexOf('@media (forced-colors: active)'));
     assert.match(

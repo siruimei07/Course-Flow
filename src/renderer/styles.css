@@ -8,14 +8,14 @@
     --ink: #201e18;
     --ink-soft: #5c584a;
     --line: rgba(74, 66, 41, 0.12);
-    --card: rgba(255, 253, 246, 0.9);
-    --card-strong: rgba(255, 254, 250, 0.97);
+    --card: rgba(255, 253, 246, 0.72);
+    --card-strong: rgba(255, 254, 250, 0.88);
     --card-inner: rgba(255, 251, 240, 0.66);
     --morning: #f5d457;
     --morning-deep: #eec53d;
     --morning-pale: #fbeeb5;
-    --dark: #24231f;
-    --elevated: #26251f;
+    --dark: #303030;
+    --elevated: #323232;
     --radius-large: 2rem;
     --radius-medium: 1.35rem;
     --shadow: 0 1.6rem 3.6rem rgba(94, 83, 52, 0.16);
@@ -322,7 +322,7 @@ ul {
     align-items: center;
     min-height: 2rem;
     padding: 0.35rem 0.65rem;
-    border: 1px solid #24231f;
+    border: 1px solid #303030;
     border-radius: 999px;
     color: #ffffff;
     background: var(--dark);
@@ -2553,13 +2553,13 @@ h2:focus-visible {
 
     .window-control-button--close {
         color: #fff;
-        background: #292a27;
+        background: #303030;
     }
 
     .emphasis-layer,
     .task-undo-toast,
     .setup-current-layer {
-        background: #292a27;
+        background: #303030;
         backdrop-filter: none;
     }
 
