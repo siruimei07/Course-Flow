@@ -1,3 +1,13 @@
+import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
+import type {WorkspaceMode} from '../shared/workspace-lifecycle-contract';
+import { SetupDialog } from './SetupDialog';
+import { setupStateFrom, type SetupState } from './setup-state';
+import {planProjectionStateFrom} from './workspace-view-state';
+import { WindowControls, WindowTitlebar } from './WindowControls';
+import { loadPlan, loadWorkspace } from './app/load-workspace';
+import type { WorkspaceLoadResult } from './app/load-workspace';
+import { advanceTaskUndoTimerState, focusTaskActionTarget, runWorkspaceTaskOccurrenceAction, runWorkspaceTaskOccurrenceUndo, taskPresentationItemId, taskUndoPresentationFrom, taskUndoTimerDelayFrom } from './app/task-actions';
+import type { WorkspaceTaskActionResult } from './app/task-actions';
 /**
  * @file Loads Workspace projections and renders the accessible CourseFlow shell.
  */
@@ -11,8 +21,6 @@ import {
     type ReactElement,
 } from 'react';
 
-import type {WorkspaceDataStatus} from '../shared/bootstrap-contract';
-import type {WorkspaceMode} from '../shared/workspace-lifecycle-contract';
 import type {
     PlanProjection,
     PlanTaskProjection,
@@ -36,13 +44,11 @@ import {
     WORKSPACE_NAVIGATION_ITEMS,
     type WorkspaceNavigationId,
 } from './navigation';
-import { SetupDialog } from './SetupDialog';
 import {
     MigrationMaintenanceSurface,
     MigrationProtectionDialog,
     type MigrationProtectionDialogMode,
 } from './MigrationRollbackSurface';
-import { setupStateFrom, type SetupState } from './setup-state';
 import {
     advanceTaskOccurrenceActionsState,
     createTaskOccurrenceActionsState,
@@ -55,8 +61,6 @@ import {
     type TaskOccurrenceAction,
     type TaskOccurrenceActionsState,
 } from './task-occurrence-actions';
-import {planProjectionStateFrom} from './workspace-view-state';
-import { WindowControls, WindowTitlebar } from './WindowControls';
 import {
     TaskActionNotice,
     WorkspacePage,
@@ -65,39 +69,6 @@ import {
 
 type ResolvedSetupState = Extract<SetupState, { projection: SetupProjection }>;
 
-export type WorkspaceLoadResult =
-    | Readonly<{
-        kind: 'welcome';
-    }>
-    | Readonly<{
-        kind: 'maintenance';
-        message: string;
-    }>
-    | Readonly<{
-        kind: 'recovery';
-        message: string;
-    }>
-    | Readonly<{
-        kind: 'problem';
-        message: string;
-    }>
-    | Readonly<{
-        kind: 'migration-maintenance';
-        buildStatus: ApplicationBuildStatus | null;
-        session: MigrationRollbackSessionView;
-        problem: string | null;
-    }>
-    | Readonly<{
-        kind: 'ready';
-        setup: ResolvedSetupState;
-        plan: PlanProjection | null;
-        planProblem: string | null;
-        buildStatus: ApplicationBuildStatus | null;
-        migrationSafetyCopy: MigrationSafetyCopyProjection;
-        migrationProblem: string | null;
-        route: 'setup' | 'today';
-        workspaceMode: Extract<WorkspaceMode, 'ready' | 'limited' | 'read-only'>;
-    }>;
 
 type AppState = Readonly<{ kind: 'loading' }> | WorkspaceLoadResult;
 
@@ -115,139 +86,17 @@ export type WorkspaceShellProps = Readonly<{
     onRetryPlan(): void;
 }>;
 
-type PlanLoadResult = Readonly<{
-    plan: PlanProjection | null;
-    planProblem: string | null;
-}>;
 
-const MILLISECONDS_PER_DAY = 86_400_000;
 
-export type TaskActionAppBridge = Pick<
-    Window['courseFlow'],
-    | 'queryTaskSeries'
-    | 'setTaskOccurrenceStatus'
-    | 'undoTaskOccurrenceState'
-    | 'querySetup'
-    | 'queryPlan'
->;
 
-export type TaskActionWorkspaceRefresh = Readonly<{
-    setup: ResolvedSetupState;
-    plan: PlanProjection;
-}>;
 
-export type WorkspaceTaskActionResult = Readonly<{
-    actionState: TaskOccurrenceActionsState | null;
-    refresh: TaskActionWorkspaceRefresh | null;
-    problem: string | null;
-}>;
 
-export type RunWorkspaceTaskOccurrenceActionOptions = Readonly<{
-    actionState?: TaskOccurrenceActionsState;
-    bridge: TaskActionAppBridge;
-    plan: Pick<PlanProjection, 'evaluationContext' | 'term'>;
-    occurrenceId: TaskOccurrenceId;
-    action: TaskOccurrenceAction;
-    makeId(): string;
-    now(): number;
-    onStateChange(state: TaskOccurrenceActionsState | null): void;
-}>;
 
-export type RunWorkspaceTaskOccurrenceUndoOptions = Readonly<{
-    bridge: TaskActionAppBridge;
-    actionState: TaskOccurrenceActionsState;
-    makeId(): string;
-    now(): number;
-    onStateChange(state: TaskOccurrenceActionsState | null): void;
-}>;
 
-/**
- * Calculates the next Undo expiry wake-up from the authoritative Toast clock.
- * @param {TaskOccurrenceActionsState} state Current direct-action state.
- * @param {number} now Current Unix milliseconds.
- * @return {number | null} Non-negative delay, or null while absent/paused.
- */
-export function taskUndoTimerDelayFrom(
-    state: TaskOccurrenceActionsState,
-    now: number,
-): number | null {
-    if (state.pendingUndoCommand !== null) {
-        return null;
-    }
-    const toast = state.commandState.undoToast;
-    if (toast === null || toast.pausedAt !== null) {
-        return null;
-    }
-    return Math.max(0, toast.expiresAt - now);
-}
 
-/**
- * Advances an expired Undo Toast only when no retained Undo request owns it.
- * @param {TaskOccurrenceActionsState | null} state Current Task action control state.
- * @param {number} now Current Unix milliseconds.
- * @return {TaskOccurrenceActionsState | null} Safely advanced or retained state.
- */
-export function advanceTaskUndoTimerState(
-    state: TaskOccurrenceActionsState | null,
-    now: number,
-): TaskOccurrenceActionsState | null {
-    return state === null || state.pendingUndoCommand !== null
-        ? state
-        : advanceTaskOccurrenceActionsState(state, now);
-}
 
-/**
- * Derives honest Undo feedback without changing the retained command or timer state.
- * @param {TaskOccurrenceActionsState | null} state Current Task action control state.
- * @param {boolean} submitting Whether the visible Undo action is unavailable while work is active.
- * @return {TaskActionPresentation['undo']} Visible Undo feedback or no surface.
- */
-export function taskUndoPresentationFrom(
-    state: TaskOccurrenceActionsState | null,
-    submitting: boolean,
-): TaskActionPresentation['undo'] {
-    if (state === null
-        || state.pendingActionCommand !== null
-        || state.commandState.undoToast === null) {
-        return null;
-    }
 
-    const resultUnknown = state.pendingUndoCommand !== null;
-    return {
-        actionLabel: resultUnknown ? '精确重试撤销' : '撤销',
-        message: resultUnknown
-            ? '撤销结果尚无法确认；请精确重试本次撤销请求。'
-            : '任务状态已保存，可在 6 秒内撤销。',
-        submitting,
-    };
-}
 
-/**
- * Builds the presentation identity shared by PLAN Task rows and busy feedback.
- * @param {TaskOccurrenceId} occurrenceId Stable Task occurrence identity.
- * @return {string} Workspace-page item identity.
- */
-function taskPresentationItemId(
-    occurrenceId: Pick<TaskOccurrenceId, 'taskSeriesId' | 'originalLogicalAnchor'>,
-): string {
-    return `task:${occurrenceId.taskSeriesId}:${occurrenceId.originalLogicalAnchor}`;
-}
-
-/**
- * Restores a Task control without letting fixed feedback cover its focus ring.
- * @param {Pick<HTMLElement, 'focus' | 'scrollIntoView'>} target Connected focus target.
- * @return {void}
- */
-export function focusTaskActionTarget(
-    target: Pick<HTMLElement, 'focus' | 'scrollIntoView'>,
-): void {
-    target.focus({ preventScroll: true });
-    target.scrollIntoView({
-        behavior: 'auto',
-        block: 'center',
-        inline: 'nearest',
-    });
-}
 
 const PAGE_HEADING_IDS: Readonly<Record<WorkspaceNavigationId, string>> = {
     today: 'today-page-title',
@@ -257,538 +106,19 @@ const PAGE_HEADING_IDS: Readonly<Record<WorkspaceNavigationId, string>> = {
     files: 'files-page-title',
 };
 
-/**
- * Selects one matching Task-series detail response.
- * @param {Awaited<ReturnType<TaskActionAppBridge['queryTaskSeries']>>} outcome Workspace response.
- * @param {string} taskSeriesId Requested stable Task-series identity.
- * @return {TaskSeriesDetailProjection | string} Formal detail or a user-facing problem.
- */
-function taskSeriesDetailFrom(
-    outcome: Awaited<ReturnType<TaskActionAppBridge['queryTaskSeries']>>,
-    taskSeriesId: string,
-): TaskSeriesDetailProjection | string {
-    if (!outcome.ok) {
-        return outcome.problem.message;
-    }
-    if (outcome.value.kind !== 'workspace.task-series-projection'
-        || outcome.value.projection.taskSeriesId !== taskSeriesId) {
-        return 'Workspace 返回了意外的任务详情。';
-    }
-    return outcome.value.projection;
-}
 
-/**
- * Refreshes Setup and PLAN together after one confirmed Task mutation.
- * @param {TaskActionAppBridge} bridge Bounded preload bridge.
- * @return {Promise<TaskActionWorkspaceRefresh | string>} Fresh projections or a scoped problem.
- */
-async function refreshAfterTaskAction(
-    bridge: TaskActionAppBridge,
-): Promise<TaskActionWorkspaceRefresh | string> {
-    try {
-        const [setupOutcome, planOutcome] = await Promise.all([
-            bridge.querySetup(),
-            bridge.queryPlan(),
-        ]);
-        const setup = setupStateFrom(setupOutcome);
-        if (setup.kind === 'loading' || setup.kind === 'problem') {
-            return setup.kind === 'problem' ? setup.message : 'Workspace 未返回设置投影。';
-        }
-        const plan = planProjectionStateFrom(planOutcome);
-        if (plan.kind === 'unavailable') {
-            return plan.message;
-        }
-        return { setup, plan: plan.projection };
-    }
-    catch {
-        return '任务已保存，但无法刷新工作区投影；请重试。';
-    }
-}
 
-/**
- * Reports whether a Task action reached a newer formal detail projection.
- * @param {TaskSeriesDetailProjection} before Formal projection before the command.
- * @param {TaskOccurrenceActionsState} after Renderer state after command/requery.
- * @return {boolean} Whether persistence and the bounded formal requery both succeeded.
- */
-function taskActionReachedFormalProjection(
-    before: TaskSeriesDetailProjection,
-    after: TaskOccurrenceActionsState,
-): boolean {
-    const projection = after.commandState.projection;
-    return after.commandState.problem === null
-        && after.commandState.requeryRequest === null
-        && projection !== null
-        && projection.taskSeriesId === before.taskSeriesId
-        && BigInt(projection.workspaceRevision) > BigInt(before.workspaceRevision)
-        && BigInt(projection.entityVersion) > BigInt(before.entityVersion);
-}
 
-/**
- * Leaves a rejected transport request available for idempotent retry without
- * pretending that the Workspace did or did not commit it.
- * @param {TaskOccurrenceActionsState} state State observed after invoking the mutation.
- * @return {TaskOccurrenceActionsState} Idle Renderer state retaining the exact request.
- */
-function settleUnknownTaskTransport(
-    state: TaskOccurrenceActionsState,
-): TaskOccurrenceActionsState {
-    return {
-        ...state,
-        commandState: {
-            ...state.commandState,
-            submitting: false,
-            submissionDraft: null,
-            undoSubmission: null,
-        },
-    };
-}
 
-/**
- * Chooses a formal Task-detail window without exceeding the Workspace query
- * limit for an extended Term.
- * @param {Pick<PlanProjection, 'evaluationContext' | 'term'>} plan Current PLAN projection.
- * @param {TaskOccurrenceId} occurrenceId Stable target occurrence identity.
- * @return {TaskOccurrenceWindow} Valid bounded window for detail and confirmation queries.
- */
-function taskOccurrenceQueryWindowFrom(
-    plan: Pick<PlanProjection, 'evaluationContext' | 'term'>,
-    occurrenceId: TaskOccurrenceId,
-): TaskOccurrenceWindow {
-    const termWindow = {
-        startDate: plan.term.startDate,
-        endDate: plan.term.endDate,
-    };
-    if (isTaskOccurrenceWindow(termWindow)) {
-        return termWindow;
-    }
-    const originalLogicalAnchor = occurrenceId.originalLogicalAnchor;
-    if (originalLogicalAnchor === 'once') {
-        return plan.evaluationContext.requestedWindow;
-    }
-    const anchorMilliseconds = Date.parse(`${originalLogicalAnchor}T00:00:00.000Z`);
-    const minimumDate = Date.parse('0000-01-01T00:00:00.000Z');
-    const maximumDate = Date.parse('9999-12-31T00:00:00.000Z');
-    const shiftedDate = (days: number): string => new Date(Math.min(
-        maximumDate,
-        Math.max(minimumDate, anchorMilliseconds + days * MILLISECONDS_PER_DAY),
-    )).toISOString().slice(0, 10);
-    return Object.freeze({
-        startDate: shiftedDate(-6),
-        endDate: shiftedDate(6),
-    });
-}
 
-/**
- * Loads one bounded Task detail, runs a direct action, then refreshes composite projections.
- * @param {RunWorkspaceTaskOccurrenceActionOptions} options Action, Workspace, clock, and observer ports.
- * @return {Promise<WorkspaceTaskActionResult>} Final control state and optional Workspace refresh.
- */
-export async function runWorkspaceTaskOccurrenceAction(
-    options: RunWorkspaceTaskOccurrenceActionOptions,
-): Promise<WorkspaceTaskActionResult> {
-    let actionState: TaskOccurrenceActionsState | null = null;
-    try {
-        const retainedState = options.actionState;
-        if (retainedState !== undefined
-            && hasPendingTaskOccurrenceRequest(retainedState)
-            && !hasPendingTaskOccurrenceAction(
-                retainedState,
-                options.occurrenceId,
-                options.action,
-            )) {
-            return {
-                actionState: retainedState,
-                refresh: null,
-                problem: '请先重试或核对上次结果未知的任务请求。',
-            };
-        }
-        const requestedWindow = taskOccurrenceQueryWindowFrom(options.plan, options.occurrenceId);
-        let detailResult: TaskSeriesDetailProjection;
-        if (retainedState !== undefined
-            && retainedState.commandState.projection !== null
-            && hasPendingTaskOccurrenceAction(
-                retainedState,
-                options.occurrenceId,
-                options.action,
-            )) {
-            actionState = retainedState;
-            detailResult = retainedState.commandState.projection;
-        }
-        else {
-            const queriedDetail = taskSeriesDetailFrom(
-                await options.bridge.queryTaskSeries(
-                    options.occurrenceId.taskSeriesId,
-                    requestedWindow,
-                ),
-                options.occurrenceId.taskSeriesId,
-            );
-            if (typeof queriedDetail === 'string') {
-                return { actionState: null, refresh: null, problem: queriedDetail };
-            }
-            detailResult = queriedDetail;
-            actionState = createTaskOccurrenceActionsState(detailResult);
-            options.onStateChange(actionState);
-        }
-        actionState = await runTaskOccurrenceAction(
-            actionState,
-            options.occurrenceId,
-            options.action,
-            {
-                port: options.bridge,
-                makeId: options.makeId,
-                now: options.now,
-                onStateChange(nextState) {
-                    actionState = nextState;
-                    options.onStateChange(nextState);
-                },
-            },
-        );
-        if (!taskActionReachedFormalProjection(detailResult, actionState)) {
-            return {
-                actionState,
-                refresh: null,
-                problem: actionState.commandState.problem?.message
-                    ?? '任务状态已变化，请刷新后重试。',
-            };
-        }
 
-        const refresh = await refreshAfterTaskAction(options.bridge);
-        if (typeof refresh === 'string') {
-            return { actionState, refresh: null, problem: refresh };
-        }
-        return { actionState, refresh, problem: null };
-    }
-    catch {
-        if (actionState !== null && actionState.commandState.requeryRequest !== null) {
-            return {
-                actionState,
-                refresh: null,
-                problem: '任务状态已保存，但无法验证最新投影；请刷新后重试。',
-            };
-        }
-        if (actionState !== null) {
-            const settledState = settleUnknownTaskTransport(actionState);
-            options.onStateChange(settledState);
-            return {
-                actionState: settledState,
-                refresh: null,
-                problem: '无法连接本地 Workspace；任务提交结果尚无法确认。再次选择相同操作会使用本次请求重试。',
-            };
-        }
-        return {
-            actionState: null,
-            refresh: null,
-            problem: '无法读取正式任务详情，因此没有发起任务更改。',
-        };
-    }
-}
 
-/**
- * Runs a visible Task Undo, confirms it through a bounded formal requery, then refreshes composites.
- * @param {RunWorkspaceTaskOccurrenceUndoOptions} options Undo state, Workspace, clock, and observer ports.
- * @return {Promise<WorkspaceTaskActionResult>} Final control state and optional Workspace refresh.
- */
-export async function runWorkspaceTaskOccurrenceUndo(
-    options: RunWorkspaceTaskOccurrenceUndoOptions,
-): Promise<WorkspaceTaskActionResult> {
-    if (options.actionState.pendingActionCommand !== null) {
-        return {
-            actionState: options.actionState,
-            refresh: null,
-            problem: '请先重试或核对上次结果未知的任务请求。',
-        };
-    }
-    const before = options.actionState.commandState.projection;
-    if (before === null) {
-        return {
-            actionState: options.actionState,
-            refresh: null,
-            problem: '没有可撤销的正式任务状态。',
-        };
-    }
 
-    let actionState = options.actionState;
-    try {
-        actionState = await runTaskOccurrenceUndo(actionState, {
-            port: options.bridge,
-            makeId: options.makeId,
-            now: options.now,
-            onStateChange(nextState) {
-                actionState = nextState;
-                options.onStateChange(nextState);
-            },
-        });
-        if (!taskActionReachedFormalProjection(before, actionState)) {
-            return {
-                actionState,
-                refresh: null,
-                problem: actionState.commandState.problem?.message
-                    ?? '撤销未完成，请刷新后重试。',
-            };
-        }
 
-        const refresh = await refreshAfterTaskAction(options.bridge);
-        if (typeof refresh === 'string') {
-            return { actionState, refresh: null, problem: refresh };
-        }
-        return { actionState, refresh, problem: null };
-    }
-    catch {
-        if (actionState.commandState.requeryRequest !== null) {
-            return {
-                actionState,
-                refresh: null,
-                problem: '任务状态已撤销，但无法验证最新投影；请刷新后重试。',
-            };
-        }
-        const settledState = settleUnknownTaskTransport(actionState);
-        options.onStateChange(settledState);
-        return {
-            actionState: settledState,
-            refresh: null,
-            problem: '无法连接本地 Workspace；撤销提交结果尚无法确认。再次选择撤销会使用本次请求重试。',
-        };
-    }
-}
 
-/**
- * Loads PLAN only when a Current Term makes the query applicable.
- *
- * @param {Window['courseFlow']} bridge Bounded preload bridge.
- * @param {SetupProjection} setup Validated Setup projection.
- * @return {Promise<PlanLoadResult>} Available PLAN facts or an explicit failure.
- */
-async function loadPlan(
-    bridge: Window['courseFlow'],
-    setup: SetupProjection,
-): Promise<PlanLoadResult> {
-    if (setup.currentTerm === null) {
-        return { plan: null, planProblem: null };
-    }
 
-    try {
-        const planState = planProjectionStateFrom(await bridge.queryPlan());
-        if (planState.kind === 'unavailable') {
-            return { plan: null, planProblem: planState.message };
-        }
-        return { plan: planState.projection, planProblem: null };
-    }
-    catch {
-        return {
-            plan: null,
-            planProblem: '无法读取统一计划投影；正式学期与课程数据没有改变。',
-        };
-    }
-}
 
-type MigrationProtectionLoad = Readonly<{
-    buildStatus: ApplicationBuildStatus | null;
-    migrationSafetyCopy: MigrationSafetyCopyProjection;
-    migrationProblem: string | null;
-}>;
 
-/**
- * Creates the fail-closed Renderer fallback when Workspace status is unavailable.
- * @return {MigrationRollbackSessionView} Recovery view with no allowed action.
- */
-function rollbackRecoveryView(): MigrationRollbackSessionView {
-    return {
-        migrationRollbackSessionId: null,
-        operationId: null,
-        sessionVersion: null,
-        phase: 'recovery-required',
-        currentBuild: 'recovery-required',
-        binding: null,
-        previewToken: null,
-        retryCommand: null,
-        allowedActions: [],
-        outcome: null,
-        problem: {code: 'recovery-required'},
-    };
-}
-
-/**
- * Loads build and migration-safety projections without blocking the PLAN core.
- * @param {Window['courseFlow']} bridge Bounded preload bridge.
- * @return {Promise<MigrationProtectionLoad>} Available projections and scoped problem.
- */
-async function loadMigrationProtection(
-    bridge: Window['courseFlow'],
-): Promise<MigrationProtectionLoad> {
-    let buildStatus: ApplicationBuildStatus | null = null;
-    let migrationSafetyCopy: MigrationSafetyCopyProjection = {kind: 'unavailable'};
-    const problems: string[] = [];
-    try {
-        const outcome = await bridge.queryApplicationBuildStatus();
-        if (outcome.ok && outcome.value.kind === 'workspace.application-build-status') {
-            buildStatus = outcome.value.status;
-        }
-        else {
-            problems.push(outcome.ok ? '当前构建状态不可用。' : outcome.problem.message);
-        }
-    }
-    catch {
-        problems.push('无法读取当前构建状态。');
-    }
-    try {
-        const outcome = await bridge.queryMigrationSafetyCopy();
-        if (outcome.ok && outcome.value.kind === 'workspace.migration-safety-copy') {
-            migrationSafetyCopy = outcome.value.safetyCopy;
-        }
-        else {
-            problems.push(outcome.ok ? '迁移安全副本状态不可用。' : outcome.problem.message);
-        }
-    }
-    catch {
-        problems.push('无法读取迁移安全副本状态。');
-    }
-    return {
-        buildStatus,
-        migrationSafetyCopy,
-        migrationProblem: problems.length === 0 ? null : problems.join(' '),
-    };
-}
-
-/**
- * Extracts the rollback startup route from one Workspace DATA recovery status.
- * @param {WorkspaceDataStatus} problem Bootstrap DATA status.
- * @return {string | null | undefined} Session, evidence-only recovery, or non-rollback state.
- */
-function migrationRollbackSessionIdFrom(
-    problem: WorkspaceDataStatus,
-): string | null | undefined {
-    if (problem.kind !== 'recovery') {
-        return undefined;
-    }
-    const details = problem.problem.details;
-    const reason = 'reason' in details ? details.reason : null;
-    if (reason === 'migration-rollback-evidence') {
-        return null;
-    }
-    if (reason !== 'migration-rollback-pending') {
-        return undefined;
-    }
-    return 'migrationRollbackSessionId' in problem.problem.context
-        ? problem.problem.context.migrationRollbackSessionId
-        : null;
-}
-
-/**
- * Loads the exclusive rollback route before any ordinary Workspace query.
- * @param {Window['courseFlow']} bridge Bounded preload bridge.
- * @param {string | null} migrationRollbackSessionId Exact session or recovery evidence.
- * @return {Promise<Extract<WorkspaceLoadResult, {kind: 'migration-maintenance'}>>} Dedicated route.
- */
-async function loadMigrationMaintenance(
-    bridge: Window['courseFlow'],
-    migrationRollbackSessionId: string | null,
-): Promise<Extract<WorkspaceLoadResult, Readonly<{kind: 'migration-maintenance'}>>> {
-    let buildStatus: ApplicationBuildStatus | null = null;
-    let session = rollbackRecoveryView();
-    const problems: string[] = [];
-    try {
-        const outcome = await bridge.queryApplicationBuildStatus();
-        if (outcome.ok && outcome.value.kind === 'workspace.application-build-status') {
-            buildStatus = outcome.value.status;
-        }
-        else {
-            problems.push(outcome.ok ? '当前构建状态不可用。' : outcome.problem.message);
-        }
-    }
-    catch {
-        problems.push('无法读取当前构建状态。');
-    }
-    try {
-        const outcome = await bridge.queryMigrationRollbackStatus(migrationRollbackSessionId);
-        if (outcome.ok && outcome.value.kind === 'workspace.migration-rollback-session') {
-            session = outcome.value.session;
-        }
-        else {
-            problems.push(outcome.ok ? '回退状态不可用。' : outcome.problem.message);
-        }
-    }
-    catch {
-        problems.push('无法读取迁移回退状态。');
-    }
-    return {
-        kind: 'migration-maintenance',
-        buildStatus,
-        session,
-        problem: problems.length === 0 ? null : problems.join(' '),
-    };
-}
-
-/**
- * Resolves startup through Bootstrap, SetupProjection, and the existing PLAN projection.
- *
- * @param {Window['courseFlow']} bridge Bounded preload bridge.
- * @return {Promise<WorkspaceLoadResult>} Shell-ready projection state or one blocking problem.
- */
-export async function loadWorkspace(
-    bridge: Window['courseFlow'],
-): Promise<WorkspaceLoadResult> {
-    try {
-        const bootstrap = await bridge.query();
-        if (!bootstrap.ok) {
-            return { kind: 'problem', message: bootstrap.problem.message };
-        }
-        const lifecycle = bootstrap.value.workspaceLifecycle;
-        if (lifecycle.route === 'welcome') {
-            return {kind: 'welcome'};
-        }
-        if (lifecycle.route === 'maintenance' || lifecycle.route === 'recovery') {
-            const migrationRollbackSessionId = migrationRollbackSessionIdFrom(
-                bootstrap.value.workspaceData,
-            );
-            if (migrationRollbackSessionId !== undefined) {
-                return loadMigrationMaintenance(bridge, migrationRollbackSessionId);
-            }
-            return {
-                kind: lifecycle.route,
-                message: lifecycle.route === 'maintenance'
-                    ? '本地工作区正在完成已确认的维护操作；普通读写和备份暂时关闭。'
-                    : '本地工作区需要根据当前证据恢复；不会自动执行继续、回滚或取消。',
-            };
-        }
-        if (bootstrap.value.workspaceData.kind === 'absent'
-            || bootstrap.value.workspaceData.kind === 'recovery'
-            || lifecycle.mode === 'maintenance'
-            || lifecycle.mode === 'recovery') {
-            return {
-                kind: 'recovery',
-                message: 'Workspace 启动状态不一致，已停止普通工作区查询。',
-            };
-        }
-
-        const [setupOutcome, migrationProtection] = await Promise.all([
-            bridge.querySetup(),
-            loadMigrationProtection(bridge),
-        ]);
-        const setupState = setupStateFrom(setupOutcome);
-        if (setupState.kind === 'problem') {
-            return { kind: 'problem', message: setupState.message };
-        }
-        if (setupState.kind === 'loading') {
-            return { kind: 'problem', message: 'Workspace 未返回设置投影。' };
-        }
-
-        return {
-            kind: 'ready',
-            setup: setupState,
-            ...await loadPlan(bridge, setupState.projection),
-            ...migrationProtection,
-            route: lifecycle.route,
-            workspaceMode: lifecycle.mode,
-        };
-    }
-    catch {
-        return {
-            kind: 'problem',
-            message: '无法连接本地 Workspace，请重试。',
-        };
-    }
-}
 
 /**
  * Presents the explicit first-run boundary without creating DATA on observation.
@@ -1573,3 +903,18 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
         </div>
     );
 }
+
+export { loadWorkspace, type WorkspaceLoadResult } from './app/load-workspace';
+export {
+    advanceTaskUndoTimerState,
+    focusTaskActionTarget,
+    runWorkspaceTaskOccurrenceAction,
+    runWorkspaceTaskOccurrenceUndo,
+    taskUndoPresentationFrom,
+    taskUndoTimerDelayFrom,
+    type RunWorkspaceTaskOccurrenceActionOptions,
+    type RunWorkspaceTaskOccurrenceUndoOptions,
+    type TaskActionAppBridge,
+    type TaskActionWorkspaceRefresh,
+    type WorkspaceTaskActionResult,
+} from './app/task-actions';

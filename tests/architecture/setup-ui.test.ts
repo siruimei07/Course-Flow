@@ -25,7 +25,7 @@ function readModuleFamily(entry: string, directory: string): string {
 }
 
 const main = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
-const app = readFileSync(path.join(repositoryRoot, 'src/renderer/App.tsx'), 'utf8');
+const app = readModuleFamily('src/renderer/App.tsx', 'src/renderer/app');
 const setupDialog = readModuleFamily('src/renderer/SetupDialog.tsx', 'src/renderer/setup');
 const pages = readModuleFamily('src/renderer/workspace-pages.tsx', 'src/renderer/pages');
 const renderer = [main, app, setupDialog, pages].join('\n');
