@@ -19,6 +19,9 @@ import test from 'node:test';
 
 import {
     COURSEFLOW_APPLICATION_ID,
+    CURRENT_SCHEMA_LEVEL,
+    SCHEMA_MIGRATIONS,
+    isMigratableSchemaLevel,
     migrateLevel0To1,
 } from '../src/data/schema';
 import {
@@ -310,6 +313,9 @@ test('TEST-WORKSPACE-007/PROTECT-007: Workspace owns preview, maintenance, and e
         throw new Error('Expected a verified MigrationSafetyCopy projection');
     }
     assert.equal(safety.value.safetyCopy.sourceSchemaLevel, '1');
+    if (safety.value.safetyCopy.target === null) {
+        throw new Error('Expected the bound exact rollback target');
+    }
     assert.equal(safety.value.safetyCopy.target.appBuildId, TARGET_APP_BUILD_ID);
 
     const preview = await application.handle(makeMigrationRollbackPreviewRequest(
@@ -832,4 +838,79 @@ test('TEST-WORKSPACE-005: simultaneous Restore and rollback evidence exposes no 
     );
     assert.deepEqual(physicalDataSnapshot(fixture.dataSlotsRoot), before);
     await application.close();
+});
+
+function createPreviousLevelWorkspace(): string {
+    const dataSlotsRoot = createLevel1Workspace();
+    const database = new DatabaseSync(path.join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        enableForeignKeyConstraints: false,
+    });
+    try {
+        database.exec('PRAGMA foreign_keys = OFF');
+        for (let level = 1; level < CURRENT_SCHEMA_LEVEL - 1; level += 1) {
+            if (!isMigratableSchemaLevel(level)) {
+                throw new Error(`No registered forward migration starts at level ${level}`);
+            }
+            SCHEMA_MIGRATIONS[level](database);
+        }
+    }
+    finally {
+        database.close();
+    }
+    return dataSlotsRoot;
+}
+
+test('WP-UI-01 slice 10: a workspace one level behind migrates on the application open path', async t => {
+    const dataSlotsRoot = createPreviousLevelWorkspace();
+    const activityControlRoot = `${dataSlotsRoot}-activity-control`;
+    mkdirSync(activityControlRoot);
+    const application = await WorkspaceApplication.open(dataSlotsRoot, SOURCE_APP_BUILD_ID, {
+        activityControlRoot,
+    });
+    t.after(async () => {
+        await application.close();
+        rmSync(dataSlotsRoot, {recursive: true, force: true});
+        rmSync(activityControlRoot, {recursive: true, force: true});
+    });
+
+    const ready = await bootstrap(application, SOURCE_APP_BUILD_ID);
+    assert.equal(ready.workspaceData.kind, 'ready');
+    assert.notEqual(ready.workspaceLifecycle.route, 'recovery');
+    assert.notEqual(ready.workspaceLifecycle.mode, 'recovery');
+
+    const migrated = new DatabaseSync(path.join(dataSlotsRoot, 'active', 'workspace.sqlite'), {
+        readOnly: true,
+    });
+    try {
+        const version = migrated.prepare('PRAGMA user_version').get() as {user_version: number};
+        assert.equal(version.user_version, CURRENT_SCHEMA_LEVEL);
+        const state = migrated.prepare(
+            'SELECT workspace_id FROM workspace_state WHERE singleton = 1',
+        ).get() as {workspace_id: string};
+        assert.equal(state.workspace_id, WORKSPACE_ID);
+    }
+    finally {
+        migrated.close();
+    }
+
+    const status = inspectMigrationSafetyCopy(dataSlotsRoot);
+    assert.equal(status.kind, 'verified');
+    if (status.kind !== 'verified') {
+        throw new Error('Expected a verified MigrationSafetyCopy after the forward migration');
+    }
+    assert.equal(status.metadata.sourceSchemaLevel, String(CURRENT_SCHEMA_LEVEL - 1));
+    assert.equal(status.metadata.rollbackTarget, null);
+
+    const safety = await application.handle(makeMigrationSafetyCopyQueryRequest(
+        'safety-status-without-target',
+        SOURCE_APP_BUILD_ID,
+        ready.workspaceEpoch,
+    ));
+    assert.equal(safety.ok, true);
+    if (!safety.ok || safety.value.kind !== 'workspace.migration-safety-copy'
+        || safety.value.safetyCopy.kind !== 'verified') {
+        throw new Error('Expected a verified MigrationSafetyCopy projection');
+    }
+    assert.equal(safety.value.safetyCopy.target, null);
+    assert.notEqual(safety.value.safetyCopy.deleteConfirmationToken, '');
 });

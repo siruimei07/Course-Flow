@@ -42,7 +42,7 @@ ADR-01–09 已确定 CourseFlow 的 Electron/React/TypeScript 桌面边界、�
 2. 用户必须能在没有账户、远程后端、更新服务或联网启动的条件下使用应用。
 3. 安装器只拥有程序制品；活动数据、资料库、备份、安全副本和 ActivityControl 状态由应用内相应 owner 管理。
 4. Main、Renderer 与 Workspace utility process 只能来自同一 exact `appBuildId`，不支持 mixed build。
-5. 前向 migration 在任何 schema 写入前必须产生已关闭、可重新验证的安全副本；旧应用不得猜读已升级数据。
+5. 前向 migration 在任何 schema 写入前必须产生已关闭、可重新验证的安全副本；该副本无条件产生，绑定精确回退版本是可选事实，只有当前构建携带已发布的兼容前置版本时才成立。旧应用不得猜读已升级数据。
 6. 公开制品必须由目标平台原生构建、签名并以最终安装形态验证；签名、公证或任一平台失败时不存在部分发布或 unsigned fallback。
 7. 生产应用不检查、下载或安装更新，不创建诊断/日志/崩溃/遥测数据面，也不在首次启动下载运行时二进制。
 8. 只有最终公开资产重新下载并再次验证后，版本才达到发布成功边界。
@@ -60,7 +60,7 @@ CourseFlow v1 采用**外部手动更新 + GitHub Releases 唯一渠道 + 双平
 7. macOS 使用 Developer ID Application、Hardened Runtime、最小 entitlement、最终 DMG notarization/stapling；Windows 使用硬件隔离 OV Authenticode 对全部最终 PE 与 MSI 签名。
 8. 每用户数据根固定在 Application Support/LocalAppData 的应用 ID 名称空间，安装器和卸载器不读写或删除它。
 9. 只有真实前向 migration 才创建一份 safety copy；最多保留最近一份，直到下一次迁移替换或用户明确删除。
-10. rollback 只允许 safety copy 绑定的最新已签名兼容 CourseFlow build；不做 reverse migration、任意 downgrade、dual write 或合并。
+10. rollback 只允许 safety copy 绑定的最新已签名兼容 CourseFlow build；副本未绑定回退版本时不提供 rollback，只提供查看与显式删除。不做 reverse migration、任意 downgrade、dual write 或合并。
 11. 正式应用代码进入 ASAR，启用 embedded ASAR integrity/only-load-from-ASAR，禁用 RunAsNode、NODE_OPTIONS 与 CLI inspect fuses；不从用户可写位置加载代码。
 12. 两个平台嵌入 `BuildDescriptorV1`，最终制品由 `courseflow-release-manifest-v1.json` 绑定源提交、工具链、签名、平台证据、格式版本、回退目标与最终字节。
 13. 签名和公证只在受控原生主机执行；GitHub Actions 只运行无秘密检查。

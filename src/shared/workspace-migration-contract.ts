@@ -95,7 +95,7 @@ export type MigrationSafetyCopyProjection =
         sourceSchemaLevel: string;
         createdAt: string;
         byteSize: string;
-        target: MigrationRollbackTargetProjection;
+        target: MigrationRollbackTargetProjection | null;
     }>;
 
 export type DeleteMigrationSafetyCopyCommand = Readonly<{
@@ -134,8 +134,16 @@ export type MigrationRollbackImpactSummary = Readonly<{
     libraryReconciliation: 'full';
 }>;
 
+/**
+ * A verified safety copy that binds an exact rollback target. Only these can be previewed or rolled
+ * back, so every rollback structure carries this type instead of re-checking the target for null.
+ */
+export type BoundMigrationSafetyCopyProjection =
+    Extract<MigrationSafetyCopyProjection, Readonly<{kind: 'verified'}>>
+    & Readonly<{target: MigrationRollbackTargetProjection}>;
+
 export type MigrationRollbackBindingProjection = Readonly<{
-    safetyCopy: Extract<MigrationSafetyCopyProjection, Readonly<{kind: 'verified'}>>;
+    safetyCopy: BoundMigrationSafetyCopyProjection;
     currentData: Readonly<{
         workspaceId: string;
         schemaLevel: string;
@@ -472,7 +480,7 @@ export function isMigrationSafetyCopyProjection(
         && isCanonicalInstant(value.createdAt)
         && isCanonicalUnsignedSqliteInteger(value.byteSize)
         && value.byteSize !== '0'
-        && isRollbackTarget(value.target);
+        && (value.target === null || isRollbackTarget(value.target));
 }
 
 /**

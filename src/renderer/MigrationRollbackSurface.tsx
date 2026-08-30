@@ -213,15 +213,29 @@ function SafetyCopyOverview(props: MigrationProtectionDialogProps): ReactElement
                     <dt>尺寸</dt>
                     <dd>{formattedBytes(safetyCopy.byteSize)}</dd>
                 </div>
-                <div>
-                    <dt>精确兼容版本</dt>
-                    <dd>{safetyCopy.target.releaseVersion}</dd>
-                </div>
-                <div>
-                    <dt>Tag</dt>
-                    <dd><code>{safetyCopy.target.tag}</code></dd>
-                </div>
+                {safetyCopy.target === null
+                    ? (
+                        <div>
+                            <dt>精确兼容版本</dt>
+                            <dd>未绑定</dd>
+                        </div>
+                    )
+                    : (
+                        <>
+                            <div>
+                                <dt>精确兼容版本</dt>
+                                <dd>{safetyCopy.target.releaseVersion}</dd>
+                            </div>
+                            <div>
+                                <dt>Tag</dt>
+                                <dd><code>{safetyCopy.target.tag}</code></dd>
+                            </div>
+                        </>
+                    )}
             </dl>
+            {safetyCopy.target === null
+                ? <p>当前构建没有已发布的精确兼容版本，副本不提供回退；它仍然完整、已验证，并可随时明确删除。</p>
+                : null}
             <div className="migration-actions">
                 <button
                     className="secondary-action"
@@ -229,12 +243,16 @@ function SafetyCopyOverview(props: MigrationProtectionDialogProps): ReactElement
                     onClick={() => props.onModeChange('delete-confirm')}
                     type="button"
                 >删除迁移安全副本</button>
-                <button
-                    className="primary-action"
-                    disabled={props.busy}
-                    onClick={props.onPreviewRollback}
-                    type="button"
-                >预览精确版本回退</button>
+                {safetyCopy.target === null
+                    ? null
+                    : (
+                        <button
+                            className="primary-action"
+                            disabled={props.busy}
+                            onClick={props.onPreviewRollback}
+                            type="button"
+                        >预览精确版本回退</button>
+                    )}
             </div>
         </section>
     );

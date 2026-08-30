@@ -9,9 +9,9 @@ import {
     isMigrationRollbackSessionView,
     isMigrationSafetyCopyProjection,
     normalizeConfirmMigrationRollbackCommand,
+    type BoundMigrationSafetyCopyProjection,
     type ConfirmMigrationRollbackCommand,
     type MigrationRollbackSessionView,
-    type MigrationSafetyCopyProjection,
 } from '../shared/workspace-migration-contract';
 import {isCanonicalUuid} from '../shared/workspace-data-contract';
 import type {RestoreLibraryRootBinding} from '../shared/workspace-protection-contract';
@@ -20,14 +20,9 @@ import type {MigrationRollbackHandoffFacts} from './migration-rollback-handoff';
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/;
 const MAXIMUM_IDENTITY_LENGTH = 1_024;
 
-type VerifiedMigrationSafetyCopyProjection = Extract<
-    MigrationSafetyCopyProjection,
-    Readonly<{kind: 'verified'}>
->;
-
 export type MigrationRollbackPreviewFacts = Readonly<{
     safetyCopy: Readonly<{
-        projection: VerifiedMigrationSafetyCopyProjection;
+        projection: BoundMigrationSafetyCopyProjection;
         closedDataSlotDigest: string;
     }>;
     currentData: Readonly<{

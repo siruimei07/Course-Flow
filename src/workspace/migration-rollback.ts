@@ -12,7 +12,12 @@ import { MigrationRollbackHandoffError, armMigrationRollbackHandoff, cancelMigra
 import type { MigrationRollbackDataIdentity } from '../protect/migration-rollback-handoff';
 import { bindMigrationRollbackConfirmation, createMigrationRollbackPreview, migrationRollbackConfirmationDigest } from '../protect/migration-rollback-session';
 import type { MigrationRollbackPreviewFacts } from '../protect/migration-rollback-session';
-import type { ConfirmMigrationRollbackCommand, DeleteMigrationSafetyCopyCommand, MigrationRollbackActionCommand, MigrationSafetyCopyProjection } from '../shared/workspace-migration-contract';
+import type {
+    BoundMigrationSafetyCopyProjection,
+    ConfirmMigrationRollbackCommand,
+    DeleteMigrationSafetyCopyCommand,
+    MigrationRollbackActionCommand,
+} from '../shared/workspace-migration-contract';
 import { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
 import { dataStateFrom, migrationOpenOptions } from './host';
 import type { WorkspaceHost } from './host';
@@ -506,6 +511,11 @@ export async function captureMigrationRollbackPreviewFacts(host: WorkspaceHost,
         if (safetyStatus.kind !== 'verified') {
             throw new Error('Migration safety copy is unavailable');
         }
+        // A copy created by a build with no published compatible predecessor binds no target,
+        // so there is no exact version to install and no rollback to preview.
+        if (safetyStatus.metadata.rollbackTarget === null) {
+            throw new Error('Migration safety copy binds no rollback target');
+        }
         const active = observeRestoreDataSlot(host.dataSlotsRoot, 'active');
         const member = active.kind === 'present' ? active.fingerprint.members[0] : undefined;
         if (active.kind !== 'present'
@@ -515,10 +525,10 @@ export async function captureMigrationRollbackPreviewFacts(host: WorkspaceHost,
         }
         return Object.freeze({
             safetyCopy: Object.freeze({
-                projection: migrationSafetyCopyProjection(safetyStatus) as Extract<
-                    MigrationSafetyCopyProjection,
-                    Readonly<{kind: 'verified'}>
-                >,
+                // The two checks above already proved this copy is verified and binds a target.
+                projection: migrationSafetyCopyProjection(
+                    safetyStatus,
+                ) as BoundMigrationSafetyCopyProjection,
                 closedDataSlotDigest: safetyStatus.metadata.closedDataSlotDigest,
             }),
             currentData: Object.freeze({

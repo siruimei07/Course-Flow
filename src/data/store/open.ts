@@ -8,7 +8,16 @@ import { lstatSync, mkdirSync, renameSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { ensureMigrationSafetyCopy } from '../migration-safety-copy';
-import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, SchemaValidationError, createSchemaLevel17, migrateLevel10To11, migrateLevel11To12, migrateLevel12To13, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, migrateLevel16To17, migrateLevel1To2, migrateLevel2To3, migrateLevel3To4, migrateLevel4To5, migrateLevel5To6, migrateLevel6To7, migrateLevel7To8, migrateLevel8To9, migrateLevel9To10, validateSchemaLevel1, validateSchemaLevel10, validateSchemaLevel11, validateSchemaLevel12, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17, validateSchemaLevel2, validateSchemaLevel3, validateSchemaLevel4, validateSchemaLevel5, validateSchemaLevel6, validateSchemaLevel7, validateSchemaLevel8, validateSchemaLevel9 } from '../schema';
+import {
+    COURSEFLOW_APPLICATION_ID,
+    CURRENT_SCHEMA_LEVEL,
+    SCHEMA_VALIDATORS,
+    SchemaValidationError,
+    createSchemaLevel17,
+    isMigratableSchemaLevel,
+    schemaLadderStep,
+    validateSchemaLevel17,
+} from '../schema';
 import type { SchemaFacts } from '../schema';
 import { DATABASE_FILE_NAME, SQLITE_VERSION, activeDirectory, classifySqliteFailure, closeBestEffort, databasePath, hasSchemaObjects, openDatabase, readDatabaseIdentity, throwFailpoint } from './database';
 import { SqliteDataStoreImplementation } from './kernel';
@@ -356,70 +365,11 @@ export async function openWorkspaceDataWithMigrations(
         source = openDatabase(path, true);
         const identity = readDatabaseIdentity(source);
         if (identity.applicationId !== COURSEFLOW_APPLICATION_ID
-            || (identity.schemaLevel !== 1
-                && identity.schemaLevel !== 2
-                && identity.schemaLevel !== 3
-                && identity.schemaLevel !== 4
-                && identity.schemaLevel !== 5
-                && identity.schemaLevel !== 6
-                && identity.schemaLevel !== 7
-                && identity.schemaLevel !== 8
-                && identity.schemaLevel !== 9
-                && identity.schemaLevel !== 10
-                && identity.schemaLevel !== 11
-                && identity.schemaLevel !== 12
-                && identity.schemaLevel !== 13
-                && identity.schemaLevel !== 14
-                && identity.schemaLevel !== 15)) {
+            || !isMigratableSchemaLevel(identity.schemaLevel)) {
             closeBestEffort(source);
             return opened;
         }
-        let sourceFacts: SchemaFacts;
-        if (identity.schemaLevel === 1) {
-            sourceFacts = validateSchemaLevel1(source);
-        }
-        else if (identity.schemaLevel === 2) {
-            sourceFacts = validateSchemaLevel2(source);
-        }
-        else if (identity.schemaLevel === 3) {
-            sourceFacts = validateSchemaLevel3(source);
-        }
-        else if (identity.schemaLevel === 4) {
-            sourceFacts = validateSchemaLevel4(source);
-        }
-        else if (identity.schemaLevel === 5) {
-            sourceFacts = validateSchemaLevel5(source);
-        }
-        else if (identity.schemaLevel === 6) {
-            sourceFacts = validateSchemaLevel6(source);
-        }
-        else if (identity.schemaLevel === 7) {
-            sourceFacts = validateSchemaLevel7(source);
-        }
-        else if (identity.schemaLevel === 8) {
-            sourceFacts = validateSchemaLevel8(source);
-        }
-        else if (identity.schemaLevel === 9) {
-            sourceFacts = validateSchemaLevel9(source);
-        }
-        else if (identity.schemaLevel === 10) {
-            sourceFacts = validateSchemaLevel10(source);
-        }
-        else if (identity.schemaLevel === 11) {
-            sourceFacts = validateSchemaLevel11(source);
-        }
-        else if (identity.schemaLevel === 12) {
-            sourceFacts = validateSchemaLevel12(source);
-        }
-        else if (identity.schemaLevel === 13) {
-            sourceFacts = validateSchemaLevel13(source);
-        }
-        else if (identity.schemaLevel === 14) {
-            sourceFacts = validateSchemaLevel14(source);
-        }
-        else {
-            sourceFacts = validateSchemaLevel15(source);
-        }
+        const sourceFacts: SchemaFacts = SCHEMA_VALIDATORS[identity.schemaLevel](source);
         if (options.readOnly) {
             closeBestEffort(source);
             return recoveryResult(incompatibleVersionProblem(identity.schemaLevel));
@@ -455,86 +405,13 @@ export async function openWorkspaceDataWithMigrations(
             while (schemaLevel < CURRENT_SCHEMA_LEVEL) {
                 maintenance.exec('BEGIN IMMEDIATE');
                 try {
-                    if (schemaLevel === 1) {
-                        validateSchemaLevel1(maintenance);
-                        migrateLevel1To2(maintenance);
-                        validateSchemaLevel2(maintenance);
+                    if (!isMigratableSchemaLevel(schemaLevel)) {
+                        throw new SchemaValidationError('database-corrupt');
                     }
-                    else if (schemaLevel === 2) {
-                        validateSchemaLevel2(maintenance);
-                        migrateLevel2To3(maintenance);
-                        validateSchemaLevel3(maintenance);
-                    }
-                    else if (schemaLevel === 3) {
-                        validateSchemaLevel3(maintenance);
-                        migrateLevel3To4(maintenance);
-                        validateSchemaLevel4(maintenance);
-                    }
-                    else if (schemaLevel === 4) {
-                        validateSchemaLevel4(maintenance);
-                        migrateLevel4To5(maintenance);
-                        validateSchemaLevel5(maintenance);
-                    }
-                    else if (schemaLevel === 5) {
-                        validateSchemaLevel5(maintenance);
-                        migrateLevel5To6(maintenance);
-                        validateSchemaLevel6(maintenance);
-                    }
-                    else if (schemaLevel === 6) {
-                        validateSchemaLevel6(maintenance);
-                        migrateLevel6To7(maintenance);
-                        validateSchemaLevel7(maintenance);
-                    }
-                    else if (schemaLevel === 7) {
-                        validateSchemaLevel7(maintenance);
-                        migrateLevel7To8(maintenance);
-                        validateSchemaLevel8(maintenance);
-                    }
-                    else if (schemaLevel === 8) {
-                        validateSchemaLevel8(maintenance);
-                        migrateLevel8To9(maintenance);
-                        validateSchemaLevel9(maintenance);
-                    }
-                    else if (schemaLevel === 9) {
-                        validateSchemaLevel9(maintenance);
-                        migrateLevel9To10(maintenance);
-                        validateSchemaLevel10(maintenance);
-                    }
-                    else if (schemaLevel === 10) {
-                        validateSchemaLevel10(maintenance);
-                        migrateLevel10To11(maintenance);
-                        validateSchemaLevel11(maintenance);
-                    }
-                    else if (schemaLevel === 11) {
-                        validateSchemaLevel11(maintenance);
-                        migrateLevel11To12(maintenance);
-                        validateSchemaLevel12(maintenance);
-                    }
-                    else if (schemaLevel === 12) {
-                        validateSchemaLevel12(maintenance);
-                        migrateLevel12To13(maintenance);
-                        validateSchemaLevel13(maintenance);
-                    }
-                    else if (schemaLevel === 13) {
-                        validateSchemaLevel13(maintenance);
-                        migrateLevel13To14(maintenance);
-                        validateSchemaLevel14(maintenance);
-                    }
-                    else if (schemaLevel === 14) {
-                        validateSchemaLevel14(maintenance);
-                        migrateLevel14To15(maintenance);
-                        validateSchemaLevel15(maintenance);
-                    }
-                    else if (schemaLevel === 15) {
-                        validateSchemaLevel15(maintenance);
-                        migrateLevel15To16(maintenance);
-                        validateSchemaLevel16(maintenance);
-                    }
-                    else {
-                        validateSchemaLevel16(maintenance);
-                        migrateLevel16To17(maintenance);
-                        validateSchemaLevel17(maintenance);
-                    }
+                    const step = schemaLadderStep(schemaLevel);
+                    step.validateSource(maintenance);
+                    step.migrate(maintenance);
+                    step.validateTarget(maintenance);
                     if ((maintenance.prepare('PRAGMA foreign_key_check').all() as unknown[]).length !== 0) {
                         throw new SchemaValidationError('database-corrupt');
                     }

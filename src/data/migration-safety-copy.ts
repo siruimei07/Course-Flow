@@ -87,7 +87,7 @@ export type MigrationRollbackTargetV1 = Readonly<{
 
 export type MigrationSafetyCopyBuildBindingV1 = Readonly<{
     createdByAppBuildId: string;
-    rollbackTarget: MigrationRollbackTargetV1;
+    rollbackTarget: MigrationRollbackTargetV1 | null;
     clock?: Readonly<{now(): string}>;
 }>;
 
@@ -105,7 +105,7 @@ export type MigrationSafetyCopyMetadataV1 = Readonly<{
     closedDataSlotDigest: string;
     sourceDataSlotProvenance: RestoreDataSlotStableIdentityV1;
     createdByAppBuildId: string;
-    rollbackTarget: MigrationRollbackTargetV1;
+    rollbackTarget: MigrationRollbackTargetV1 | null;
     replacesMigrationSafetyCopyId: string | null;
     metadataDigest: string;
 }>;
@@ -216,6 +216,17 @@ function metadataDigest(value: Record<string, unknown>): string {
 }
 
 /**
+ * Accepts a missing rollback target, which is what a build without a published compatible
+ * predecessor has. The safety copy is still created and verified; only the rollback offer depends
+ * on a target being present.
+ * @param {unknown} value - Candidate target or null.
+ * @return {MigrationRollbackTargetV1 | null} Validated target, or null when none is bound.
+ */
+function optionalRollbackTarget(value: unknown): MigrationRollbackTargetV1 | null {
+    return value === null ? null : requireRollbackTarget(value);
+}
+
+/**
  * Requires one exact rollback target without accepting arbitrary platform maps.
  * @param {unknown} value - Candidate target.
  * @return {MigrationRollbackTargetV1} Validated target.
@@ -318,7 +329,7 @@ function requireMetadata(bytes: Buffer): MigrationSafetyCopyMetadataV1 {
         || metadataDigest(value) !== value.metadataDigest) {
         throw new Error('Migration safety metadata is invalid');
     }
-    const rollbackTarget = requireRollbackTarget(value.rollbackTarget);
+    const rollbackTarget = optionalRollbackTarget(value.rollbackTarget);
     const sourceDataSlotProvenance = requireRestoreDataSlotStableIdentity(
         value.sourceDataSlotProvenance,
     );
@@ -627,9 +638,10 @@ function isSameMigration(copy: VerifiedCopy, input: EnsureMigrationSafetyCopyInp
 export async function ensureMigrationSafetyCopy(
     input: EnsureMigrationSafetyCopyInput,
 ): Promise<MigrationSafetyCopyMetadataV1> {
-    requireRollbackTarget(input.binding.rollbackTarget);
+    const rollbackTarget = optionalRollbackTarget(input.binding.rollbackTarget);
     if (!isBoundedString(input.binding.createdByAppBuildId)
-        || input.binding.createdByAppBuildId === input.binding.rollbackTarget.appBuildId
+        || (rollbackTarget !== null
+            && input.binding.createdByAppBuildId === rollbackTarget.appBuildId)
         || !isCanonicalUuid(input.workspaceId)
         || input.sourceSchemaLevel < 1
         || input.sourceSchemaLevel >= input.targetSchemaLevel
@@ -689,7 +701,7 @@ export async function ensureMigrationSafetyCopy(
         closedDataSlotDigest: digest.sha256,
         sourceDataSlotProvenance,
         createdByAppBuildId: input.binding.createdByAppBuildId,
-        rollbackTarget: requireRollbackTarget(input.binding.rollbackTarget),
+        rollbackTarget,
         replacesMigrationSafetyCopyId: existing?.metadata.migrationSafetyCopyId ?? null,
     };
     const metadata: MigrationSafetyCopyMetadataV1 = Object.freeze({

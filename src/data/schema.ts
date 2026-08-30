@@ -4,6 +4,17 @@
 
 export { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL } from './schema/base';
 export {
+    SCHEMA_MIGRATIONS,
+    SCHEMA_VALIDATORS,
+    isMigratableSchemaLevel,
+    schemaLadderStep,
+    type MigratableSchemaLevel,
+    type SchemaLadderStep,
+    type SchemaMigration,
+    type SchemaValidator,
+} from './schema/ladder';
+export type { SchemaLevel } from './schema/tables';
+export {
     SchemaValidationError,
     type SchemaFacts,
     type SchemaValidationFailureReason,

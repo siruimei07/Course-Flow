@@ -150,7 +150,7 @@
 | `MigrationSafetyCopy` | 前向 migration 写入前的最近一份关闭 DATA 副本；不是 BackupSet/RestoreSafetySet，不包含 Library 文件 |
 | `MigrationRollbackSession` | 绑定 safety copy、当前迁移后数据、精确 source/target build、影响预览、handoff、阶段和终态的可恢复长操作；不等于 RestoreSession |
 | `ApplicationReleaseDescriptor` | 当前安装构建的不可变逻辑投影：application identity、release/AppBuildId、source commit、平台/架构、运行时与协议/格式支持范围；不是更新 feed，技术序列化由 ADR-10 决定 |
-| `MigrationSafetyCopyStatus` | 最近一份 safety copy 的只读投影：身份、源 revision/schema、创建时刻、大小、验证状态、exact rollback release 与是否可删除/回退；不暴露路径或 DataSlot |
+| `MigrationSafetyCopyStatus` | 最近一份 safety copy 的只读投影：身份、源 revision/schema、创建时刻、大小、验证状态、exact rollback release（可为 null）与是否可删除/回退；未绑定回退版本时投影明确为 null 且不提供回退动作；不暴露路径或 DataSlot |
 | `MigrationRollbackPreview` | 绑定 safety copy、当前 migrated DATA、source/target AppBuildId、结构化数据影响、Library 不回退说明与确认令牌的高影响预览 |
 | `MigrationRollbackStatus` | 会话阶段、source/target build、当前 AppBuildId 分类、allowed actions、dataEffect 与终态的只读投影；不暴露物理交换细节 |
 | `ImpactPreview` | 基于一个 revision 对高影响意图的影响、选择、警告和确认令牌 |
@@ -878,7 +878,7 @@ unknown-weight、incomplete-score、invalid-scale、coverage-insufficient、sour
 21. RestoreSafetySet 至少保留到恢复后首份常规快照发布并验证成功；未配置备份时保留为可见的独立本地恢复点，直到用户明确清理。恢复成功后的临时清理失败只进入 cleanup-pending，不回滚成功；未知、身份不匹配或无法验证的条目不得自动删除。
 22. MVP 不自动扫描并选择“最新云盘副本”，不双向合并不同副本。checkpoint 候选禁止携带会改变活动 DATA/Library 闭包的 disk-applied、reconciliation、root cutover、recovery-file 等物理未收敛操作；纯 planned/waiting-decision 记录可以随数据库保存。本次 backup operation 在副本中只允许处于没有 source/final 效果、最多存在 operation-owned staging 的 queued 状态。恢复后所有目的地能力、外部路径/证据和 backup/cleanup operation 均失效，只能重配、重验、重新决定或取消，绝不盲目重放；未知 operation/follow-up 版本不兼容。
 23. RestoreSession 与 MigrationRollbackSession 是不同封闭协议，但共享 PROTECT 对 ActivityControlRoot 的唯一所有权；任一 nonterminal DATA activation 存在时拒绝开始另一项，不嵌套、不并行。
-24. PROTECT 只为当前已验证 MigrationSafetyCopy 创建 rollback preview；preview 必须绑定 copy ID/WorkspaceId/source revision/schema/digest、当前 migrated DATA identity/revision/schema/fingerprint、LibraryRootId/RootGeneration 或显式 unavailable、source/target AppBuildId 与影响摘要。任一变化返回 impact-changed。
+24. PROTECT 只为当前已验证且绑定了 exact rollback target 的 MigrationSafetyCopy 创建 rollback preview；副本的 rollback target 为 null 时不存在可回退版本，PROTECT 不创建 preview，Shell 只提供查看与显式删除。preview 必须绑定 copy ID/WorkspaceId/source revision/schema/digest、当前 migrated DATA identity/revision/schema/fingerprint、LibraryRootId/RootGeneration 或显式 unavailable、source/target AppBuildId 与影响摘要。任一变化返回 impact-changed。
 25. preview 必须明确迁移后结构化变化丢失且不合并、真实 Library 文件保持原位并重新扫描，以及唯一 target version/tag/artifact；不得提供任意旧版本选择。
 26. confirm 后进入 maintenance，停止普通 DATA/LIBRARY mutation、backup 和新 preview，使旧 lease/epoch 失效；PROTECT 只有在 DATA 证明 safety/current slots 完整、本地同卷和峰值容量足够后才允许达到 rollback checkpoint。
 27. MigrationRollback handoff 是 bounded/versioned/canonical 正确性状态，只保存 session/operation/build/copy/slot identity、schema/revision/digest、phase、typed physical evidence 与 receipt；不得保存真实路径、任意 map、message、stack、raw error 或事件历史。
@@ -944,7 +944,7 @@ destination-unset、permission、snapshot-incomplete、snapshot-corrupt、snapsh
 9. Restore activation 前必须完成写入 drain、未决 statement/iterator/backup/validator 释放、SQLite WAL/sidecar 状态检查、checkpoint 与关闭；重新打开后必须重新验证格式、完整性、WorkspaceId/Revision 和 RestoreSession 回执。任何持有旧 epoch 的资源不得提交到新活动数据。
 10. ActivityControlRoot/DataSlotsParent 必须由 PLATFORM 证明为受支持本地位置且同卷；unknown/remote、路径重解析越界或不能证明同卷时停止，不选择 fallback。
 11. current schema 无需 migration 时不得创建 safety copy；supported old schema 在任何 schema write 前必须先产生原先不存在、已 checkpoint/关闭/sync、重新打开并完整验证的 copy。
-12. MigrationSafetyCopy metadata 必须封闭且版本化，至少绑定 copy ID、WorkspaceId/source revision/schema、创建时间/size、closed-slot digest、createdBy AppBuildId 与 exact rollback target；摘要只识别精确副本/损坏，不声明认证。
+12. MigrationSafetyCopy metadata 必须封闭且版本化，至少绑定 copy ID、WorkspaceId/source revision/schema、创建时间/size、closed-slot digest、createdBy AppBuildId 与 exact rollback target（当前构建没有已发布的兼容前置版本时该字段为 null，副本本身仍然创建并验证）；摘要只识别精确副本/损坏，不声明认证。
 13. 创建新 safety copy 期间旧 copy 保持；只有新 copy 和 metadata 完整验证/登记成功后才能替换旧 copy。每个数据根最多一份，不定时/按空间自动删除；用户删除失败保持原 copy。
 14. schema migration 仍只按 ADR-04 `vN → vN+1` 逐级前向执行；每级中断以已提交 user_version 继续，不跳级、reverse、dual-write、旧 schema adapter、删除重建或自动 merge。
 15. MigrationRollback 的 safety/current slot 操作使用同卷、write-ahead intent 后 owner observation；checkpoint 后 current migrated slot 保持为 operation-owned rollback sibling，直到 target success 或 source cancel 完整收敛。
@@ -1403,7 +1403,7 @@ planned -> prepared -> armed -> awaiting-target-build
 1. 安装器只替换程序制品；应用按 FLOW-00 前四步验证 AppBuildId、稳定本地根和未终结 handoff。
 2. DATA 读取 application ID、current schema level、format/integrity 和 release descriptor 支持范围。future/unknown、只读但需要 migration 或不兼容 build 停止，不 reset/猜读。
 3. current schema 无需 migration 时直接重开，不创建 MigrationSafetyCopy。
-4. supported old schema 需要 migration 时，DATA 在任何 schema write 前创建原先不存在、已 checkpoint/关闭/sync 的 safety copy，重开验证 WorkspaceId/source Revision/schema/size/digest，并绑定 exact rollback target。
+4. supported old schema 需要 migration 时，DATA 在任何 schema write 前创建原先不存在、已 checkpoint/关闭/sync 的 safety copy，重开验证 WorkspaceId/source Revision/schema/size/digest，并在当前构建携带已发布兼容前置版本时绑定该 exact rollback target；没有这样的版本时绑定 null，副本照常创建与验证，migration 不因此停止。
 5. 新 copy 完整登记后才替换旧 copy；逐级执行 ADR-04 forward migration。每级失败/中断保持最后已提交 user_version 与 safety copy，重启按证据继续或 recovery。
 6. current DATA 迁移完成后关闭/重开，验证 application/schema/WorkspaceId/Revision/integrity；LIBRARY 对现存真实根执行必要全量扫描/FileId 对账，再完成 FLOW-00。
 

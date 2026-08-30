@@ -177,7 +177,9 @@ export function migrationSafetyCopyProjection(
         sourceSchemaLevel: status.metadata.sourceSchemaLevel,
         createdAt: status.metadata.createdAt,
         byteSize: status.metadata.byteSize,
-        target: migrationRollbackTargetProjection(status.metadata.rollbackTarget),
+        target: status.metadata.rollbackTarget === null
+            ? null
+            : migrationRollbackTargetProjection(status.metadata.rollbackTarget),
     });
 }
 

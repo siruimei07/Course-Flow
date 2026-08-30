@@ -59,11 +59,12 @@ export function tryRestoreMigrationRollbackBinding(host: WorkspaceHost, boot: Mi
             return;
         }
         const safetyCopy = migrationSafetyCopyProjection(safety);
-        if (safetyCopy.kind !== 'verified') {
+        // A rollback can only be in flight for a copy that bound an exact target to install.
+        if (safetyCopy.kind !== 'verified' || safetyCopy.target === null) {
             return;
         }
         host.setMigrationRollbackBinding(Object.freeze({
-            safetyCopy,
+            safetyCopy: Object.freeze({...safetyCopy, target: safetyCopy.target}),
             currentData: Object.freeze({
                 workspaceId: facts.currentData.workspaceId,
                 schemaLevel: facts.currentData.schemaLevel,

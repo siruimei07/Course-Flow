@@ -69,13 +69,11 @@ export function migrationOpenOptions(
     return Object.freeze({
         readOnly: options.readOnly,
         migrationFailpoint: options.migrationFailpoint,
-        migrationSafetyCopy: options.migrationRollbackTarget
-            ? Object.freeze({
-                createdByAppBuildId: appBuildId,
-                rollbackTarget: options.migrationRollbackTarget,
-                clock: options.clock,
-            })
-            : undefined,
+        migrationSafetyCopy: Object.freeze({
+            createdByAppBuildId: appBuildId,
+            rollbackTarget: options.migrationRollbackTarget ?? null,
+            clock: options.clock,
+        }),
     });
 }
 
