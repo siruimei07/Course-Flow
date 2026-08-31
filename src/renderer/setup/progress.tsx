@@ -150,7 +150,7 @@ export function SetupComplete(props: Readonly<{
                 >你的 Today 已经可以使用</h2>
                 <p>{currentTerm === null
                     ? '当前学期'
-                    : `${currentTerm.name} · ${currentTerm.startDate} – ${currentTerm.endDate}`}</p>
+                    : `${currentTerm.name} · ${currentTerm.startDate} - ${currentTerm.endDate}`}</p>
             </div>
             <dl className="setup-fact-list">
                 <div><dt>当前学期</dt><dd>{currentTerm === null ? '缺失' : '完成'}</dd></div>

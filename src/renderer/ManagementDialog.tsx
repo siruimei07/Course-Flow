@@ -439,7 +439,7 @@ export function ManagementFacts(props: Readonly<{
         ? projection.terms.map(term => ({
             id: term.termId,
             title: term.name,
-            detail: `${term.startDate} – ${term.endDate} · ${term.timeZone}`,
+            detail: `${term.startDate} - ${term.endDate} · ${term.timeZone}`,
             note: term.termId === currentTerm?.termId
                 ? '当前学期'
                 : term.archived ? '已归档' : '历史',
@@ -448,14 +448,14 @@ export function ManagementFacts(props: Readonly<{
             ? courses.map(course => ({
                 id: course.courseId,
                 title: `${course.code} · ${course.name}`,
-                detail: `${course.teachingRange.startDate} – ${course.teachingRange.endDate}`,
+                detail: `${course.teachingRange.startDate} - ${course.teachingRange.endDate}`,
                 note: `${course.meetings.length} 条课节`,
             }))
             : props.surface === 'meeting'
                 ? courses.flatMap(course => course.meetings.map(meeting => ({
                     id: meeting.meetingSeriesId,
                     title: `${course.code} · ${meeting.type.code}`,
-                    detail: `${weekdayNames[meeting.weekday]} ${meeting.localStart}–${meeting.localEnd}`,
+                    detail: `${weekdayNames[meeting.weekday]} ${meeting.localStart}-${meeting.localEnd}`,
                     note: meeting.location.kind === 'tba' ? 'TBA' : meeting.location.value,
                 })))
                 : props.surface === 'task'
@@ -471,7 +471,7 @@ export function ManagementFacts(props: Readonly<{
                         .map(range => ({
                             id: range.holidayRangeId,
                             title: range.name,
-                            detail: `${range.startDate} – ${range.endDate}`,
+                            detail: `${range.startDate} - ${range.endDate}`,
                             note: '当前学期',
                         }));
 

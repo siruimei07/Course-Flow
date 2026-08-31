@@ -1,6 +1,15 @@
 import type { ReactElement } from 'react';
 import type { WorkspaceNavigationId } from '../navigation';
-import { meetingClassificationNames, meetingItemId, meetingLocationLabel, taskClassificationNames, taskDeadlineLabel, taskItemId, taskOccurrenceActionLabels } from './shared';
+import {
+    meetingClassificationNames,
+    meetingItemId,
+    meetingLocationLabel,
+    taskClassificationNames,
+    taskDeadlineLabel,
+    taskItemId,
+    taskOccurrenceActionLabels,
+    taskSeverity,
+} from './shared';
 import type { TaskOccurrenceAction } from '../task-occurrence-actions';
 import type { TaskActionPresentation, WorkspacePageContentProps } from '../workspace-pages';
 import { PlanMeetingProjection, PlanTaskProjection } from '../../shared/workspace-plan-contract';
@@ -24,6 +33,7 @@ export type EmptyStateProps = Readonly<{
     action: EmptyStateAction;
     secondaryAction?: EmptyStateAction;
     headingLevel?: 'h2' | 'h3' | 'h4';
+    compact?: boolean;
 }>;
 
 /**
@@ -33,20 +43,26 @@ export type EmptyStateProps = Readonly<{
  * @return {ReactElement} Page header.
  */
 export function PageHeader(props: Readonly<{
-    eyebrow: string;
     headingId: string;
     title: string;
     context: string;
+    facts?: ReactElement;
     actions?: ReactElement;
+    variant?: string;
 }>): ReactElement {
     return (
-        <header className="workspace-page-header">
-            <p className="eyebrow">{props.eyebrow}</p>
+        <header className={props.variant === undefined
+            ? 'workspace-page-header'
+            : `workspace-page-header workspace-page-header--${props.variant}`}
+        >
             <h1
                 id={props.headingId}
                 tabIndex={-1}
             >{props.title}</h1>
             <p className="page-context">{props.context}</p>
+            {props.facts === undefined ? null : (
+                <div className="workspace-page-facts">{props.facts}</div>
+            )}
             {props.actions === undefined ? null : (
                 <div className="workspace-page-actions">{props.actions}</div>
             )}
@@ -83,7 +99,7 @@ export function SetupIncompleteNotice(props: Readonly<{ onContinueSetup: () => v
  * Shows the real post-Term route without treating an inapplicable PLAN query as a failure.
  *
  * @param {Object} props Historical setup facts and executable navigation actions.
- * @return {ReactElement} Completed-Term status nested inside the white emphasis card.
+ * @return {ReactElement} Completed-Term status on the single dark surface.
  */
 export function EndedTermState(props: Readonly<{
     onCreateTerm: () => void;
@@ -102,26 +118,27 @@ export function EndedTermState(props: Readonly<{
     return (
         <section
             aria-labelledby="ended-term-title"
-            className="content-card emphasis-card term-ended-card"
+            className="content-card dark-card term-ended-card"
         >
-            <div className="emphasis-layer">
-                <p className="status-label">历史状态</p>
-                <h2 id="ended-term-title">学期已结束</h2>
-                <p role="status">
-                    {latestTerm?.name ?? '最近学期'} 已结束；日期进度保持 100%，历史课程和课节仍保留。
-                </p>
-                <div className="term-ended-actions">
-                    <button
-                        className="primary-action"
-                        onClick={props.onCreateTerm}
-                        type="button"
-                    >创建新学期</button>
-                    <button
-                        className="secondary-action"
-                        onClick={props.onViewHistory}
-                        type="button"
-                    >查看历史课程</button>
-                </div>
+            <p
+                className="status-label"
+                data-severity="neutral"
+            >历史状态</p>
+            <h2 id="ended-term-title">学期已结束</h2>
+            <p role="status">
+                {latestTerm?.name ?? '最近学期'} 已结束；日期进度保持 100%，历史课程和课节仍保留。
+            </p>
+            <div className="term-ended-actions">
+                <button
+                    className="primary-action"
+                    onClick={props.onCreateTerm}
+                    type="button"
+                >创建新学期</button>
+                <button
+                    className="secondary-action"
+                    onClick={props.onViewHistory}
+                    type="button"
+                >查看历史课程</button>
             </div>
         </section>
     );
@@ -139,10 +156,10 @@ export function PlanUnavailable(props: WorkspacePageContentProps & Readonly<{
 }>): ReactElement {
     const reason = props.planProblem
         ?? (props.setupIncomplete
-            ? '最低设置事实尚未齐全，因此目前没有可读取的统一计划投影。'
+            ? '首次设置还没填完，所以现在读不到计划。'
             : props.setup.currentTerm === null
-                ? '当前没有适用的 Current Term，因此没有可读取的统一计划投影。'
-                : '统一计划投影未返回，因此不能判断是否真的没有事项。');
+                ? '现在没有进行中的学期，所以没有可显示的计划。'
+                : '这次没能读到计划，所以无法判断今天到底有没有事。');
     let action = buttonAction(props.fallbackActionLabel, () => props.onNavigate(props.fallbackPage));
 
     if (props.onRetryPlan) {
@@ -179,7 +196,7 @@ export function EmptyState(props: EmptyStateProps): ReactElement {
     return (
         <div
             aria-labelledby={props.id}
-            className="empty-state"
+            className={props.compact === true ? 'empty-state empty-state--compact' : 'empty-state'}
             role="group"
         >
             <Heading id={props.id}>{props.title}</Heading>
@@ -264,7 +281,10 @@ export function TaskItem(props: Readonly<{
             data-item-id={itemId}
             tabIndex={-1}
         >
-            <span className="status-label">{taskClassificationNames[task.classification]}</span>
+            <span
+                className="status-label"
+                data-severity={taskSeverity(task.classification)}
+            >{taskClassificationNames[task.classification]}</span>
             <strong>{task.occurrence.title}</strong>
             <span>{task.courseCode} · {task.occurrence.size === 'small' ? '小任务' : '大任务'}</span>
             <span>{taskDeadlineLabel(task.occurrence.deadline)}</span>
@@ -306,10 +326,16 @@ export function MeetingItem(props: Readonly<{ meeting: PlanMeetingProjection }>)
     const { meeting } = props;
 
     return (
-        <li data-item-id={meetingItemId(meeting)}>
-            <span className="status-label">{meetingClassificationNames[meeting.classification]}</span>
+        <li
+            data-current={meeting.classification === 'in-progress' ? 'true' : undefined}
+            data-item-id={meetingItemId(meeting)}
+        >
+            <span
+                className="status-label"
+                data-severity="neutral"
+            >{meetingClassificationNames[meeting.classification]}</span>
             <strong>{meeting.courseCode} · {meeting.occurrence.type}</strong>
-            <span>{meeting.occurrence.localStart}–{meeting.occurrence.localEnd}</span>
+            <span>{meeting.occurrence.localStart}-{meeting.occurrence.localEnd}</span>
             <span>{meetingLocationLabel(meeting.occurrence.location)}</span>
         </li>
     );

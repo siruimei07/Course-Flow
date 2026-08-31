@@ -259,6 +259,58 @@ test('course cards stay compact instead of filling half the Courses page', () =>
     );
 });
 
+test('the stylesheet keeps fixed type steps, three radius tiers and themed browser surfaces', () => {
+    const rule = (selector: string): string => {
+        const start = styles.indexOf(`${selector} {`);
+        assert.ok(start >= 0, `${selector} must exist`);
+        return styles.slice(start, styles.indexOf('}', start) + 1);
+    };
+
+    // D12: product UI uses a fixed rem scale; only spacing may stay fluid.
+    assert.doesNotMatch(styles, /font-size:\s*clamp\(/);
+
+    // D13: exactly three corner-radius tiers, declared once and explained in place.
+    const root = styles.slice(0, styles.indexOf('}'));
+    assert.match(root, /--radius-container:/);
+    assert.match(root, /--radius-piece:/);
+    assert.match(root, /--radius-pill:/);
+    assert.match(styles, /Three corner-radius tiers and nothing else/);
+    const radii = new Set(
+        (styles.match(/border-radius:\s*[^;]+;/g) ?? [])
+            .map(declaration => declaration.replace(/\s+/g, ' ').trim()),
+    );
+    const allowed = new Set([
+        'border-radius: var(--radius-container);',
+        'border-radius: var(--radius-piece);',
+        'border-radius: var(--radius-pill);',
+        'border-radius: 0;',
+        'border-radius: 50%;',
+        'border-radius: inherit;',
+    ]);
+    assert.deepEqual(
+        [...radii].filter(value => !allowed.has(value)),
+        [],
+        'every corner radius must come from the three declared tiers',
+    );
+
+    // D14: a coloured callout edge never grows into a bar.
+    assert.match(rule('.status-banner'), /border-left:\s*1px solid/);
+
+    // D16: the surfaces the browser would otherwise theme for us.
+    assert.match(styles, /::selection\s*\{[^}]*background:/s);
+    assert.match(styles, /caret-color:/);
+    assert.match(rule('.today-headline-stats dd'), /font-variant-numeric:\s*tabular-nums;/);
+
+    // The Today grid is the four-column layout the spec fixes, on the existing breakpoints.
+    assert.match(
+        rule('.workspace-grid--today'),
+        /grid-template-columns:\s*repeat\(4, minmax\(0, 1fr\)\);/,
+    );
+    assert.match(rule('.workspace-grid--today'), /gap:\s*12px;/);
+    assert.match(styles, /@media \(max-width: 1080px\)/);
+    assert.match(styles, /@media \(max-width: 820px\)/);
+});
+
 test('Task feedback reserves scroll space while keeping the restored control centered', () => {
     const html = renderToStaticMarkup(createElement(WorkspaceShell, {
         activePage: 'tasks',

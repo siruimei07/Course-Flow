@@ -897,9 +897,9 @@ export function MeetingForm(props: Readonly<{
             const conflicts = outcome.problem.details.warnings
                 .slice(0, 5)
                 .map(warning => (
-                    `${warning.proposed.courseCode} ${warning.proposed.startInstant}–`
+                    `${warning.proposed.courseCode} ${warning.proposed.startInstant}-`
                     + `${warning.proposed.endInstant} / ${warning.existing.courseCode} `
-                    + `${warning.existing.startInstant}–${warning.existing.endInstant}`
+                    + `${warning.existing.startInstant}-${warning.existing.endInstant}`
                 ))
                 .join('\n');
             const shouldContinue = globalThis.confirm(

@@ -44,7 +44,6 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
                 context={historicalMode
                     ? `${displayedCourses.length} 门历史课程`
                     : `${termContext(setup)} · ${displayedCourses.length} 门课程`}
-                eyebrow="Courses"
                 headingId="courses-page-title"
                 title="课程"
             />
@@ -123,7 +122,7 @@ export function CourseCard(props: Readonly<{
             <dl className="course-facts">
                 <div>
                     <dt>教学范围</dt>
-                    <dd>{course.teachingRange.startDate} – {course.teachingRange.endDate}</dd>
+                    <dd>{course.teachingRange.startDate} - {course.teachingRange.endDate}</dd>
                 </div>
                 <div>
                     <dt>Section</dt>
@@ -186,9 +185,9 @@ export function MeetingRuleItem(props: Readonly<{ meeting: MeetingSeriesProjecti
     return (
         <li data-item-id={meeting.meetingSeriesId}>
             <strong>{meeting.type.code} · {meeting.type.name}</strong>
-            <span>{weekdayNames[meeting.weekday]} {meeting.localStart}–{meeting.localEnd}</span>
+            <span>{weekdayNames[meeting.weekday]} {meeting.localStart}-{meeting.localEnd}</span>
             <span>{meetingLocationLabel(meeting.location)}</span>
-            <small>{meeting.effectiveRange.startDate} – {meeting.effectiveRange.endDate}</small>
+            <small>{meeting.effectiveRange.startDate} - {meeting.effectiveRange.endDate}</small>
         </li>
     );
 }

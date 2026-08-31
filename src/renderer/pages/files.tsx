@@ -16,7 +16,6 @@ export function FilesPage(props: WorkspacePageContentProps): ReactElement {
         >
             <PageHeader
                 context={termContext(props.setup)}
-                eyebrow="Files"
                 headingId="files-page-title"
                 title="文件"
             />

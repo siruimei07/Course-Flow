@@ -58,6 +58,16 @@ export const calendarWeekdayNames = [
     '星期六',
 ] as const;
 
+export const shortWeekdayNames = [
+    '周日',
+    '周一',
+    '周二',
+    '周三',
+    '周四',
+    '周五',
+    '周六',
+] as const;
+
 export const percentageFormatter = new Intl.NumberFormat('zh-CN', {
     style: 'percent',
     maximumFractionDigits: 0,
@@ -74,7 +84,7 @@ export function termContext(setup: SetupProjection): string {
         return '尚无当前学期';
     }
 
-    return `${setup.currentTerm.name} · ${setup.currentTerm.startDate} – ${setup.currentTerm.endDate}`;
+    return `${setup.currentTerm.name} · ${setup.currentTerm.startDate} - ${setup.currentTerm.endDate}`;
 }
 
 /**
@@ -299,4 +309,371 @@ export function todayGreetingTitle(plan: PlanProjection): string {
         greeting = '下午好';
     }
     return `${weekday}，${greeting}`;
+}
+
+/** Height of one visible hour row; mirrors `.calendar-time-grid` and `.today-timeline-grid`. */
+export const CALENDAR_HOUR_HEIGHT = 33;
+
+/** Default first visible hour; 2026-08-29 user instruction. */
+export const CALENDAR_DEFAULT_START_HOUR = 7;
+
+/** Default last visible hour boundary; 2026-08-29 user instruction. */
+export const CALENDAR_DEFAULT_END_HOUR = 22;
+
+export const CALENDAR_EVENT_MIN_HEIGHT = 30;
+
+export const CALENDAR_EVENT_MIN_DURATION = Math.ceil(
+    (CALENDAR_EVENT_MIN_HEIGHT * 60) / CALENDAR_HOUR_HEIGHT,
+);
+
+export type CalendarTimedPlacement = Readonly<{
+    date: string;
+    startMinute: number;
+    durationMinutes: number;
+    continuation: boolean;
+    item: PlanMeetingProjection | PlanTaskProjection;
+    overlapLane: number;
+    overlapLaneCount: number;
+}>;
+
+export type CalendarTimedPlacementSource = Omit<
+    CalendarTimedPlacement,
+    'overlapLane' | 'overlapLaneCount'
+>;
+
+/**
+ * Converts a minute count to its exact pixel offset inside the hour grid.
+ *
+ * Multiplying first keeps the result on integer arithmetic, so a whole number of hours
+ * renders as a whole number of pixels instead of a binary-float approximation.
+ *
+ * @param {number} minutes Minutes measured from the first visible hour.
+ * @return {number} Pixel offset inside the hour grid.
+ */
+export function calendarMinutePixels(minutes: number): number {
+    return (minutes * CALENDAR_HOUR_HEIGHT) / 60;
+}
+
+/**
+ * Chooses the visible hour band, widened only by items that fall outside it.
+ *
+ * The default band answers "when are classes"; an item scheduled outside it is a real
+ * fact, so the band grows to contain it rather than hiding it.
+ *
+ * @param {readonly CalendarTimedPlacement[]} placements Positioned timed items.
+ * @return {Readonly<{ startHour: number; endHour: number }>} Inclusive-exclusive hour band.
+ */
+export function calendarHourWindow(
+    placements: readonly CalendarTimedPlacement[],
+): Readonly<{ startHour: number; endHour: number }> {
+    let startHour = CALENDAR_DEFAULT_START_HOUR;
+    let endHour = CALENDAR_DEFAULT_END_HOUR;
+    for (const placement of placements) {
+        startHour = Math.min(startHour, Math.floor(placement.startMinute / 60));
+        endHour = Math.max(
+            endHour,
+            Math.ceil((placement.startMinute + placement.durationMinutes) / 60),
+        );
+    }
+    return Object.freeze({
+        startHour: Math.max(0, startHour),
+        endHour: Math.min(24, Math.max(endHour, startHour + 1)),
+    });
+}
+
+/**
+ * Converts existing timed PLAN items into date-lane placements without changing their meaning.
+ * Overnight Meetings are split at midnight so both visible date columns remain truthful.
+ *
+ * @param {readonly (PlanMeetingProjection | PlanTaskProjection)[]} items Timed PLAN items.
+ * @param {string} termZone Workspace-owned Calendar zone.
+ * @return {readonly CalendarTimedPlacement[]} Stable minute placements for the seven-day grid.
+ */
+export function calendarTimedPlacements(
+    items: readonly (PlanMeetingProjection | PlanTaskProjection)[],
+    termZone: string,
+): readonly CalendarTimedPlacement[] {
+    const placements = items.flatMap(item => {
+        if (item.kind === 'task') {
+            if (item.occurrence.deadline.kind !== 'timed') {
+                return [];
+            }
+            const local = localInstantParts(item.occurrence.deadline.instant, termZone);
+            return [{
+                date: local.date,
+                startMinute: local.minute,
+                durationMinutes: 30,
+                continuation: false,
+                item,
+            }];
+        }
+
+        const startMinute = localTimeMinute(item.occurrence.localStart);
+        const endMinute = localTimeMinute(item.occurrence.localEnd);
+        const totalDuration = endMinute
+            + item.occurrence.endDayOffset * 1_440
+            - startMinute;
+        const firstDuration = Math.min(totalDuration, 1_440 - startMinute);
+        const placements: CalendarTimedPlacementSource[] = [{
+            date: item.occurrence.date,
+            startMinute,
+            durationMinutes: firstDuration,
+            continuation: false,
+            item,
+        }];
+        const remainingDuration = totalDuration - firstDuration;
+        if (remainingDuration > 0) {
+            placements.push({
+                date: addCalendarDays(item.occurrence.date, 1),
+                startMinute: 0,
+                durationMinutes: remainingDuration,
+                continuation: true,
+                item,
+            });
+        }
+        return placements;
+    });
+    return assignCalendarOverlapLanes(placements);
+}
+
+/**
+ * Assigns non-overlapping visual lanes to each connected overlap cluster.
+ * @param {readonly CalendarTimedPlacementSource[]} placements Exact date/minute placements.
+ * @return {readonly CalendarTimedPlacement[]} Placements with deterministic lane geometry.
+ */
+export function assignCalendarOverlapLanes(
+    placements: readonly CalendarTimedPlacementSource[],
+): readonly CalendarTimedPlacement[] {
+    const laneByPlacement = new Map<CalendarTimedPlacementSource, Readonly<{
+        lane: number;
+        laneCount: number;
+    }>>();
+    const dates = [...new Set(placements.map(placement => placement.date))];
+
+    for (const date of dates) {
+        const sorted = placements.filter(placement => placement.date === date).toSorted((first, second) => (
+            first.startMinute - second.startMinute
+            || second.durationMinutes - first.durationMinutes
+            || planItemId(first.item).localeCompare(planItemId(second.item))
+        ));
+        let cluster: CalendarTimedPlacementSource[] = [];
+        let clusterEnd = -1;
+
+        const flushCluster = (): void => {
+            const laneEnds: number[] = [];
+            const assigned = cluster.map(placement => {
+                const availableLane = laneEnds.findIndex(endMinute => endMinute <= placement.startMinute);
+                const lane = availableLane === -1 ? laneEnds.length : availableLane;
+                laneEnds[lane] = placement.startMinute + Math.max(
+                    placement.durationMinutes,
+                    CALENDAR_EVENT_MIN_DURATION,
+                );
+                return { placement, lane };
+            });
+            for (const value of assigned) {
+                laneByPlacement.set(value.placement, {
+                    lane: value.lane,
+                    laneCount: laneEnds.length,
+                });
+            }
+            cluster = [];
+            clusterEnd = -1;
+        };
+
+        for (const placement of sorted) {
+            if (cluster.length > 0 && placement.startMinute >= clusterEnd) {
+                flushCluster();
+            }
+            cluster.push(placement);
+            clusterEnd = Math.max(
+                clusterEnd,
+                placement.startMinute + Math.max(
+                    placement.durationMinutes,
+                    CALENDAR_EVENT_MIN_DURATION,
+                ),
+            );
+        }
+        if (cluster.length > 0) {
+            flushCluster();
+        }
+    }
+
+    return placements.map(placement => {
+        const lane = laneByPlacement.get(placement) ?? { lane: 0, laneCount: 1 };
+        return {
+            ...placement,
+            overlapLane: lane.lane,
+            overlapLaneCount: lane.laneCount,
+        };
+    });
+}
+
+/**
+ * Builds the stable labels for one visible hour band.
+ *
+ * @param {number} startHour First visible hour.
+ * @param {number} endHour Exclusive last visible hour.
+ * @return {readonly string[]} One label per hour.
+ */
+export function calendarHourLabels(
+    startHour = 0,
+    endHour = 24,
+): readonly string[] {
+    return Array.from(
+        { length: Math.max(0, endHour - startHour) },
+        (_value, offset) => `${String(startHour + offset).padStart(2, '0')}:00`,
+    );
+}
+
+/**
+ * Formats one minute-of-day as a local clock.
+ *
+ * @param {number} minute Minute offset from midnight.
+ * @return {string} HH:mm label.
+ */
+export function minuteLabel(minute: number): string {
+    const hour = Math.floor(minute / 60);
+    return `${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+}
+
+/**
+ * Counts whole calendar days between two canonical LocalDates.
+ *
+ * @param {string} from Earlier canonical LocalDate.
+ * @param {string} to Later canonical LocalDate.
+ * @return {number} Signed whole-day difference.
+ */
+export function calendarDayDifference(from: string, to: string): number {
+    return (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`)) / 86_400_000;
+}
+
+/**
+ * Returns the Monday that opens the ISO week containing one canonical LocalDate.
+ *
+ * @param {string} date Canonical LocalDate.
+ * @return {string} Canonical LocalDate of that week's Monday.
+ */
+export function weekStartDate(date: string): string {
+    const weekday = new Date(`${date}T00:00:00.000Z`).getUTCDay();
+    return addCalendarDays(date, -((weekday + 6) % 7));
+}
+
+/**
+ * Names the visible week relative to the Term without inventing a week before it starts.
+ *
+ * The ordinal is pure date arithmetic between two PLAN-owned dates, so it stays a label
+ * rather than a new classification.
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {string} Term-relative week label or the real out-of-term state.
+ */
+export function termWeekLabel(plan: PlanProjection): string {
+    const { applicableDate } = plan.evaluationContext;
+    if (applicableDate < plan.term.startDate) {
+        return '学期未开始';
+    }
+    if (applicableDate > plan.term.endDate) {
+        return '学期已结束';
+    }
+    const offsetWeeks = calendarDayDifference(
+        weekStartDate(plan.term.startDate),
+        plan.week.window.startDate,
+    ) / 7;
+    return `第 ${Math.floor(offsetWeeks) + 1} 周`;
+}
+
+export type TodayHeadlineMeeting = Readonly<{
+    label: string;
+    value: string;
+    dateTime: string | null;
+}>;
+
+/**
+ * Resolves the "next class" headline without stepping outside the projected week.
+ *
+ * PLAN already ordered both lists by start Instant and already classified every
+ * occurrence, so this only reads the first match and then degrades to facts the
+ * projection actually carries.
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {TodayHeadlineMeeting} Visible label, value, and machine-readable time.
+ */
+export function todayHeadlineMeeting(plan: PlanProjection): TodayHeadlineMeeting {
+    const today = plan.today.meetings.find(meeting => (
+        meeting.classification === 'in-progress' || meeting.classification === 'upcoming'
+    ));
+    if (today !== undefined) {
+        return {
+            label: '下一节',
+            value: today.occurrence.localStart,
+            dateTime: today.occurrence.localStart,
+        };
+    }
+
+    const laterThisWeek = plan.week.meetings.find(meeting => meeting.classification === 'upcoming');
+    if (laterThisWeek !== undefined) {
+        const { date, localStart } = laterThisWeek.occurrence;
+        const weekday = calendarWeekdayNames[new Date(`${date}T00:00:00.000Z`).getUTCDay()]!;
+        return {
+            label: '下一节',
+            value: `${weekday} ${localStart}`,
+            dateTime: `${date}T${localStart}`,
+        };
+    }
+
+    if (plan.term.startDate > plan.evaluationContext.applicableDate) {
+        return { label: '学期开始', value: plan.term.startDate, dateTime: plan.term.startDate };
+    }
+
+    return { label: '下一节', value: '本周无', dateTime: null };
+}
+
+export type StatusSeverity = 'critical' | 'warning' | 'success' | 'neutral';
+
+/**
+ * Maps one PLAN-owned Task classification to its display severity.
+ *
+ * Severity only recolours a chip that already carries its own words, and the accent
+ * yellow never appears here: it means "selected" or "current", never "overdue".
+ *
+ * @param {TaskTimeClassification} classification PLAN-owned Task classification.
+ * @return {StatusSeverity} Display severity.
+ */
+export function taskSeverity(classification: TaskTimeClassification): StatusSeverity {
+    if (classification === 'overdue') {
+        return 'critical';
+    }
+    if (classification === 'today') {
+        return 'warning';
+    }
+    if (classification === 'completed') {
+        return 'success';
+    }
+    return 'neutral';
+}
+
+/**
+ * Collects the Meeting occurrence identities PLAN already reported as overlapping.
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {ReadonlySet<string>} Stable Meeting occurrence identities in a conflict.
+ */
+export function conflictingMeetingIds(plan: PlanProjection): ReadonlySet<string> {
+    const identities = new Set<string>();
+    for (const warning of plan.agenda.warnings) {
+        identities.add(meetingItemId(warning.first));
+        identities.add(meetingItemId(warning.second));
+    }
+    return identities;
+}
+
+/**
+ * Looks up one Course accent colour by the stable identity PLAN already carries.
+ *
+ * @param {SetupProjection} setup Current setup projection.
+ * @param {string} courseId Stable Course identity from a PLAN occurrence.
+ * @return {CourseColor | null} Chosen Course colour, or null when the user picked none.
+ */
+export function courseColorFor(setup: SetupProjection, courseId: string): CourseColor | null {
+    return setup.courses.find(course => course.courseId === courseId)?.color ?? null;
 }

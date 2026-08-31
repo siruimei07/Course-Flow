@@ -178,7 +178,7 @@ test('each surface exposes its own real creation form and no other', () => {
 test('each surface lists only the committed facts it owns', () => {
     assert.match(render('term'), /Fall 2026[\s\S]*当前学期/);
     assert.match(render('course'), /CSC108 · Introduction to Computer Programming/);
-    assert.match(render('meeting'), /CSC108 · LEC[\s\S]*星期四 13:00–14:00[\s\S]*TBA/);
+    assert.match(render('meeting'), /CSC108 · LEC[\s\S]*星期四 13:00-14:00[\s\S]*TBA/);
     assert.match(render('task'), /Read chapter 1[\s\S]*一次性/);
     assert.match(render('holiday'), /当前没有已保存的记录/);
 });

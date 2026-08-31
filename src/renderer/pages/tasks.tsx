@@ -26,7 +26,6 @@ export function TasksPage(props: WorkspacePageContentProps): ReactElement {
                     >添加任务</button>
                 )}
                 context={termContext(setup)}
-                eyebrow="Tasks"
                 headingId="tasks-page-title"
                 title="任务"
             />

@@ -1,7 +1,25 @@
 import { CSSProperties } from 'react';
 import type { ReactElement } from 'react';
 import type { WorkspaceNavigationId } from '../navigation';
-import { addCalendarDays, agendaItemId, calendarHolidayItemId, localInstantParts, localTimeMinute, meetingClassificationNames, meetingItemId, planItemId, sevenDayDates, taskClassificationNames, taskItemId, termContext } from './shared';
+import {
+    CALENDAR_EVENT_MIN_HEIGHT,
+    CalendarTimedPlacement,
+    agendaItemId,
+    calendarHolidayItemId,
+    calendarHourLabels,
+    calendarHourWindow,
+    calendarMinutePixels,
+    calendarTimedPlacements,
+    localInstantParts,
+    meetingClassificationNames,
+    meetingItemId,
+    minuteLabel,
+    planItemId,
+    sevenDayDates,
+    taskClassificationNames,
+    taskItemId,
+    termContext,
+} from './shared';
 import { EmptyState, MeetingItem, PageHeader, PlanUnavailable, SetupIncompleteNotice, TaskItem, buttonAction } from './widgets';
 import type { WorkspacePageContentProps } from '../workspace-pages';
 import { AgendaItemProjection, CalendarHolidaySegmentProjection, PlanMeetingProjection, PlanTaskProjection } from '../../shared/workspace-plan-contract';
@@ -28,7 +46,6 @@ export function CalendarPage(props: WorkspacePageContentProps): ReactElement {
                     <CalendarWeekControls week={calendarWeek} />
                 )}
                 context={termContext(setup)}
-                eyebrow="Calendar"
                 headingId="calendar-page-title"
                 title="日历"
             />
@@ -144,7 +161,7 @@ export function CalendarContent(props: Readonly<{
                 <h2 id="calendar-week-title">七日课表</h2>
                 <p className="page-context">
                     <time dateTime={calendar.window.startDate}>{calendar.window.startDate}</time>
-                    {' – '}
+                    {' - '}
                     <time dateTime={calendar.window.endDate}>{calendar.window.endDate}</time>
                 </p>
                 <div
@@ -327,7 +344,7 @@ export function CalendarContent(props: Readonly<{
                                         <time dateTime={warning.overlap.startInstant}>
                                             {warning.overlap.startInstant}
                                         </time>
-                                        {' – '}
+                                        {' - '}
                                         <time dateTime={warning.overlap.endInstant}>
                                             {warning.overlap.endInstant}
                                         </time>
@@ -367,22 +384,6 @@ export function CalendarContent(props: Readonly<{
     );
 }
 
-/**
- * Renders one Calendar timed or all-day PLAN item.
- *
- * @param {Object} props Calendar item projection.
- * @return {ReactElement} Calendar event row.
- */
-export type CalendarTimedPlacement = Readonly<{
-    date: string;
-    startMinute: number;
-    durationMinutes: number;
-    continuation: boolean;
-    item: PlanMeetingProjection | PlanTaskProjection;
-    overlapLane: number;
-    overlapLaneCount: number;
-}>;
-
 export type CalendarGridStyle = CSSProperties & Readonly<{
     '--calendar-hour-count': string;
 }>;
@@ -394,61 +395,6 @@ export type CalendarEventStyle = CSSProperties & Readonly<{
     '--calendar-event-min-height': string;
     '--calendar-event-width': string;
 }>;
-
-/** Height of one visible hour row; mirrors `.calendar-time-grid` in styles.css. */
-export const CALENDAR_HOUR_HEIGHT = 33;
-
-/**
- * Converts a minute count to its exact pixel offset inside the hour grid.
- *
- * Multiplying first keeps the result on integer arithmetic, so a whole number of hours
- * renders as a whole number of pixels instead of a binary-float approximation.
- *
- * @param {number} minutes Minutes measured from the first visible hour.
- * @return {number} Pixel offset inside the hour grid.
- */
-export function calendarMinutePixels(minutes: number): number {
-    return (minutes * CALENDAR_HOUR_HEIGHT) / 60;
-}
-
-/** Default first visible hour; 2026-08-29 user instruction. */
-export const CALENDAR_DEFAULT_START_HOUR = 7;
-
-/** Default last visible hour boundary; 2026-08-29 user instruction. */
-export const CALENDAR_DEFAULT_END_HOUR = 22;
-
-/**
- * Chooses the visible hour band, widened only by items that fall outside it.
- *
- * The default band answers "when are classes"; an item scheduled outside it is a real
- * fact, so the band grows to contain it rather than hiding it.
- *
- * @param {readonly CalendarTimedPlacement[]} placements Positioned timed items.
- * @return {Readonly<{ startHour: number; endHour: number }>} Inclusive-exclusive hour band.
- */
-export function calendarHourWindow(
-    placements: readonly CalendarTimedPlacement[],
-): Readonly<{ startHour: number; endHour: number }> {
-    let startHour = CALENDAR_DEFAULT_START_HOUR;
-    let endHour = CALENDAR_DEFAULT_END_HOUR;
-    for (const placement of placements) {
-        startHour = Math.min(startHour, Math.floor(placement.startMinute / 60));
-        endHour = Math.max(
-            endHour,
-            Math.ceil((placement.startMinute + placement.durationMinutes) / 60),
-        );
-    }
-    return Object.freeze({
-        startHour: Math.max(0, startHour),
-        endHour: Math.min(24, Math.max(endHour, startHour + 1)),
-    });
-}
-
-export const CALENDAR_EVENT_MIN_HEIGHT = 30;
-
-export const CALENDAR_EVENT_MIN_DURATION = Math.ceil(
-    (CALENDAR_EVENT_MIN_HEIGHT * 60) / CALENDAR_HOUR_HEIGHT,
-);
 
 /**
  * Renders one timed occurrence inside its exact date lane and vertical minute range.
@@ -475,7 +421,7 @@ export function CalendarTimedItem(props: Readonly<{
         ? `${item.courseCode} · ${item.occurrence.type}`
         : item.occurrence.title;
     const detail = item.kind === 'meeting'
-        ? `${item.occurrence.localStart}–${item.occurrence.localEnd}`
+        ? `${item.occurrence.localStart}-${item.occurrence.localEnd}`
         : `${item.courseCode} · ${placement.date} ${minuteLabel(placement.startMinute)}`;
 
     return (
@@ -552,7 +498,7 @@ export function CalendarHolidayItem(props: Readonly<{
         >
             <span className="status-label">假期</span>
             <strong>{holiday.holidayRange.name}</strong>
-            <span>{holiday.visibleStartDate} – {holiday.visibleEndDate}</span>
+            <span>{holiday.visibleStartDate} - {holiday.visibleEndDate}</span>
         </li>
     );
 }
@@ -575,7 +521,7 @@ export function AgendaItem(props: Readonly<{ item: AgendaItemProjection }>): Rea
         <li data-item-id={props.item.holidayRange.holidayRangeId}>
             <span className="status-label">假期</span>
             <strong>{props.item.holidayRange.name}</strong>
-            <span>{props.item.holidayRange.startDate} – {props.item.holidayRange.endDate}</span>
+            <span>{props.item.holidayRange.startDate} - {props.item.holidayRange.endDate}</span>
         </li>
     );
 }
@@ -643,162 +589,4 @@ export function agendaItemDate(
         return localInstantParts(item.occurrence.deadline.instant, termZone).date;
     }
     return null;
-}
-
-/**
- * Converts existing timed PLAN items into date-lane placements without changing their meaning.
- * Overnight Meetings are split at midnight so both visible date columns remain truthful.
- *
- * @param {readonly (PlanMeetingProjection | PlanTaskProjection)[]} items Timed PLAN items.
- * @param {string} termZone Workspace-owned Calendar zone.
- * @return {readonly CalendarTimedPlacement[]} Stable minute placements for the seven-day grid.
- */
-export function calendarTimedPlacements(
-    items: readonly (PlanMeetingProjection | PlanTaskProjection)[],
-    termZone: string,
-): readonly CalendarTimedPlacement[] {
-    const placements = items.flatMap(item => {
-        if (item.kind === 'task') {
-            if (item.occurrence.deadline.kind !== 'timed') {
-                return [];
-            }
-            const local = localInstantParts(item.occurrence.deadline.instant, termZone);
-            return [{
-                date: local.date,
-                startMinute: local.minute,
-                durationMinutes: 30,
-                continuation: false,
-                item,
-            }];
-        }
-
-        const startMinute = localTimeMinute(item.occurrence.localStart);
-        const endMinute = localTimeMinute(item.occurrence.localEnd);
-        const totalDuration = endMinute
-            + item.occurrence.endDayOffset * 1_440
-            - startMinute;
-        const firstDuration = Math.min(totalDuration, 1_440 - startMinute);
-        const placements: CalendarTimedPlacementSource[] = [{
-            date: item.occurrence.date,
-            startMinute,
-            durationMinutes: firstDuration,
-            continuation: false,
-            item,
-        }];
-        const remainingDuration = totalDuration - firstDuration;
-        if (remainingDuration > 0) {
-            placements.push({
-                date: addCalendarDays(item.occurrence.date, 1),
-                startMinute: 0,
-                durationMinutes: remainingDuration,
-                continuation: true,
-                item,
-            });
-        }
-        return placements;
-    });
-    return assignCalendarOverlapLanes(placements);
-}
-
-export type CalendarTimedPlacementSource = Omit<
-    CalendarTimedPlacement,
-    'overlapLane' | 'overlapLaneCount'
->;
-
-/**
- * Assigns non-overlapping visual lanes to each connected overlap cluster.
- * @param {readonly CalendarTimedPlacementSource[]} placements Exact date/minute placements.
- * @return {readonly CalendarTimedPlacement[]} Placements with deterministic lane geometry.
- */
-export function assignCalendarOverlapLanes(
-    placements: readonly CalendarTimedPlacementSource[],
-): readonly CalendarTimedPlacement[] {
-    const laneByPlacement = new Map<CalendarTimedPlacementSource, Readonly<{
-        lane: number;
-        laneCount: number;
-    }>>();
-    const dates = [...new Set(placements.map(placement => placement.date))];
-
-    for (const date of dates) {
-        const sorted = placements.filter(placement => placement.date === date).toSorted((first, second) => (
-            first.startMinute - second.startMinute
-            || second.durationMinutes - first.durationMinutes
-            || planItemId(first.item).localeCompare(planItemId(second.item))
-        ));
-        let cluster: CalendarTimedPlacementSource[] = [];
-        let clusterEnd = -1;
-
-        const flushCluster = (): void => {
-            const laneEnds: number[] = [];
-            const assigned = cluster.map(placement => {
-                const availableLane = laneEnds.findIndex(endMinute => endMinute <= placement.startMinute);
-                const lane = availableLane === -1 ? laneEnds.length : availableLane;
-                laneEnds[lane] = placement.startMinute + Math.max(
-                    placement.durationMinutes,
-                    CALENDAR_EVENT_MIN_DURATION,
-                );
-                return { placement, lane };
-            });
-            for (const value of assigned) {
-                laneByPlacement.set(value.placement, {
-                    lane: value.lane,
-                    laneCount: laneEnds.length,
-                });
-            }
-            cluster = [];
-            clusterEnd = -1;
-        };
-
-        for (const placement of sorted) {
-            if (cluster.length > 0 && placement.startMinute >= clusterEnd) {
-                flushCluster();
-            }
-            cluster.push(placement);
-            clusterEnd = Math.max(
-                clusterEnd,
-                placement.startMinute + Math.max(
-                    placement.durationMinutes,
-                    CALENDAR_EVENT_MIN_DURATION,
-                ),
-            );
-        }
-        if (cluster.length > 0) {
-            flushCluster();
-        }
-    }
-
-    return placements.map(placement => {
-        const lane = laneByPlacement.get(placement) ?? { lane: 0, laneCount: 1 };
-        return {
-            ...placement,
-            overlapLane: lane.lane,
-            overlapLaneCount: lane.laneCount,
-        };
-    });
-}
-
-/**
- * Builds the stable labels for the full 24-hour vertical Calendar grid.
- *
- * @return {readonly string[]} One label per hour.
- */
-export function calendarHourLabels(
-    startHour = 0,
-    endHour = 24,
-): readonly string[] {
-    return Array.from(
-        { length: Math.max(0, endHour - startHour) },
-        (_value, offset) => `${String(startHour + offset).padStart(2, '0')}:00`,
-    );
-}
-
-/**
- * Formats one minute-of-day as a local clock.
- *
- * @param {number} minute Minute offset from midnight.
- * @return {string} HH:mm label.
- */
-export function minuteLabel(minute: number): string {
-    const hour = Math.floor(minute / 60);
-    return `${String(hour).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
 }
