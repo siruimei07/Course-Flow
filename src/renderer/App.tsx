@@ -5,11 +5,21 @@ import type { ManagementSurfaceId } from './management-surfaces';
 import { SettingsDialog } from './SettingsDialog';
 import { SetupDialog } from './SetupDialog';
 import { setupStateFrom, type SetupState } from './setup-state';
-import {planProjectionStateFrom} from './workspace-view-state';
+import { ALL_TASKS_FILTER, planProjectionStateFrom, type TaskListFilter } from './workspace-view-state';
 import { WindowControls, WindowTitlebar } from './WindowControls';
 import { loadPlan, loadWorkspace } from './app/load-workspace';
 import type { WorkspaceLoadResult } from './app/load-workspace';
-import { advanceTaskUndoTimerState, focusTaskActionTarget, runWorkspaceTaskOccurrenceAction, runWorkspaceTaskOccurrenceUndo, taskPresentationItemId, taskUndoPresentationFrom, taskUndoTimerDelayFrom } from './app/task-actions';
+import {
+    advanceTaskUndoTimerState,
+    focusTaskActionTarget,
+    nextTaskItemIdFrom,
+    runWorkspaceTaskOccurrenceAction,
+    runWorkspaceTaskOccurrenceUndo,
+    taskActionFocusTargetFrom,
+    taskPresentationItemId,
+    taskUndoPresentationFrom,
+    taskUndoTimerDelayFrom,
+} from './app/task-actions';
 import type { WorkspaceTaskActionResult } from './app/task-actions';
 /**
  * @file Loads Workspace projections and renders the accessible CourseFlow shell.
@@ -69,6 +79,7 @@ import {
     WorkspacePage,
     type CalendarWeekPresentation,
     type TaskActionPresentation,
+    type TaskListPresentation,
 } from './workspace-pages';
 import { addCalendarDays } from './pages/shared';
 
@@ -85,6 +96,7 @@ export type WorkspaceShellProps = Readonly<{
     planProblem: string | null;
     taskActions: TaskActionPresentation;
     calendarWeek: CalendarWeekPresentation;
+    taskList?: TaskListPresentation;
     onNavigate(page: WorkspaceNavigationId): void;
     onCreateTask(): void;
     onOpenManagement(surface: ManagementSurfaceId): void;
@@ -166,6 +178,7 @@ export function App(): ReactElement {
     const [calendarWeekPlan, setCalendarWeekPlan] = useState<PlanProjection | null>(null);
     const [calendarWeekBusy, setCalendarWeekBusy] = useState(false);
     const [calendarWeekProblem, setCalendarWeekProblem] = useState<string | null>(null);
+    const [taskListFilter, setTaskListFilter] = useState<TaskListFilter>(ALL_TASKS_FILTER);
     const [managementOpen, setManagementOpen] = useState(false);
     const [managementSurface, setManagementSurface] = useState<ManagementSurfaceId>('course');
     const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
@@ -187,6 +200,7 @@ export function App(): ReactElement {
     const taskActionInFlightRef = useRef(false);
     const taskActionFocusRef = useRef<Readonly<{
         itemId: string;
+        nextItemId: string | null;
         page: WorkspaceNavigationId;
         trigger: HTMLElement | null;
     }> | null>(null);
@@ -596,8 +610,14 @@ export function App(): ReactElement {
     };
 
     const rememberTaskActionFocus = (itemId: string): void => {
+        // The Task row that follows the acted one, captured now because the acted row may
+        // leave the visible list (Tasks page archive, filter) before focus is restored.
+        const rows = Array.from(
+            document.querySelectorAll<HTMLElement>('[data-item-id^="task:"][tabindex]'),
+        );
         taskActionFocusRef.current = {
             itemId,
+            nextItemId: nextTaskItemIdFrom(rows.map(row => row.dataset.itemId ?? ''), itemId),
             page: activePage,
             trigger: document.activeElement instanceof HTMLElement
                 ? document.activeElement
@@ -628,11 +648,22 @@ export function App(): ReactElement {
                 focusTaskActionTarget(target.trigger);
                 return;
             }
-            const row = Array.from(document.querySelectorAll<HTMLElement>('[data-item-id]')).find(candidate => (
-                candidate.dataset.itemId === target.itemId
-            ));
-            const rowAction = row?.querySelector<HTMLButtonElement>('button:not(:disabled)');
-            const focusTarget = rowAction ?? row ?? document.getElementById(PAGE_HEADING_IDS[target.page]);
+            // Only rows that can take focus count: Today also stamps the identity on timeline items.
+            const rows = Array.from(
+                document.querySelectorAll<HTMLElement>('[data-item-id][tabindex]'),
+            ).map(element => ({
+                itemId: element.dataset.itemId ?? '',
+                hidden: element.closest('details:not([open])') !== null,
+                element,
+                action: element.querySelector<HTMLButtonElement>('button:not(:disabled)'),
+                summary: element.closest('details')?.querySelector<HTMLElement>('summary') ?? null,
+            }));
+            const focusTarget = taskActionFocusTargetFrom({
+                rows,
+                itemId: target.itemId,
+                nextItemId: target.nextItemId,
+                heading: document.getElementById(PAGE_HEADING_IDS[target.page]),
+            });
             if (focusTarget !== null) {
                 focusTaskActionTarget(focusTarget);
             }
@@ -857,6 +888,7 @@ export function App(): ReactElement {
                 planProblem={state.planProblem}
                 setup={state.setup.projection}
                 taskActions={taskActions}
+                taskList={{ filter: taskListFilter, onFilterChange: setTaskListFilter }}
             />
             <SettingsDialog
                 buildStatus={state.buildStatus}
@@ -1019,6 +1051,7 @@ export function WorkspaceShell(props: WorkspaceShellProps): ReactElement {
                     setup={props.setup}
                     setupIncomplete={setupIncomplete}
                     taskActions={props.taskActions}
+                    taskList={props.taskList}
                 />
             </main>
             <TaskActionNotice presentation={props.taskActions} />
@@ -1034,6 +1067,8 @@ export { loadWorkspace, type WorkspaceLoadResult } from './app/load-workspace';
 export {
     advanceTaskUndoTimerState,
     focusTaskActionTarget,
+    nextTaskItemIdFrom,
+    taskActionFocusTargetFrom,
     runWorkspaceTaskOccurrenceAction,
     runWorkspaceTaskOccurrenceUndo,
     taskUndoPresentationFrom,

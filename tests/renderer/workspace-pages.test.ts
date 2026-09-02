@@ -10,6 +10,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { ManagementSurfaceId } from '../../src/renderer/management-surfaces';
 import type { WorkspaceNavigationId } from '../../src/renderer/navigation';
+import type { TaskListFilter } from '../../src/renderer/workspace-view-state';
 import {
     CalendarPage,
     CoursesPage,
@@ -661,11 +662,13 @@ test('the 学期任务 card renders the PLAN per-Course summary with one segment
 
 test('timed deadlines read as TermZone date-times wherever a Task row renders', () => {
     const plan = planProjection({ tasks: [FRIDAY_TIMED_TASK] });
-    for (const page of ['tasks', 'calendar'] as const) {
-        const html = renderWorkspacePage(page, plan);
-        assert.match(html, /<time dateTime="2026-09-11T14:00:00.000Z">2026-09-11 10:00<\/time>/, page);
-        assert.doesNotMatch(html, /2026-09-11T14:00:00.000Z · America\/Toronto/, page);
-    }
+    const calendar = renderWorkspacePage('calendar', plan);
+    assert.match(calendar, /<time dateTime="2026-09-11T14:00:00.000Z">2026-09-11 10:00<\/time>/);
+    assert.doesNotMatch(calendar, /2026-09-11T14:00:00.000Z · America\/Toronto/);
+    // Slice 13: the Task page names the day and weekday in the row itself, never behind a tooltip.
+    const tasks = renderWorkspacePage('tasks', plan);
+    assert.match(tasks, /<time dateTime="2026-09-11T14:00:00.000Z">09-11 周五 10:00<\/time>/);
+    assert.doesNotMatch(tasks, /title="2026-09-11|2026-09-11T14:00:00.000Z · America\/Toronto/);
     const dueToday = renderWorkspacePage('today', planProjection({
         tasks: [{
             ...FRIDAY_TIMED_TASK,
@@ -1082,7 +1085,7 @@ test('CalendarPage lanes adjacent short items by their rendered minimum height',
     );
 });
 
-test('TasksPage groups known PLAN tasks and TBA without inventing dates', () => {
+test('TasksPage groups known PLAN tasks by their classification and keeps TBA in its own card', () => {
     const html = renderToStaticMarkup(createElement(TasksPage, {
         ...HANDLERS,
         setup: setupProjection(),
@@ -1091,13 +1094,44 @@ test('TasksPage groups known PLAN tasks and TBA without inventing dates', () => 
     }));
 
     assert.match(html, /<h1[^>]*>任务<\/h1>/);
-    assert.match(html, /Read chapter one/);
-    assert.match(html, /Draft project outline/);
-    assert.match(html, /Confirm research topic/);
+    // Header numbers are PLAN sums: two pending rows with a deadline plus one TBA, no overdue, two due this week.
+    const headline = html.match(/<dl class="page-headline-stats">[\s\S]*?<\/dl>/)?.[0] ?? '';
+    assert.match(headline, /待完成<\/dt><dd>3</);
+    assert.match(headline, /data-severity="neutral"><dt>逾期<\/dt><dd>0</);
+    assert.match(headline, /本周截止<\/dt><dd>2</);
+    // Facts and the page action share the header's right-hand container instead of overlapping the title.
+    assert.match(
+        html,
+        new RegExp(
+            '<div class="workspace-page-side"><div class="workspace-page-facts">[\\s\\S]*?</div>'
+            + '<div class="workspace-page-actions"><button class="primary-action" type="button">添加任务</button>',
+        ),
+    );
+
+    const card = html.match(/<section aria-labelledby="task-groups-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(
+        card,
+        new RegExp(
+            '<h3 class="task-group-title" data-severity="warning" id="task-group-today">今天 '
+            + '<span class="task-group-count">1 项</span></h3>'
+            + '<ol aria-labelledby="task-group-today" class="task-rows">',
+        ),
+    );
+    assert.match(card, /id="task-group-near-due">即将到期 <span class="task-group-count">1 项<\/span>/);
+    assert.doesNotMatch(card, /task-group-overdue|task-group-future|task-archive/);
+    // The heading names the state, so no row repeats it as a chip; the deadline is the row's fact.
+    assert.doesNotMatch(card, /class="status-label"/);
+    assert.match(card, /Read chapter one[\s\S]*?<time dateTime="2026-09-10">今天<\/time>/);
+    assert.match(card, /Draft project outline[\s\S]*?<time dateTime="2026-09-11">09-11 周五<\/time>/);
+    assert.match(card, /<span class="task-row-meta"><span>CSC108 · 小任务<\/span><\/span>/);
+    assert.doesNotMatch(card, /Confirm research topic/);
+
+    const tba = html.match(/<section aria-labelledby="tba-tasks-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(tba, /<h2 id="tba-tasks-title">TBA<\/h2><p class="page-context">1 项<\/p>/);
+    assert.match(tba, /还没定日期或时间，不算倒计时，也不会逾期。/);
+    assert.match(tba, /Confirm research topic/);
     assert.equal((html.match(/Confirm research topic/g) ?? []).length, 1);
-    assert.match(html, /今天/);
-    assert.match(html, /即将到期/);
-    assert.match(html, /TBA/);
+    assert.match(html, /<section aria-labelledby="tasks-by-course-title" class="content-card by-course-card">/);
 
     const emptyHtml = renderToStaticMarkup(createElement(TasksPage, {
         ...HANDLERS,
@@ -1105,14 +1139,291 @@ test('TasksPage groups known PLAN tasks and TBA without inventing dates', () => 
         plan: planProjection({ tasks: [], meetings: [], holidayRanges: [] }),
         setupIncomplete: false,
     }));
-    assert.match(emptyHtml, /当前学期还没有任务/);
+    assert.match(emptyHtml, /id="task-groups-empty"[^>]*>当前学期还没有任务</);
+    assert.match(emptyHtml, /给课程添加作业、测验或项目，它们会按截止时间排在这里。/);
     assert.match(
         emptyHtml,
-        /id="scheduled-tasks-empty"[\s\S]*?<button[^>]*>添加任务<\/button>/,
+        /id="task-groups-empty"[\s\S]*?<button[^>]*>添加任务<\/button><button[^>]*>查看课程<\/button>/,
     );
+    assert.match(emptyHtml, /待完成<\/dt><dd>0</);
+    // Nothing to summarise: the right column and the filter are not rendered at all.
+    assert.doesNotMatch(emptyHtml, /tasks-by-course-title|tba-tasks-title|task-filter/);
+});
+
+test('the Task page orders groups and rows by PLAN facts and folds finished rows', () => {
+    const finished = {
+        ...SMALL_TASK,
+        occurrenceId: { ...SMALL_TASK.occurrenceId, taskSeriesId: '18181818-1818-4818-8818-181818181818' },
+        title: 'Finished reading',
+        status: 'completed' as const,
+    };
+    const finishedTba = {
+        ...TBA_TASK,
+        occurrenceId: { ...TBA_TASK.occurrenceId, taskSeriesId: '21212121-2121-4121-8121-212121212121' },
+        title: 'Finished TBA reading',
+        status: 'completed' as const,
+    };
+    const skipped = {
+        ...SMALL_TASK,
+        occurrenceId: { ...SMALL_TASK.occurrenceId, taskSeriesId: '22222222-2222-4222-8222-222222222223' },
+        title: 'Skipped warm-up',
+        status: 'skipped' as const,
+    };
+    const dueTodayTimed = {
+        ...FRIDAY_TIMED_TASK,
+        occurrenceId: { ...FRIDAY_TIMED_TASK.occurrenceId, taskSeriesId: '23232323-2323-4323-8323-232323232323' },
+        title: 'Timed today',
+        deadline: { kind: 'timed' as const, instant: '2026-09-10T20:00:00.000Z', timeZone: TERM.timeZone },
+    };
+    const farReport = taskOccurrence({
+        taskSeriesId: '24242424-2424-4424-8424-242424242424',
+        title: 'Far report',
+        size: 'large',
+        deadline: { kind: 'date-only', date: '2026-09-19' },
+    });
+    const html = renderWorkspacePage('tasks', planProjection({
+        tasks: [LARGE_TASK, FRIDAY_TIMED_TASK, WEDNESDAY_ALL_DAY_TASK, TBA_TASK, finished, finishedTba, skipped,
+            dueTodayTimed, farReport],
+    }));
+    const card = html.match(/<section aria-labelledby="task-groups-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    // Groups in reading order, each exactly one PLAN classification; finished rows fold last.
+    const order = [
+        'task-group-overdue',
+        'task-group-today',
+        'task-group-near-due',
+        'task-group-future',
+        'class="task-archive"',
+        'task-group-completed',
+        'task-group-skipped',
+    ].map(marker => card.indexOf(marker));
+    assert.ok(order.every(position => position >= 0), 'every group and the archive must render');
+    assert.deepEqual(order.toSorted((left, right) => left - right), order);
+
+    // Overdue keeps the original deadline and says how many days have passed.
     assert.match(
-        emptyHtml,
-        /id="tba-tasks-empty"[\s\S]*?<button[^>]*>添加任务<\/button>/,
+        card,
+        new RegExp(
+            'data-classification="overdue"[\\s\\S]*?Submit lab notes[\\s\\S]*?'
+            + '<time dateTime="2026-09-09">09-09 周三</time><span class="task-row-overdue">逾期 1 天</span>',
+        ),
+    );
+    // Under the 今天 heading a timed row shows only the clock.
+    assert.match(card, /data-classification="today"[\s\S]*?<time dateTime="2026-09-10T20:00:00.000Z">16:00<\/time>/);
+    // Inside 即将到期 PLAN's comparator puts Friday 10:00 before the date-only Friday deadline.
+    const nearDue = card.match(/data-classification="near-due"[\s\S]*?<\/ol>/)?.[0] ?? '';
+    assert.match(nearDue, /Project checkpoint[\s\S]*?Draft project outline/);
+    assert.match(
+        card,
+        /data-classification="future"[\s\S]*?Far report[\s\S]*?<time dateTime="2026-09-19">09-19 周六<\/time>/,
+    );
+    // Finished rows fold into one native disclosure; a completed TBA task lives there, not in the TBA card.
+    assert.match(card, new RegExp(
+        '<details class="task-archive"><summary><span>已完成 2 项 · 已跳过 1 项</span>'
+        + '<svg aria-hidden="true" class="course-chevron"',
+    ));
+    assert.match(
+        card,
+        new RegExp(
+            'data-classification="completed"[\\s\\S]*?Finished TBA reading[\\s\\S]*?'
+            + '<span class="task-row-deadline"><span>TBA</span></span>',
+        ),
+    );
+    assert.equal((html.match(/Finished TBA reading/g) ?? []).length, 1);
+    const tba = html.match(/<section aria-labelledby="tba-tasks-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(tba, /<p class="page-context">1 项<\/p>/);
+    assert.doesNotMatch(tba, /Finished TBA reading/);
+    // 逾期 in the header equals the overdue group and turns critical; 待完成 counts the TBA row too.
+    const headline = html.match(/<dl class="page-headline-stats">[\s\S]*?<\/dl>/)?.[0] ?? '';
+    assert.match(headline, /待完成<\/dt><dd>6</);
+    assert.match(headline, /data-severity="critical"><dt>逾期<\/dt><dd>1</);
+    assert.match(headline, /本周截止<\/dt><dd>6</);
+
+    // The label ladder's other rungs: a timed deadline passed earlier today reads 今天 HH:mm with no
+    // day count, and a deadline in another year carries its full date.
+    const ladder = renderWorkspacePage('tasks', planProjection({
+        tasks: [
+            {
+                ...FRIDAY_TIMED_TASK,
+                deadline: { kind: 'timed' as const, instant: '2026-09-10T12:00:00.000Z', timeZone: TERM.timeZone },
+            },
+            { ...LARGE_TASK, deadline: { kind: 'date-only' as const, date: '2027-01-05' } },
+        ],
+    }));
+    assert.match(
+        ladder,
+        /data-classification="overdue"[\s\S]*?<time dateTime="2026-09-10T12:00:00.000Z">今天 08:00<\/time><\/span>/,
+    );
+    assert.match(ladder, /data-classification="future"[\s\S]*?<time dateTime="2027-01-05">2027-01-05 周二<\/time>/);
+    assert.match(ladder, /data-severity="critical"><dt>逾期<\/dt><dd>1</);
+
+    // The folded groups run newest first with TBA last: 09-11, then 09-09, then the TBA deadline.
+    const folded = renderWorkspacePage('tasks', planProjection({
+        tasks: [
+            SMALL_TASK,
+            { ...LARGE_TASK, status: 'completed' },
+            { ...WEDNESDAY_ALL_DAY_TASK, status: 'completed' },
+            { ...TBA_TASK, status: 'completed' },
+        ],
+    }));
+    const foldedCompleted = folded.match(/data-classification="completed"[\s\S]*?<\/ol>/)?.[0] ?? '';
+    assert.match(foldedCompleted, /Draft project outline[\s\S]*?Submit lab notes[\s\S]*?Confirm research topic/);
+});
+
+test('the Task page filter only hides rows and never changes a PLAN number', () => {
+    const render = (
+        filter: TaskListFilter,
+        plan = planProjection(),
+        writes: TaskListFilter[] = [],
+    ): string => renderToStaticMarkup(createElement(TasksPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan,
+        setupIncomplete: false,
+        taskList: {
+            filter,
+            onFilterChange(next): void {
+                writes.push(next);
+            },
+        },
+    }));
+
+    const chip = (checked: boolean, label: string): RegExp => new RegExp(
+        `<button aria-checked="${checked}" class="task-filter-chip" role="radio" `
+        + `tabindex="${checked ? 0 : -1}" type="button">${label}</button>`,
+    );
+    const large = render({ kind: 'size', size: 'large' });
+    // One radio group, one Tab stop: the checked chip is the only one in the tab order.
+    assert.match(large, /<div aria-label="筛选任务" class="task-filter" role="radiogroup">/);
+    assert.match(large, chip(false, '全部'));
+    assert.match(large, chip(true, '大任务'));
+    assert.match(large, new RegExp(
+        'class="task-filter-chip task-filter-chip--course" role="radio" tabindex="-1" type="button">'
+        + '<span aria-hidden="true" class="course-dot" data-course-color="blue"></span>CSC108</button>',
+    ));
+    // A Course without any Task occurrence gets no chip.
+    assert.doesNotMatch(large, /MAT137<\/button>/);
+    assert.match(large, /<p class="page-context task-filter-summary" role="status">大任务 · 显示 1 \/ 2 项<\/p>/);
+    assert.match(large, /Draft project outline/);
+    assert.doesNotMatch(large, /Read chapter one/);
+    // The header keeps its PLAN sums whatever the filter shows.
+    assert.match(large, /待完成<\/dt><dd>3</);
+    // The TBA card is narrowed too and says so, while its heading count stays the PLAN fact.
+    assert.match(large, /<h2 id="tba-tasks-title">TBA<\/h2><p class="page-context">显示 0 \/ 1 项<\/p>/);
+    assert.match(large, /当前筛选下没有 TBA 任务。/);
+
+    const course = render({ kind: 'course', courseId: COURSE.courseId });
+    assert.match(course, /role="status">CSC108 · 显示 2 \/ 2 项</);
+    assert.match(course, /<p class="page-context">显示 1 \/ 1 项<\/p>/);
+    // The 按课程 shares echo the checked Course with a ring and with words.
+    assert.match(
+        course,
+        /data-course-id="22222222-2222-4222-8222-222222222222" data-selected="true" style="--share:3;--done:0"/,
+    );
+    assert.match(course, /aria-label="按课程的任务完成度，共 3 项，已完成 0 项，已筛选 CSC108"/);
+    assert.match(course, new RegExp(
+        'data-selected="true"><span aria-hidden="true" class="course-dot"></span><span>CSC108</span>'
+        + '<span class="term-tasks-count">0/3</span><span class="visually-hidden">已筛选</span>',
+    ));
+
+    // A Course the page no longer offers falls back to 全部 at render time, without a state write.
+    const writes: TaskListFilter[] = [];
+    const stale = render({ kind: 'course', courseId: COURSE_WITHOUT_MEETINGS.courseId }, planProjection(), writes);
+    assert.match(stale, chip(true, '全部'));
+    assert.match(stale, /role="status">共 2 项</);
+    assert.doesNotMatch(stale, /data-selected/);
+    assert.deepEqual(writes, []);
+
+    // A filter that hides every pending row keeps one sentence and the way back.
+    const hidden = render({ kind: 'size', size: 'small' }, planProjection({ tasks: [LARGE_TASK] }));
+    assert.match(hidden, new RegExp(
+        '<div class="task-filter-empty"><p>当前筛选下没有待完成任务。</p>'
+        + '<button class="secondary-action" type="button">清除筛选</button></div>',
+    ));
+    assert.match(hidden, /role="status">小任务 · 显示 0 \/ 1 项</);
+
+    // Group and archive counts are visible rows, not PLAN totals: two near-due rows, one shown.
+    const narrowed = render({ kind: 'size', size: 'large' }, planProjection({
+        tasks: [
+            SMALL_TASK,
+            LARGE_TASK,
+            FRIDAY_ADJACENT_TASK,
+            {
+                ...SMALL_TASK,
+                occurrenceId: { ...SMALL_TASK.occurrenceId, taskSeriesId: '25252525-2525-4525-8525-252525252525' },
+                status: 'completed',
+            },
+            {
+                ...LARGE_TASK,
+                occurrenceId: { ...LARGE_TASK.occurrenceId, taskSeriesId: '26262626-2626-4626-8626-262626262626' },
+                status: 'skipped',
+            },
+        ],
+    }));
+    assert.match(narrowed, /id="task-group-near-due">即将到期 <span class="task-group-count">1 项<\/span>/);
+    assert.match(narrowed, /role="status">大任务 · 显示 1 \/ 3 项</);
+    assert.match(narrowed, /<details class="task-archive"><summary><span>已完成 0 项 · 已跳过 1 项<\/span>/);
+    assert.doesNotMatch(narrowed, /Adjacent checkpoint|task-group-today|task-group-completed/);
+    // The disclosure stays mounted when the filter hides every archived row.
+    const archiveHidden = render({ kind: 'size', size: 'small' }, planProjection({
+        tasks: [SMALL_TASK, { ...LARGE_TASK, status: 'completed' }],
+    }));
+    assert.match(archiveHidden, /<details class="task-archive"><summary><span>已完成 0 项 · 已跳过 0 项<\/span>/);
+    assert.match(archiveHidden, /当前筛选下没有已完成或已跳过的任务。/);
+
+    // Without a filter presentation the page renders no chips and no status line.
+    assert.doesNotMatch(renderWorkspacePage('tasks'), /task-filter/);
+});
+
+test('the Task page empty ladder names the missing object and one real next step', () => {
+    const noCourses = renderToStaticMarkup(createElement(TasksPage, {
+        ...HANDLERS,
+        setup: setupProjection({
+            minimum: {
+                hasCurrentTerm: true,
+                hasCurrentTermCourse: false,
+                hasMeetingOrTask: false,
+                isSatisfied: false,
+            },
+            courses: [],
+        }),
+        plan: planProjection({ tasks: [], meetings: [], holidayRanges: [] }),
+        setupIncomplete: true,
+    }));
+    const noCoursesCard = noCourses.match(/<section aria-labelledby="task-groups-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(noCoursesCard, /id="task-groups-empty"[^>]*>还没有课程</);
+    assert.match(noCoursesCard, /先添加一门课程，任务会挂在它下面。/);
+    assert.equal((noCoursesCard.match(/<button/g) ?? []).length, 1);
+    assert.match(noCoursesCard, />添加课程</);
+
+    const beforeTerm = renderWorkspacePage('tasks', planProjection({
+        tasks: [],
+        meetings: [],
+        evaluationContext: {
+            evaluatedAt: '2026-09-01T16:00:00.000Z',
+            termZone: TERM.timeZone,
+            applicableDate: '2026-09-01',
+            requestedWindow: { startDate: '2026-08-31', endDate: '2026-09-06' },
+        },
+    }));
+    assert.match(beforeTerm, /学期 2026-09-07 开始，还没有任务。/);
+
+    const done = renderWorkspacePage('tasks', planProjection({
+        tasks: [{ ...SMALL_TASK, status: 'completed' }, { ...LARGE_TASK, status: 'skipped' }],
+    }));
+    assert.match(done, /id="task-groups-empty"[^>]*>没有待完成的任务</);
+    assert.match(done, /本学期的任务都已完成或跳过。/);
+    assert.match(done, /已完成 1 项 · 已跳过 1 项/);
+    assert.match(done, /待完成<\/dt><dd>0</);
+    assert.match(done, /<p class="task-rows-empty">每个任务都有日期了。<\/p>/);
+
+    const tbaOnly = renderWorkspacePage('tasks', planProjection({ tasks: [TBA_TASK] }));
+    assert.match(tbaOnly, /还有 1 项没定时间的任务在 TBA 里。/);
+    assert.match(tbaOnly, /<a class="secondary-action" href="#tba-task-list">查看 TBA 任务<\/a>/);
+    assert.match(tbaOnly, /待完成<\/dt><dd>1</);
+    assert.match(
+        tbaOnly,
+        /<section aria-labelledby="tba-tasks-title" class="content-card tba-tasks-card" id="tba-task-list">/,
     );
 });
 

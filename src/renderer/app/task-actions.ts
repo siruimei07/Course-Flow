@@ -136,6 +136,59 @@ export function focusTaskActionTarget(
     });
 }
 
+export type TaskActionFocusRow<T> = Readonly<{
+    itemId: string;
+    /** Inside a closed `<details>`: in the DOM, but focus() would be a no-op. */
+    hidden: boolean;
+    element: T;
+    action: T | null;
+    summary: T | null;
+}>;
+
+/**
+ * Chooses where focus returns once the pressed button is gone: the acted row's next
+ * enabled action, then the row itself; when that row left the visible list (it moved
+ * into the folded archive or the filter hides it), the row that followed it, so a
+ * keyboard user keeps working down the list; then the summary of the closed disclosure
+ * that now holds it; finally the page heading.
+ * @param {Object} options Rows as rendered now, the acted and following identities, and the heading.
+ * @return {T | null} Element to focus, or null when nothing is left to focus.
+ */
+export function taskActionFocusTargetFrom<T>(options: Readonly<{
+    rows: readonly TaskActionFocusRow<T>[];
+    itemId: string;
+    nextItemId: string | null;
+    heading: T | null;
+}>): T | null {
+    // One occurrence can render several elements with the same identity (Today shows a Task on
+    // the timeline and in its task list), so prefer the match that can actually take focus.
+    const rowFor = (itemId: string | null): TaskActionFocusRow<T> | null => {
+        const matches = options.rows.filter(row => row.itemId === itemId);
+        return matches.find(row => !row.hidden && row.action !== null)
+            ?? matches.find(row => !row.hidden)
+            ?? matches[0]
+            ?? null;
+    };
+    const row = rowFor(options.itemId);
+    const next = rowFor(options.nextItemId);
+    const visible = [row, next].find(candidate => candidate !== null && !candidate.hidden) ?? null;
+    if (visible !== null) {
+        return visible.action ?? visible.element;
+    }
+    return row?.summary ?? next?.summary ?? options.heading;
+}
+
+/**
+ * Names the Task row that follows one identity in the rendered order, or null at the end.
+ * @param {readonly string[]} itemIds Task row identities in DOM order.
+ * @param {string} itemId The acted row.
+ * @return {string | null} The following identity.
+ */
+export function nextTaskItemIdFrom(itemIds: readonly string[], itemId: string): string | null {
+    const index = itemIds.indexOf(itemId);
+    return index < 0 ? null : itemIds[index + 1] ?? null;
+}
+
 /**
  * Selects one matching Task-series detail response.
  * @param {Awaited<ReturnType<TaskActionAppBridge['queryTaskSeries']>>} outcome Workspace response.

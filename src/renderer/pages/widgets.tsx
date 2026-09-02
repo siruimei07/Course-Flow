@@ -39,6 +39,9 @@ export type EmptyStateProps = Readonly<{
 /**
  * Renders a consistent page title and real Term context.
  *
+ * Page-level facts and the page action share one right-hand container, so a page can
+ * carry both without either landing on the title.
+ *
  * @param {Object} props Heading identity and visible copy.
  * @return {ReactElement} Page header.
  */
@@ -60,11 +63,15 @@ export function PageHeader(props: Readonly<{
                 tabIndex={-1}
             >{props.title}</h1>
             <p className="page-context">{props.context}</p>
-            {props.facts === undefined ? null : (
-                <div className="workspace-page-facts">{props.facts}</div>
-            )}
-            {props.actions === undefined ? null : (
-                <div className="workspace-page-actions">{props.actions}</div>
+            {props.facts === undefined && props.actions === undefined ? null : (
+                <div className="workspace-page-side">
+                    {props.facts === undefined ? null : (
+                        <div className="workspace-page-facts">{props.facts}</div>
+                    )}
+                    {props.actions === undefined ? null : (
+                        <div className="workspace-page-actions">{props.actions}</div>
+                    )}
+                </div>
             )}
         </header>
     );
@@ -273,15 +280,10 @@ export function TaskItem(props: Readonly<{
     const { actions, task } = props;
     const { deadline } = task.occurrence;
     const deadlineLabel = taskDeadlineRowLabel(deadline, props.termZone);
-    const itemId = taskItemId(task);
-    const availableActions: readonly TaskOccurrenceAction[] = task.occurrence.status === 'pending'
-        ? ['complete', 'skip']
-        : ['restore'];
-    const busy = actions?.busyItemId === itemId;
 
     return (
         <li
-            data-item-id={itemId}
+            data-item-id={taskItemId(task)}
             tabIndex={-1}
         >
             <span
@@ -297,27 +299,51 @@ export function TaskItem(props: Readonly<{
                 <span>进度 {task.occurrence.displayProgress}%</span>
             )}
             {actions === undefined ? null : (
-                <div
-                    aria-label={`${task.occurrence.title} 状态操作`}
-                    className="task-direct-actions"
-                    role="group"
-                >
-                    {availableActions.map(action => (
-                        <button
-                            data-task-action={action}
-                            disabled={!actions.writable
-                                || actions.busyItemId !== null
-                                || !actions.canRunAction(task, action)}
-                            key={action}
-                            onClick={() => actions.onAction(task, action)}
-                            type="button"
-                        >{taskOccurrenceActionLabels[action]}</button>
-                    ))}
-                    {busy ? <small role="status">正在保存任务状态…</small> : null}
-                    {!actions.writable ? <small>只读模式</small> : null}
-                </div>
+                <TaskDirectActions
+                    actions={actions}
+                    task={task}
+                />
             )}
         </li>
+    );
+}
+
+/**
+ * Renders the direct state actions of one Task occurrence; the same block serves every row shape.
+ *
+ * @param {Object} props Task projection and the Renderer action presentation.
+ * @return {ReactElement} Button group with its busy and read-only states.
+ */
+export function TaskDirectActions(props: Readonly<{
+    task: PlanTaskProjection;
+    actions: TaskActionPresentation;
+}>): ReactElement {
+    const { actions, task } = props;
+    const availableActions: readonly TaskOccurrenceAction[] = task.occurrence.status === 'pending'
+        ? ['complete', 'skip']
+        : ['restore'];
+    const busy = actions.busyItemId === taskItemId(task);
+
+    return (
+        <div
+            aria-label={`${task.occurrence.title} 状态操作`}
+            className="task-direct-actions"
+            role="group"
+        >
+            {availableActions.map(action => (
+                <button
+                    data-task-action={action}
+                    disabled={!actions.writable
+                        || actions.busyItemId !== null
+                        || !actions.canRunAction(task, action)}
+                    key={action}
+                    onClick={() => actions.onAction(task, action)}
+                    type="button"
+                >{taskOccurrenceActionLabels[action]}</button>
+            ))}
+            {busy ? <small role="status">正在保存任务状态…</small> : null}
+            {!actions.writable ? <small>只读模式</small> : null}
+        </div>
     );
 }
 

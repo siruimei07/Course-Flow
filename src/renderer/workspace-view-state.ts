@@ -3,7 +3,8 @@
  */
 
 import type { WorkspaceSetupOutcome } from '../shared/workspace-setup-contract';
-import type { PlanProjection } from '../shared/workspace-plan-contract';
+import type { PlanProjection, PlanTaskProjection } from '../shared/workspace-plan-contract';
+import type { TaskSize } from '../shared/workspace-task-contract';
 import type { SetupProjection } from '../shared/workspace-term-contract';
 
 export type WorkspaceProjectionState<T> =
@@ -95,4 +96,65 @@ export function evaluateSetupMinimum(projection: SetupProjection): SetupMinimumE
         hasMeetingOrTask: projection.minimum.hasMeetingOrTask,
         meetsMinimum: projection.minimum.isSatisfied,
     };
+}
+
+/**
+ * The Task page's single-selection filter: a Renderer view state, never a Query.
+ *
+ * It only decides which rows stay visible; every number on the page keeps its PLAN source.
+ */
+export type TaskListFilter =
+    | Readonly<{ kind: 'all' }>
+    | Readonly<{ kind: 'size'; size: TaskSize }>
+    | Readonly<{ kind: 'course'; courseId: string }>;
+
+export const ALL_TASKS_FILTER: TaskListFilter = Object.freeze({ kind: 'all' });
+
+/**
+ * Compares two filters by value.
+ *
+ * @param {TaskListFilter} first One filter.
+ * @param {TaskListFilter} second Another filter.
+ * @return {boolean} Whether both name the same selection.
+ */
+export function sameTaskListFilter(first: TaskListFilter, second: TaskListFilter): boolean {
+    if (first.kind === 'size' && second.kind === 'size') {
+        return first.size === second.size;
+    }
+    if (first.kind === 'course' && second.kind === 'course') {
+        return first.courseId === second.courseId;
+    }
+    return first.kind === second.kind;
+}
+
+/**
+ * Decides whether one PLAN-classified Task row stays visible under the filter.
+ *
+ * @param {TaskListFilter} filter Filter in effect.
+ * @param {PlanTaskProjection} task PLAN Task projection.
+ * @return {boolean} Whether the row is shown.
+ */
+export function taskListFilterAccepts(filter: TaskListFilter, task: PlanTaskProjection): boolean {
+    if (filter.kind === 'size') {
+        return task.occurrence.size === filter.size;
+    }
+    if (filter.kind === 'course') {
+        return task.courseId === filter.courseId;
+    }
+    return true;
+}
+
+/**
+ * Drops a Course selection whose Course can no longer be chosen, so a Term change or an
+ * archived Course never leaves the page filtered by something it does not offer.
+ *
+ * @param {TaskListFilter} filter Filter held by the Shell.
+ * @param {readonly string[]} courseIds Courses the page currently offers as chips.
+ * @return {TaskListFilter} The same filter, or 全部 when its Course is gone.
+ */
+export function resolveTaskListFilter(filter: TaskListFilter, courseIds: readonly string[]): TaskListFilter {
+    if (filter.kind === 'course' && !courseIds.includes(filter.courseId)) {
+        return ALL_TASKS_FILTER;
+    }
+    return filter;
 }

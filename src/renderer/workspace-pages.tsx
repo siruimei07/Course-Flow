@@ -2,6 +2,7 @@ import type { CSSProperties, ReactElement } from 'react';
 import type { ManagementSurfaceId } from './management-surfaces';
 import type { WorkspaceNavigationId } from './navigation';
 import type { TaskOccurrenceAction } from './task-occurrence-actions';
+import type { TaskListFilter } from './workspace-view-state';
 import type { TaskDeadline } from '../shared/workspace-task-contract';
 import type { SetupProjection, TermProjection } from '../shared/workspace-term-contract';
 import { CalendarPage } from './pages/calendar';
@@ -67,12 +68,19 @@ export type CalendarWeekPresentation = Readonly<{
     onReturnToCurrentWeek(): void;
 }>;
 
+export type TaskListPresentation = Readonly<{
+    /** Renderer view state: which Task rows the page shows; never a Query parameter. */
+    filter: TaskListFilter;
+    onFilterChange(filter: TaskListFilter): void;
+}>;
+
 export type WorkspacePageContentProps = WorkspacePageHandlers & Readonly<{
     setup: SetupProjection;
     plan?: PlanProjection | null;
     planProblem?: string | null;
     setupIncomplete: boolean;
     calendarWeek?: CalendarWeekPresentation;
+    taskList?: TaskListPresentation;
 }>;
 
 export type WorkspacePageProps = WorkspacePageContentProps & Readonly<{

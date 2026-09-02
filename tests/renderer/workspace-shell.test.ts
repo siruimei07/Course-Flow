@@ -621,3 +621,25 @@ for (const route of ['maintenance', 'recovery'] as const) {
         assert.deepEqual(calls, ['query']);
     });
 }
+
+test('page-level facts and the page action share one header cell and never span the title', () => {
+    const rule = (selector: string): string => {
+        const start = styles.indexOf(`${selector} {`);
+        assert.ok(start >= 0, `${selector} must exist`);
+        return styles.slice(start, styles.indexOf('}', start) + 1);
+    };
+
+    // Slice 13: the action used to take grid-row 1 / 3 and grid-column 1 / -1 at once and sat on the H1.
+    assert.match(rule('.workspace-page-side'), /grid-column:\s*2;/);
+    assert.match(rule('.workspace-page-side'), /grid-row:\s*1 \/ 3;/);
+    assert.doesNotMatch(rule('.workspace-page-actions'), /grid-column|grid-row|padding-top/);
+    assert.doesNotMatch(rule('.workspace-page-facts'), /grid-column|grid-row/);
+    // The Task page's chip and row buttons answer a press and never hover outside a fine pointer.
+    assert.match(rule('.task-direct-actions button:active:not(:disabled)'), /transform:\s*scale\(0\.98\)/);
+    const hoverRules = new RegExp([
+        '\\.task-direct-actions button:hover', '\\.task-filter-chip:hover',
+        '\\.task-rows > li:hover', '\\.task-archive > summary:hover',
+    ].join('|'));
+    assert.doesNotMatch(styles.slice(0, styles.indexOf('@media (hover: hover) and (pointer: fine)')), hoverRules);
+    assert.doesNotMatch(styles.slice(styles.indexOf('@media (prefers-reduced-motion: reduce)')), hoverRules);
+});

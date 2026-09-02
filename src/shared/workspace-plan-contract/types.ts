@@ -506,6 +506,33 @@ export function buildNextTask(
 }
 
 /**
+ * Orders classified Tasks by deadline boundary, then stable identity.
+ *
+ * PLAN uses it for its own deadline-ordered lists and shares it so a page that orders rows
+ * for display follows the same rule; a TBA deadline has no boundary and sorts first.
+ * @param {PlanEvaluationContext} context - Shared TermZone evaluation context.
+ * @return {Function} Comparator over classified Task projections.
+ */
+export function compareTasksByDeadline(
+    context: PlanEvaluationContext,
+): (first: PlanTaskProjection, second: PlanTaskProjection) => number {
+    const boundaries = new WeakMap<PlanTaskProjection, string>();
+    const boundaryOf = (task: PlanTaskProjection): string => {
+        let boundary = boundaries.get(task);
+        if (boundary === undefined) {
+            boundary = taskDeadlineBoundary(task.occurrence, context) ?? '';
+            boundaries.set(task, boundary);
+        }
+        return boundary;
+    };
+    return (first, second) => compareCanonicalText(boundaryOf(first), boundaryOf(second))
+        || compareCanonicalText(
+            taskOccurrenceIdentityKey(first.occurrence),
+            taskOccurrenceIdentityKey(second.occurrence),
+        );
+}
+
+/**
  * Counts Today Task and Meeting contributions using PLAN time fallback semantics.
  * @param {readonly PlanTaskProjection[]} tasks - Classified current-Term Task occurrences.
  * @param {readonly PlanMeetingProjection[]} meetings - Classified Meeting occurrences starting today.
@@ -988,15 +1015,7 @@ export function buildPlanProjection(
     const todayTasks = Object.freeze(tasks.filter(task => (
         task.classification === 'overdue'
         || taskDeadlineDate(task.occurrence, evaluationContext) === evaluationContext.applicableDate
-    )).sort((first, second) => (
-        compareCanonicalText(
-            taskDeadlineBoundary(first.occurrence, evaluationContext)!,
-            taskDeadlineBoundary(second.occurrence, evaluationContext)!,
-        ) || compareCanonicalText(
-            taskOccurrenceIdentityKey(first.occurrence),
-            taskOccurrenceIdentityKey(second.occurrence),
-        )
-    )));
+    )).sort(compareTasksByDeadline(evaluationContext)));
     const todayMeetings = Object.freeze(meetings.filter(meeting => (
         meeting.occurrence.date === evaluationContext.applicableDate
     )));
@@ -1005,15 +1024,7 @@ export function buildPlanProjection(
         return deadlineDate !== null
             && deadlineDate >= evaluationContext.requestedWindow.startDate
             && deadlineDate <= evaluationContext.requestedWindow.endDate;
-    }).sort((first, second) => (
-        compareCanonicalText(
-            taskDeadlineBoundary(first.occurrence, evaluationContext)!,
-            taskDeadlineBoundary(second.occurrence, evaluationContext)!,
-        ) || compareCanonicalText(
-            taskOccurrenceIdentityKey(first.occurrence),
-            taskOccurrenceIdentityKey(second.occurrence),
-        )
-    )));
+    }).sort(compareTasksByDeadline(evaluationContext)));
     const weekMeetings = Object.freeze(meetings.filter(meeting => (
         meeting.occurrence.date >= evaluationContext.requestedWindow.startDate
         && meeting.occurrence.date <= evaluationContext.requestedWindow.endDate

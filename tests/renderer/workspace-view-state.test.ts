@@ -6,10 +6,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    ALL_TASKS_FILTER,
     evaluateSetupMinimum,
     initialWorkspaceSurfaceFrom,
     planProjectionStateFrom,
+    resolveTaskListFilter,
+    sameTaskListFilter,
     setupProjectionStateFrom,
+    taskListFilterAccepts,
 } from '../../src/renderer/workspace-view-state';
 import type { MeetingSeriesProjection } from '../../src/shared/workspace-course-contract';
 import {
@@ -18,7 +22,7 @@ import {
     type PlanProjection,
 } from '../../src/shared/workspace-plan-contract';
 import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-contract';
-import type { TaskProjection } from '../../src/shared/workspace-task-contract';
+import type { TaskOccurrenceProjection, TaskProjection } from '../../src/shared/workspace-task-contract';
 import type { SetupProjection } from '../../src/shared/workspace-term-contract';
 
 /**
@@ -317,4 +321,81 @@ test('FLOW-00 uses the Workspace-owned default route instead of recomputing it f
 
     assert.equal(initialWorkspaceSurfaceFrom(previouslyCompleted), 'today');
     assert.equal(initialWorkspaceSurfaceFrom(neverCompleted), 'setup');
+});
+
+/**
+ * Builds one pending Task occurrence for the filter tests.
+ *
+ * @param {string} taskSeriesId Stable Task-series identity.
+ * @param {TaskOccurrenceProjection['size']} size Task size.
+ * @return {TaskOccurrenceProjection} Pending date-only occurrence.
+ */
+function pendingOccurrence(
+    taskSeriesId: string,
+    size: TaskOccurrenceProjection['size'],
+): TaskOccurrenceProjection {
+    return {
+        occurrenceId: { taskSeriesId, originalLogicalAnchor: 'once' },
+        title: `${size} task`,
+        size,
+        deadline: { kind: 'date-only', date: '2026-09-12' },
+        segmentId: '77777777-7777-4777-8777-777777777777',
+        status: 'pending',
+        reportedProgress: null,
+        displayProgress: null,
+        overrideKind: 'none',
+    };
+}
+
+test('UI-TASK-01 the Task list filter is Renderer view state that only decides which rows show', () => {
+    const setup = setupProjection();
+    const otherCourseId = '55555555-5555-4555-8555-555555555555';
+    const plan = buildPlanProjection({
+        workspaceRevision: setup.workspaceRevision,
+        planEntityVersion: setup.planEntityVersion,
+        term: setup.currentTerm!,
+        taskSources: [
+            {
+                courseId: CURRENT_COURSE_ID,
+                courseCode: 'CSC301',
+                occurrence: pendingOccurrence('11111111-aaaa-4aaa-8aaa-111111111111', 'small'),
+            },
+            {
+                courseId: otherCourseId,
+                courseCode: 'MAT137',
+                occurrence: pendingOccurrence('22222222-aaaa-4aaa-8aaa-222222222222', 'large'),
+            },
+        ],
+        meetingSources: [],
+        holidayRanges: [],
+    }, createPlanEvaluationContext('2026-09-10T14:00:00.000Z', 'America/Toronto'));
+    const [small, large] = plan.tasks;
+    assert.equal(small!.occurrence.size, 'small');
+    assert.equal(large!.occurrence.size, 'large');
+
+    // 全部 shows every row; a size or Course filter hides the rows that do not match.
+    assert.equal(taskListFilterAccepts(ALL_TASKS_FILTER, small!), true);
+    assert.equal(taskListFilterAccepts(ALL_TASKS_FILTER, large!), true);
+    assert.equal(taskListFilterAccepts({ kind: 'size', size: 'small' }, small!), true);
+    assert.equal(taskListFilterAccepts({ kind: 'size', size: 'small' }, large!), false);
+    assert.equal(taskListFilterAccepts({ kind: 'course', courseId: CURRENT_COURSE_ID }, small!), true);
+    assert.equal(taskListFilterAccepts({ kind: 'course', courseId: CURRENT_COURSE_ID }, large!), false);
+
+    // Filters compare by value, so a re-created chip option still reads as checked.
+    assert.equal(sameTaskListFilter({ kind: 'size', size: 'large' }, { kind: 'size', size: 'large' }), true);
+    assert.equal(sameTaskListFilter({ kind: 'size', size: 'large' }, { kind: 'size', size: 'small' }), false);
+    assert.equal(sameTaskListFilter({ kind: 'course', courseId: 'x' }, { kind: 'course', courseId: 'y' }), false);
+    assert.equal(sameTaskListFilter(ALL_TASKS_FILTER, { kind: 'all' }), true);
+    assert.equal(sameTaskListFilter(ALL_TASKS_FILTER, { kind: 'size', size: 'small' }), false);
+
+    // A Course the page no longer offers cannot stay selected; a size filter is untouched.
+    assert.deepEqual(
+        resolveTaskListFilter({ kind: 'course', courseId: 'gone' }, [CURRENT_COURSE_ID]),
+        ALL_TASKS_FILTER,
+    );
+    assert.deepEqual(
+        resolveTaskListFilter({ kind: 'course', courseId: CURRENT_COURSE_ID }, [CURRENT_COURSE_ID]),
+        { kind: 'course', courseId: CURRENT_COURSE_ID },
+    );
+    assert.deepEqual(resolveTaskListFilter({ kind: 'size', size: 'large' }, []), { kind: 'size', size: 'large' });
 });

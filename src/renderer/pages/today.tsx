@@ -1205,6 +1205,32 @@ export function termTaskRows(plan: PlanProjection, setup: SetupProjection): read
     return [...summarised, ...missing];
 }
 
+export type TermTaskTotals = Readonly<{
+    completed: number;
+    countable: number;
+    overdue: number;
+    tba: number;
+    percent: number;
+}>;
+
+/**
+ * Sums the PLAN per-Course counts once for a card heading; nothing here classifies.
+ *
+ * @param {readonly TermTaskRow[]} rows One row per current-Term Course.
+ * @return {TermTaskTotals} Term-wide totals and the rounded completion percent.
+ */
+export function termTaskTotals(rows: readonly TermTaskRow[]): TermTaskTotals {
+    const completed = rows.reduce((total, row) => total + row.completed, 0);
+    const countable = rows.reduce((total, row) => total + row.countable, 0);
+    return {
+        completed,
+        countable,
+        overdue: rows.reduce((total, row) => total + row.overdue, 0),
+        tba: rows.reduce((total, row) => total + row.tba, 0),
+        percent: countable === 0 ? 0 : Math.round((completed / countable) * 100),
+    };
+}
+
 /**
  * Renders the Term-wide Task completion PLAN summarised, one segment per Course.
  *
@@ -1217,11 +1243,7 @@ export function TermTasksCard(props: Readonly<{
     onCreateTask: () => void;
 }>): ReactElement {
     const rows = termTaskRows(props.plan, props.setup);
-    const completed = rows.reduce((total, row) => total + row.completed, 0);
-    const countable = rows.reduce((total, row) => total + row.countable, 0);
-    const overdue = rows.reduce((total, row) => total + row.overdue, 0);
-    const tba = rows.reduce((total, row) => total + row.tba, 0);
-    const percent = countable === 0 ? 0 : Math.round((completed / countable) * 100);
+    const { completed, countable, percent } = termTaskTotals(rows);
 
     return (
         <section
@@ -1243,56 +1265,87 @@ export function TermTasksCard(props: Readonly<{
                     title="还没有任务"
                 />
             ) : (
-                <>
-                    <div
-                        aria-label={`按课程的任务完成度，共 ${countable} 项，已完成 ${completed} 项`}
-                        className="term-tasks-bar"
-                        role="img"
-                    >
-                        {rows.filter(row => row.countable > 0).map(row => {
-                            const style: TermSegmentStyle = {
-                                '--share': `${row.countable}`,
-                                '--done': `${row.completed / row.countable}`,
-                            };
-                            return (
-                                <span
-                                    data-course-color={row.color ?? undefined}
-                                    data-course-id={row.courseId}
-                                    key={row.courseId}
-                                    style={style}
-                                />
-                            );
-                        })}
-                    </div>
-                    <ul className="term-tasks-legend">
-                        {rows.map(row => (
-                            <li
-                                data-course-color={row.color ?? undefined}
-                                data-course-id={row.courseId}
-                                key={row.courseId}
-                            >
-                                <span
-                                    aria-hidden="true"
-                                    className="course-dot"
-                                />
-                                <span>{row.courseCode}</span>
-                                <span className="term-tasks-count">{row.completed}/{row.countable}</span>
-                            </li>
-                        ))}
-                    </ul>
-                    {overdue === 0 && tba === 0 ? null : (
-                        <p className="term-tasks-note">
-                            {overdue === 0 ? null : (
-                                <span
-                                    className="status-label"
-                                    data-severity="critical"
-                                >逾期 {overdue}</span>
-                            )}
-                            {tba === 0 ? null : <span className="status-label">TBA {tba}</span>}
-                        </p>
-                    )}
-                </>
+                <CourseTaskShares rows={rows} />
             )}
         </section>
+    );
+}
+
+/**
+ * Renders the per-Course completion bar, its legend, and the overdue and TBA chips.
+ *
+ * Shared by Today's 学期任务 card and the Task page's 按课程 card; the Task page passes
+ * the Course its filter chip selected so the bar and legend can echo it.
+ *
+ * @param {Object} props Per-Course rows and the optional selected Course identity.
+ * @return {ReactElement} Bar, legend, and note.
+ */
+export function CourseTaskShares(props: Readonly<{
+    rows: readonly TermTaskRow[];
+    selectedCourseId?: string | null;
+}>): ReactElement {
+    const { rows } = props;
+    const { completed, countable, overdue, tba } = termTaskTotals(rows);
+    const selectedRow = rows.find(row => row.courseId === props.selectedCourseId);
+    const selected = (courseId: string): 'true' | undefined => (
+        selectedRow?.courseId === courseId ? 'true' : undefined
+    );
+
+    return (
+        <>
+            <div
+                aria-label={`按课程的任务完成度，共 ${countable} 项，已完成 ${completed} 项`
+                    + (selectedRow === undefined ? '' : `，已筛选 ${selectedRow.courseCode}`)}
+                className="term-tasks-bar"
+                role="img"
+            >
+                {rows.filter(row => row.countable > 0).map(row => {
+                    const style: TermSegmentStyle = {
+                        '--share': `${row.countable}`,
+                        '--done': `${row.completed / row.countable}`,
+                    };
+                    return (
+                        <span
+                            data-course-color={row.color ?? undefined}
+                            data-course-id={row.courseId}
+                            data-selected={selected(row.courseId)}
+                            key={row.courseId}
+                            style={style}
+                        />
+                    );
+                })}
+            </div>
+            <ul className="term-tasks-legend">
+                {rows.map(row => (
+                    <li
+                        data-course-color={row.color ?? undefined}
+                        data-course-id={row.courseId}
+                        data-selected={selected(row.courseId)}
+                        key={row.courseId}
+                    >
+                        <span
+                            aria-hidden="true"
+                            className="course-dot"
+                        />
+                        <span>{row.courseCode}</span>
+                        <span className="term-tasks-count">{row.completed}/{row.countable}</span>
+                        {selected(row.courseId) === undefined ? null : (
+                            <span className="visually-hidden">已筛选</span>
+                        )}
+                    </li>
+                ))}
+            </ul>
+            {overdue === 0 && tba === 0 ? null : (
+                <p className="term-tasks-note">
+                    {overdue === 0 ? null : (
+                        <span
+                            className="status-label"
+                            data-severity="critical"
+                        >逾期 {overdue}</span>
+                    )}
+                    {tba === 0 ? null : <span className="status-label">TBA {tba}</span>}
+                </p>
+            )}
+        </>
     );
 }

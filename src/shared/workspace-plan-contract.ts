@@ -33,6 +33,7 @@ export {
     calculateTermProgress,
     classifyMeetingOccurrence,
     classifyTaskOccurrence,
+    compareTasksByDeadline,
     createPlanEvaluationContext,
     selectNextTaskOccurrence,
 } from './workspace-plan-contract/types';

@@ -8,8 +8,10 @@ import test from 'node:test';
 import {
     advanceTaskUndoTimerState,
     focusTaskActionTarget,
+    nextTaskItemIdFrom,
     runWorkspaceTaskOccurrenceAction,
     runWorkspaceTaskOccurrenceUndo,
+    taskActionFocusTargetFrom,
     taskUndoPresentationFrom,
     taskUndoTimerDelayFrom,
     type TaskActionAppBridge,
@@ -1084,4 +1086,59 @@ test('App restores Task action focus above fixed feedback without animated scrol
         block: 'center',
         inline: 'nearest',
     }]);
+});
+
+test('App returns focus to the next visible row when the acted row moved into a closed disclosure', () => {
+    const row = (
+        itemId: string,
+        hidden: boolean,
+        action: string | null,
+        summary: string | null,
+    ): Readonly<{
+        itemId: string; hidden: boolean; element: string; action: string | null; summary: string | null;
+    }> => (
+        { itemId, hidden, element: `${itemId}:row`, action, summary }
+    );
+    const rows = [
+        row('task:a:once', false, 'a:complete', null),
+        row('task:b:once', false, 'b:complete', null),
+        row('task:c:once', true, 'c:restore', 'archive:summary'),
+    ];
+
+    const target = (itemId: string, nextItemId: string | null): string | null => (
+        taskActionFocusTargetFrom({ rows, itemId, nextItemId, heading: 'h1' })
+    );
+
+    // A row that stayed visible: its next enabled button, then the row itself.
+    assert.equal(target('task:a:once', 'task:b:once'), 'a:complete');
+    assert.equal(taskActionFocusTargetFrom({
+        rows: [row('task:a:once', false, null, null)],
+        itemId: 'task:a:once',
+        nextItemId: null,
+        heading: 'h1',
+    }), 'task:a:once:row');
+    // The acted row now sits inside a closed <details>: focus moves on to the row that followed it.
+    assert.equal(target('task:c:once', 'task:b:once'), 'b:complete');
+    // Nothing visible follows: the disclosure's summary, and only then the page heading.
+    assert.equal(target('task:c:once', null), 'archive:summary');
+    assert.equal(target('task:c:once', 'task:gone'), 'archive:summary');
+    assert.equal(taskActionFocusTargetFrom({ rows: [], itemId: 'task:z:once', nextItemId: null, heading: 'h1' }), 'h1');
+
+    // Today renders one occurrence twice (timeline item, then the task row): the match that owns
+    // an enabled button wins over the first element in DOM order.
+    const duplicated = [
+        row('task:d:once', false, null, null),
+        row('task:d:once', false, 'd:restore', null),
+    ];
+    assert.equal(taskActionFocusTargetFrom({
+        rows: duplicated,
+        itemId: 'task:d:once',
+        nextItemId: null,
+        heading: 'h1',
+    }), 'd:restore');
+
+    // The following row is read from the rendered order at dispatch time.
+    assert.equal(nextTaskItemIdFrom(['task:a:once', 'task:b:once'], 'task:a:once'), 'task:b:once');
+    assert.equal(nextTaskItemIdFrom(['task:a:once', 'task:b:once'], 'task:b:once'), null);
+    assert.equal(nextTaskItemIdFrom(['task:a:once'], 'task:missing'), null);
 });
