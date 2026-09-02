@@ -633,6 +633,7 @@ Task schedule 只有两种当前变体：
 20. `next-coursework` 与 `next-assessment` 分别只从 Current Term 中 pending、未 skipped 且日期已知的对应 TaskCategory group 选择；`other` 使用其显式 group。timed 使用真实截止 Instant，date-only 使用 TermZone 当日结束作为排序边界，TBA 不参与；无候选时返回带原因的真实空状态。并列时使用稳定身份产生确定顺序。
 21. Today/Week/Calendar/Agenda 投影必须携带同一 occurrence identity、文字类型、时间分类和来源引用。Meeting 至少区分 upcoming、in-progress、ended、cancelled、holiday-suppressed；Task 至少区分 overdue、today、near-due、future、completed、skipped、TBA。Today 摘要同时返回 Task/Meeting 的贡献明细以及 skipped、absent、excused、unmarked 等未计入项。
 22. 投影按照请求窗口计算，不要求扫描所有历史；缓存可删除重建。
+23. 统一计划投影同时携带请求窗口内七天的每日负荷（`week.days`：日期、未取消课节数、课节分钟数、当天截止任务数）与当前学期每门课程的任务完成汇总（`courses`：completed、pending、overdue、tba、skipped 与 countable，其中 countable 排除 skipped）；两者由同一 evaluator 从同一批实例汇总，Shell 只读不重算。
 
 **Problems / Degradation**
 
@@ -1289,7 +1290,7 @@ planned -> prepared -> armed -> awaiting-target-build
 1. Workspace 从 Clock/Term 形成 `evaluatedAt + termZone + applicableDate + requestedWindow`。
 2. DATA 提供 ReadSnapshot R。
 3. PLAN 在 R 上选择 Term/Course/Series segments，展开窗口内 occurrences，应用 HolidayRange、OccurrenceOverride 和 Task state。
-4. PLAN 产生统一时间/状态分类、next coursework/assessment、Today counts、warnings；所有页面查询复用同一规则实现。
+4. PLAN 产生统一时间/状态分类、next coursework/assessment、Today counts、每日负荷与按课程任务汇总、warnings；所有页面查询复用同一规则实现。
 5. ATTEND available 时读取同一 R 的窗口/记录，产生 Today overlay；disabled/unavailable 时返回 capability 或 problem。
 6. Workspace 组合 Envelope R；不受影响部分可以继续，任何 unavailable/stale 明确标注。
 7. Shell 只排序/布局，不重算领域分类。
@@ -1511,7 +1512,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 | `TEST-PLAN-005` | OccurrenceId 在重算、视图、重启与不改变逻辑实例的编辑后稳定 |
 | `TEST-PLAN-006` | TaskCategory/Other group、独立 progressTracking、date-only/timed/TBA、五分钟粒度、逾期/今天/未来/完成分类，weekly 确认范围及 next coursework/assessment 候选/排序规则 |
 | `TEST-PLAN-007` | TermZone 跨日、DST、启用日、date-only 日末和自动归档边界 |
-| `TEST-PLAN-008` | Today/Week/Calendar/Agenda/TBA 对同一 revision 的实例、Today 明细/计数、学期进度与假期连续片段一致 |
+| `TEST-PLAN-008` | Today/Week/Calendar/Agenda/TBA 对同一 revision 的实例、Today 明细/计数、学期进度、假期连续片段、每日负荷与按课程任务汇总一致 |
 
 ### 10.3 ATTEND
 

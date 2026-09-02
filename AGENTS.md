@@ -76,10 +76,21 @@ CourseFlow 是面向大学生的跨平台、本地优先桌面应用。当前仓
 
 ## Skills for Designers and Engineers 前端门禁
 
-- 所有涉及前端界面、交互、样式、动效或前端代码的编写、修改、重构与修复，必须在首次实质性操作前调用并参考 `emilkowalski/skills` 中与任务匹配的 skill；默认从 `emil-design-eng` 开始，动画、原型、UI 库等场景再调用对应专项 skill。
-- 前端视觉质量检查中，Taste 系列 skills（默认使用 `design-taste-frontend`）负责判断页面哪里不好看、失衡或显得模板化；`impeccable` 负责把这些判断转化为 agent 可执行的具体修改方案。
-- Taste 系列 skills 与 `impeccable` 的优先级均略低于 `emilkowalski/skills`；发生冲突时先遵循匹配的 `emilkowalski/skills`，再由前两者补充视觉诊断与实施细节。
-- 这些 skills 只在 CourseFlow 已批准的产品、架构、FECS、可访问性与跨平台约束内提供设计和实现参考；发生冲突时以本仓库规范来源为准。
+- 前端界面、交互、样式、动效与前端代码的编写、修改、重构、评审与修复，必须在首次实质性操作前按顺序应用三个 skill：`emil-design-eng`（工艺基线：组件设计、交互细节、动效判断）→ `design-taste-frontend`（诊断哪里失衡、模板化或方向不符）→ `impeccable`（把方向与诊断转成可执行改动并做到完成状态）。冲突时 `emil-design-eng` 优先，另两者补充视觉诊断与实施细节。
+- `design-taste-frontend` 自身面向 landing、portfolio 与 redesign；在 CourseFlow 的产品界面上只用于品味与方向判断，实施由 `impeccable` 拥有。
+- skill 原文位于仓库外的工作区 `.claude/skills/<name>/SKILL.md`。能读取时以原文为准；运行环境无法访问该路径时，仍须遵守本节的门禁、顺序、优先级与条件层边界，并在报告中说明未读取原文。本节只覆盖下列已安装的 skill，不从其名称推断其他专项 skill 存在。
+- 这些 skill 只在 CourseFlow 已批准的产品、架构、FECS、可访问性与跨平台约束内提供参考；冲突时以本仓库规范来源为准，`CourseFlow 硬边界` 的键盘可达与状态表达要求不因设计建议放宽。
+
+### 条件层 skill
+
+- 下列 skill 属于条件层，不进入每次前端操作的强制阶梯，只在各自触发条件成立时按需读取；触发条件不成立时不得加载，也不得据其名称推断适用范围。
+- `frontend-design`：只在确立新的视觉方向时读取，即新页面、新版式或对已有页面重新定调。方向已冻结的切片不因它重开；它不覆盖已批准的布局决策。
+- `ui-ux-pro-max`：定向查询工具，不整篇加载。按无障碍、色彩、排版、图表或实现栈的单一意图检索 `scripts/search.py`，先核对返回条目是否匹配 CourseFlow 的产品与平台再采用。检索为空时如实说明未命中并回落到本仓库既有约束，不得把未经核对的输出写入代码或文档。
+- `ui-styling`：只用于组件结构、状态覆盖与无障碍语义的参考。CourseFlow 渲染层不使用 Tailwind 或 shadcn/ui，其 utility class、Radix 组件与主题变量方案不得引入；样式实现仍归 `styles.css` 既有 token 体系（半径三档、固定 rem 字号档、状态 token、`[data-course-color]` 课程强调色）。
+- `vercel-react-best-practices`：只在改动涉及 React 渲染与重渲染、effect 依赖、bundle 切分或数据获取性能时读取，且需指出对应的可观测问题。不作为普通 UI 改动的例行检查项，也不得据此在无实测依据时增加 memo、缓存或懒加载。
+- `web-artifacts-builder`：只覆盖独立 HTML mockup 与设计探索产物，例如切片评审用的原型页。不得用于 `src/` 下的产品代码，不得据此把 React 18 + Vite + Tailwind + shadcn 的构建方式带入 Electron 渲染层，其产物不进入构建链。
+- 条件层与 `design-taste-frontend` 或 `impeccable` 重叠时，以后两者为准；条件层只在它们未覆盖的细节上补充，不得据以推翻已冻结的品味判断与工艺底线。三件套内部优先级不变，`emil-design-eng` 仍然优先。
+- 条件层同样受本节上一条与 `CourseFlow 硬边界` 约束：键盘可达、非颜色状态表达、离线与无账户要求不因任何条件层建议放宽。
 
 ## Baidu FECS 全仓规范
 

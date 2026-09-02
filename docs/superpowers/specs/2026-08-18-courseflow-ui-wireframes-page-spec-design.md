@@ -250,44 +250,47 @@ macOS 与 Windows 使用相同信息架构、状态语义和核心旅程；窗�
 
 ## 8. UI-TODAY-01：今天首页
 
-**用户目标**：打开应用后立即知道今天有什么、下一步做什么，以及本周和学期处于什么状态。
+**用户目标**：打开应用后立即知道现在在做什么、今天有什么、下一步做什么，以及本周和学期处于什么状态。
 
-> **MVP-A 实施说明（2026-08-31 重排，取代 2026-08-29 说明）：** 首发只交付 MVP-A 的 small/large 任务模型，
-> 因此本页实现为「问候语 + 学期进度胶囊 + 三个行动数字」页眉，加一张以今日时间轴为锚的四列网格。
+> **MVP-A 实施说明（2026-09-01 重排，取代 2026-08-31 说明）：** 首发只交付 MVP-A 的 small/large 任务模型，
+> 因此本页实现为「问候语 + 学期进度胶囊 + 三个行动数字」页眉，加一张四列三行、以今日时间轴为左侧日脊的网格，
+> 共七张卡片：今日时间轴、现在、本周课时、下一步与本周截止（唯一深色面）、今日任务、课程、学期任务。
 > 本节线框与槽位表描述的就是首发构建；2026-08-28 已批准的 Coursework/Assessment 分组在该模型实现前不出现。
 
 **前置状态**：存在活动数据。无当前学期或学期已结束时进入对应真实状态。
 
-**标准桌面线框（1280×800，应用默认窗口）**：
+**标准桌面线框（1420px 内容宽度，即 1920×1200 全屏下 `.workspace-page` 的 `max-width`；1280×800 为应用默认窗口）**：
 
-    ┌──────────────────────────────────────────────────────────────┐
-    │ 星期四，下午好                     Fall 2026        剩余 10 天│
-    │ 2026-09-10 · America/Toronto · 第 1 周 [███ ░░ ▒▒▒▒▒▒▒▒▒▒▒▒] │
-    │                                     逾期  今日待完成   下一节 │
-    │                                       3        4       13:00 │
-    ├──────────────────────┬──────────────┬────────────────────────┤
-    │                      │ 下一步(深色) │ 需要注意               │
-    │ 今日时间轴（锚）      ├──────────────┴────────────────────────┤
-    │                      │ 今日任务                              │
-    ├──────────────────────┴───────────────────────────────────────┤
-    │ 本周（七日条）                                               │
-    └──────────────────────────────────────────────────────────────┘
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │ 星期二，下午好                            2026 - 2027 Fall  剩余 106 天│
+    │ 2026-09-15 · America/Toronto · 第 2 周   [███ ░░ ▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒] │
+    │                                            逾期任务  今日待完成  下一节 │
+    │                                                1         3      15:00 │
+    ├──────────────┬───────────────┬───────────────┬───────────────────────┤
+    │              │ 现在（环）    │ 本周课时      │ 下一步（深色）        │
+    │ 今日时间轴   ├───────────────┴───────────────┤ + 本周截止 n/N        │
+    │ （日脊）     │ 今日任务                      │                       │
+    ├──────────────┴───────────────────────────────┼───────────────────────┤
+    │ 课程（accordion）                            │ 学期任务（按课程）    │
+    └──────────────────────────────────────────────┴───────────────────────┘
 
-**网格**：`grid-template-columns: repeat(4, 1fr)`、`grid-template-rows: auto auto auto`、`gap: 12px`。
+**网格**：`grid-template-columns: repeat(4, minmax(0, 1fr))`、`grid-template-rows: auto auto auto`、`gap: 12px`、`align-items: stretch`。
 
-| 位置 | 槽位 |
-|---|---|
-| 第 1–2 行 / 第 1–2 列 | 今日时间轴（锚，跨两行） |
-| 第 1 行 / 第 3 列 | 下一步（本页唯一深色面） |
-| 第 1 行 / 第 4 列 | 需要注意（无事实时整卡移出网格） |
-| 第 2 行 / 第 3–4 列 | 今日任务 |
-| 第 3 行 / 第 1–4 列 | 本周 |
+| 位置 | 槽位 | 类名 |
+|---|---|---|
+| 第 1-2 行 / 第 1 列 | 今日时间轴（日脊，跨两行） | `.today-timeline-card` |
+| 第 1 行 / 第 2 列 | 现在 | `.now-card` |
+| 第 1 行 / 第 3 列 | 本周课时 | `.week-load-card` |
+| 第 1-2 行 / 第 4 列 | 下一步 + 本周截止（本页唯一深色面，跨两行） | `.next-step-card` |
+| 第 2 行 / 第 2-3 列 | 今日任务 | `.today-tasks-card` |
+| 第 3 行 / 第 1-3 列 | 课程 | `.courses-card` |
+| 第 3 行 / 第 4 列 | 学期任务 | `.term-tasks-card` |
 
-「需要注意」折叠时，「下一步」扩展为第 1 行第 3–4 列，网格不留空槽。
+七个槽位都无条件存在；没有事实的槽位显示自己的空状态，网格不再有条件槽位或折叠逻辑。DOM 顺序与上表一致，即视觉阅读顺序（日脊、此刻、本周、下一步、今天、课程、学期），键盘与辅助技术顺序不需要额外处理。
 
-**响应式**：`≤1080px` 降为两列，时间轴占满一行，其余槽位两两成对；`≤820px` 单列。沿用 §4.5 既有断点，不新增断点。
+**响应式**：`≤1080px` 降为两列：时间轴独占第 1 行，`现在 | 深色卡（跨第 2-3 行）`、`本周课时 | 深色卡`，其后今日任务、课程、学期任务各占整行；`≤820px` 单列按 DOM 顺序。沿用 §4.5 既有断点，不新增断点。
 
-时间轴的可见时段与几何沿用 §11.1 为周日历设定的同一条规则：默认 07:00–22:00，真实课节或任务落在范围外时扩展到容纳它的整点边界，纵向偏移按整数优先的 `分钟 × 33 ÷ 60` 计算。一条时间规则同时服务日历和今日两个表面。时间轴卡片的高度由同一行的其他槽位决定，导轨在卡内独立纵向滚动并可键盘到达。
+时间轴的可见时段与几何沿用 §11.1 为周日历设定的同一条规则：默认 07:00-22:00，真实课节或任务落在范围外时扩展到容纳它的整点边界，纵向偏移按整数优先的 `分钟 × 33 ÷ 60` 计算。一条时间规则同时服务日历和今日两个表面。时间轴卡片的高度由同一行的其他槽位决定，导轨在卡内独立纵向滚动并可键盘到达。60 分钟课节（33px）内标题行必须完整可见：事件条的标题行有保证的最小高度，短事件裁掉的是 meta 行的下缘，永远不是标题。
 
 ### 8.1 页眉
 
@@ -324,37 +327,55 @@ macOS 与 Windows 使用相同信息架构、状态语义和核心旅程；窗�
 3. 否则若 `plan.term.startDate` 晚于 `applicableDate`，标题降级为「学期开始」，值为 `plan.term.startDate`；
 4. 否则显示「本周无」。
 
-两个列表都已由 PLAN 按开始时间排序、分类也由 PLAN 给出，Renderer 只取第一个匹配项，不重新分类、不重新排序、不跨周补齐。
+两个列表都已由 PLAN 按开始时间排序、分类也由 PLAN 给出，Renderer 只取第一个匹配项，不重新分类、不重新排序。页眉的第三格有意停留在本周尺度；跨周的「下一节」由「现在」卡和空状态阶梯（§8.3）承担。
 
 ### 8.2 槽位与事实绑定
 
+**投影的覆盖范围**：`readPlanProjectionSource` 按整个 Term 展开课节与任务实例，因此 `plan.tasks`、`plan.meetings`、`plan.next.*`、`plan.tba`、`plan.termProgress`、`plan.courses` 是整学期事实；`plan.week.*`（含 `plan.week.days`）、`plan.calendar`、`plan.agenda`（含 `warnings`）绑定到 `evaluationContext.requestedWindow`，默认本周一至周日。`plan.meetings` 已由 PLAN 按开始时间排序并分类，其中第一个 `classification === 'upcoming'` 的条目就是学期内的下一节课；这是读取，不是推断。
+
 | 槽位 | 内容 | 事实来源 | 空状态 |
 |---|---|---|---|
-| 今日时间轴 | 计时日程条、课程色块、冲突标记、当前时刻线 | `plan.calendar.timedItems` 中 `applicableDate` 当天的条目、`setup.courses[].color`、`plan.agenda.warnings`、`plan.evaluationContext.evaluatedAt` | 仍绘制导轨，中间一行说明加一个动作 |
-| 下一步 | 大任务主块（大标题与倒计时）加小任务一行 | `plan.next.large`、`plan.next.small`、各自 `remainingMilliseconds` | 两者皆空时单块单动作；不得出现两段逐字相同的文案 |
-| 需要注意 | 逾期任务数、本周时间冲突组数、TBA 任务数 | `plan.today.summary.excluded.priorOverdueTasks`、`plan.agenda.warnings`、`plan.tba.tasks` | 三者皆为 0 时整卡移出网格，页脚一行说明被隐藏了什么 |
+| 今日时间轴 | 计时日程条、课程色块、冲突标记、当前时刻线 | `plan.calendar.timedItems` 中 `applicableDate` 当天的条目、`setup.courses[].color`、`plan.agenda.warnings`、`plan.evaluationContext.evaluatedAt` | 仍绘制导轨，说明块覆盖在导轨中央，文案按 §8.3 阶梯，两个动作（查看日历、添加课节） |
+| 现在 | 当前时刻、一个环、状态标签、主值、一行 meta | 见下方状态表 | 空轨道，主值与 meta 按状态表 |
+| 本周课时 | 七根柱（每天课时）、峰值 chip、今天高亮、柱下任务点、底部冲突 chip | `plan.week.days[]`、`plan.evaluationContext.applicableDate`、`plan.agenda.warnings` | 七个 3px 底座加一句话：开学前「学期 {startDate} 开始，本周还是空的。」，学期内「本周没有课节。」 |
+| 下一步 + 本周截止 | 上半：大任务主块（大标题与倒计时）加小任务一行；下半：本周截止清单与 `n/N` | `plan.next.large`、`plan.next.small`、各自 `remainingMilliseconds`；`plan.week.tasks` 与其 `classification` | 上半两者皆空时单块单动作；下半为空时一句「本周没有截止的任务。」；不得出现两段逐字相同的文案 |
 | 今日任务 | 任务列表、完成度 meter、severity chip | `plan.today.tasks`、`plan.today.summary.contributions.tasks`、`occurrence.displayProgress`、`classification` | 一句话，指向 TBA 任务数量 |
-| 本周 | 七日条，每日课节数与任务数，今天高亮 | `plan.week.meetings`、`plan.week.tasks`、`plan.week.window` | 一句话，点名 `plan.term.startDate` |
+| 课程 | 当前学期课程 accordion：色点、代码、名称、教师、`{星期缩写} · n 节/周`；展开后教师/Section/学分与课节时段列表 | `setup.courses` 中 `termId === plan.term.termId && !archived` 的条目及其 `meetings[]`；标题右侧「本周 n 节」读 `plan.week.meetings.length` | 「还没有课程」加「添加课程」 |
+| 学期任务 | 完成百分比、`已完成 a / b 项 · 按课程`、按课程分段的完成条、图例、逾期与 TBA chip | `plan.courses[]`（§8.4） | 「还没有任务」加一句说明与「添加任务」 |
 
-**「本周时间冲突」的范围**：`plan.agenda.warnings` 覆盖的是整个 `plan.week.window`，不是今天。该数字的标题必须写「本周时间冲突」，不得写成「今日冲突」。时间轴上的冲突标记同样只按 `agenda.warnings` 中出现过的 Meeting occurrence 身份打标，Renderer 不自行判定重叠。
+**「现在」卡的状态表**（按顺序取第一个命中）：
 
-**「今日任务」完成度的口径**：meter 使用 `plan.today.summary.contributions.tasks` 的 `completed` 与 `pending`，即只覆盖任务。页眉的「今日待完成」使用 `plan.today.summary.pending`，同时覆盖任务与课节。两处数字口径不同，标题必须分别说明，不得互相替代。`completed` 与 `pending` 之和为 0 时不渲染 meter，只保留文字。
+| 状态 | 判定 | 环 | 主值 | meta |
+|---|---|---|---|---|
+| 上课中 | `plan.today.meetings` 中存在 `classification === 'in-progress'` | 已进行比例 `(evaluatedAt - startInstant) / (endInstant - startInstant)`，弧穿该课程的 `--course-accent` | 「剩 n 分钟」，`endInstant - evaluatedAt` 向上取整 | `{courseCode} {typeLabel} · 至 {localEnd} · {location}` |
+| 课间 | `plan.today.meetings` 中仍有 `upcoming` | `plan.today.summary.contributions.meetings.completed / (completed + pending)`，弧穿 `--dark` | 到下一节 `startInstant` 的「n 小时 m 分后」（不足一小时只显示分钟） | `下一节 {courseCode} {typeLabel} · {localStart} · {location}` |
+| 今天的课上完了 | 今天有课节但既无 `upcoming` 也无 `in-progress` | 同上（此时为满环） | 「今天 n 节课已结束」（n 为今天未取消课节数） | 学期内下一节：`下一节 {星期} {localStart} {courseCode}`（`plan.meetings` 第一条 `upcoming`）；没有则「本学期没有其他课节」 |
+| 今天没有课 | 学期内、今天没有课节 | 空轨道 | 「今天没有课」 | 同上一行 |
+| 开学前 | `applicableDate < plan.term.startDate` | 空轨道 | 「n 天」（到 `plan.term.startDate` 的日历日差） | `第一节 {星期} {localStart} {courseCode} · {MM-DD} · {location}`；没有课节则「还没有排课节」 |
 
-**「需要注意」的单一动作**：按固定优先级选择，不随内容排序变化。逾期任务大于 0 时为「查看任务」；否则冲突组数大于 0 时为「查看日历」；否则为「查看 TBA 任务」。
+在课比例与「当前时刻线」属于同一类时间几何，由 Renderer 从 PLAN 的 Instant 计算；其余数量全部来自 PLAN。环的轨道是 60 段刻度的表盘，弧以 `pathLength="100"` 定长；`prefers-reduced-motion` 下不过渡。环上没有播放或暂停控件。状态标签左侧的圆点：上课中为 `--morning-deep`，其余穿相关课程色，无课程时为中性灰。
 
-**七日条的成列方式**：按 `plan.week.window` 的七个日期把 `plan.week.meetings` 与 `plan.week.tasks` 放进各自日期列并显示列内条数。任务的列由其 deadline 决定：`date-only` 用该日期，`timed` 用 TermZone 本地日期。这与周日历把同一批事实放进日期列属于同一类呈现放置，不引入新的分类或过滤条件。
+**「本周课时」的读法**：柱高为 `plan.week.days[i].meetingMinutes` 相对本周最大值的比例；标题右侧「n 小时 · m 节」为七天 `meetingMinutes` 之和除以 60（保留一位小数，整数时不显示小数）与 `meetingCount` 之和；峰值 chip 只标最高的一天（并列时都标）；柱下最多 3 个圆点表示 `taskCount`，第 4 个圆点表示「3 以上」；今天的柱穿 `--morning-deep`，日标签同时变为黄底黄边胶囊，状态不只靠颜色。柱不超过 24px 宽，数据端 4px 圆角、基线为直角，不描边。`plan.agenda.warnings.length > 0` 时底部出现 warning chip「n 组时间冲突」加一行「{星期} {localStart} {first.courseCode} 与 {second.courseCode} 重叠」，只取第一组，其余由日历页承担。该数字覆盖的是整个 `plan.week.window`，标题必须写「本周」，不得写成「今日」。时间轴上的冲突标记同样只按 `agenda.warnings` 中出现过的 Meeting occurrence 身份打标，Renderer 不自行判定重叠。
+
+**「本周截止」的读法**：`n` 为 `plan.week.tasks` 中 `classification === 'completed'` 的数量，`N` 为 `plan.week.tasks.length`（`skipped` 计入分母并划线显示，与 PLAN 的周列表一致）。行按 PLAN 已排好的截止顺序，最多 5 行，第 6 行起折叠为「还有 n 项在任务页。」。每行为勾选圈（`completed` 白底深色勾；`overdue` 圈边为深色面上的 critical 色；`today` 圈边为强调黄；其余为半透明白）、标题（完成态划线）、`{courseCode} · {星期} {HH:MM}` meta（date-only 只给星期，`overdue` 追加「· 逾期」）。行不可点击；任务操作留在「今日任务」与任务页，卡片只有一个「查看任务」动作。
+
+**「今日任务」完成度的口径**：meter 使用 `plan.today.summary.contributions.tasks` 的 `completed` 与 `pending`，即只覆盖任务。页眉的「今日待完成」使用 `plan.today.summary.pending`，同时覆盖任务与课节。两处数字口径不同，标题必须分别说明，不得互相替代。`completed` 与 `pending` 之和为 0 时不渲染 meter，只保留文字。timed deadline 按 TermZone 显示为 `YYYY-MM-DD HH:mm`（`<time dateTime>` 保留精确 Instant），date-only 显示日期本身，TBA 显示「TBA」。
+
+**「课程」的读法**：每行是原生 `<details>/<summary>`，键盘可达、无脚本状态；`summary` 去掉默认标记，`:focus-visible` 有可见轮廓，chevron 用 SVG 绘制并在展开时旋转。摘要行的 `{星期缩写}` 来自该课程 `meetings[].weekday` 去重排序，`n 节/周` 为 `meetings.length`。展开内容中的时段按 weekday、localStart 排序。行之间用 1px `var(--line)` 分隔，不把每门课包成卡。默认全部折叠。
+
+**三项注意事实各归其位**：逾期任务数已在页眉（critical 色），逾期任务本就出现在「今日任务」列表与「本周截止」清单；本周时间冲突在「本周课时」卡底部；TBA 数量在「学期任务」卡底部，且「今日任务」空状态继续点名 TBA 数量。2026-08-31 版本的「需要注意」卡与页脚说明不再存在。
 
 ### 8.3 空状态降级阶梯
 
-`createPlanEvaluationContext` 在未传 `requestedWindow` 时把窗口固定为本周一至周日，因此 `plan.meetings` 与 `plan.week` 只覆盖当前这一周。空状态文案**不得引用投影窗口以外的事实**：「下一节课是 09-08 周二 09:00 的 CSC207」这类句子在开学前无法从投影得出，写出来就是编造。
+课节相关空状态（今日时间轴的说明块、「现在」卡的 meta）按以下阶梯取文案，取到哪级用哪级：
 
-课节相关空状态按以下阶梯取文案，取到哪级用哪级：
+1. `plan.today.meetings` 中仍有 `classification === 'upcoming'` 的课节：「下一节 {localStart} {courseCode}」；
+2. 否则 `plan.week.meetings` 中有 `upcoming`：「本周下一节是{星期} {localStart} 的 {courseCode}。」；
+3. 否则 `plan.meetings` 中有 `upcoming`（跨周）：「下一节 {MM-DD} {星期} {localStart} {courseCode}。」；
+4. 否则若 `plan.term.startDate` 晚于 `applicableDate`：「学期 {startDate} 开始，还没有排课节。」；
+5. 否则：「本学期没有其他课节。」，并给一个通向日历页的动作。
 
-1. 本周内还有 `classification === 'upcoming'` 的课节，说出它的星期与时刻（来自 `plan.week.meetings`）；
-2. 否则若 `plan.term.startDate` 晚于 `applicableDate`，说出学期开始日期（`plan.term.startDate`，一定可得）；
-3. 否则只说「本周没有其他课节」，并给一个通向日历页的动作。
-
-本周条与今日任务的空状态同样只能引用 `plan.week.*`、`plan.tba.tasks.length` 与 `plan.term` 里已有的事实。跨周的「下一节课」属于 PLAN 契约扩展，不属于本页。
+第 3 级读取的是 PLAN 已排序分类的整学期列表的首个匹配项，不是 Renderer 的推断（§8.2 首段）。「本周课时」「本周截止」与「今日任务」的空状态只引用 `plan.week.*`、`plan.tba.tasks.length` 与 `plan.term` 里已有的事实。
 
 空状态文案使用学生语言，说明缺少的真实对象和可执行的下一步；不解释投影不变量（例如「统一计划投影确认……取消或假期抑制不会伪装成课程」属于被替换的写法）。分级规则见 §17.8。
 
@@ -362,14 +383,16 @@ macOS 与 Windows 使用相同信息架构、状态语义和核心旅程；窗�
 
 - 今日时间轴按开始时间排序；进行中和即将开始有文字状态。
 - 「下一步」的主块固定为大任务、次行固定为小任务，不按剩余时间在两者之间挑选。两者分别从未完成、未跳过且日期已知的对应任务组中由 PLAN 选出。
-- TBA 任务不参与倒计时，进入「需要注意」的 TBA 计数与任务页。
+- TBA 任务不参与倒计时，进入「学期任务」卡的 TBA 计数与任务页。
 - 任务状态使用 severity chip（§17.9）：逾期为 critical、今天截止为 warning、已完成为 success。黄色只作强调色，永远不表示逾期。
 - 今日计数同时覆盖任务和应上课课节；假期抑制和取消课节不计。
 - 出席关闭时，已结束课节按时间进入已完成统计，未来或进行中课节进入待完成。
 - 出席开启时，Present 与 Late 计入完成并保持不同标签；已结束 Unmarked 进入待确认；Absent 单独显示；Excused 显示为已处理且不进入完成、缺席或待确认；未来/进行中仍待完成。
-- 学期进度使用学期时区中的日历日和包含首尾两日的公式：（今天 减 学期开始日 加 1）除以（学期结束日 减 学期开始日 加 1），并限制在 0%–100%。Reading Week 不从分母扣除；不使用任务完成率替代日期进度。
+- 学期进度使用学期时区中的日历日和包含首尾两日的公式：（今天 减 学期开始日 加 1）除以（学期结束日 减 学期开始日 加 1），并限制在 0%-100%。Reading Week 不从分母扣除；不使用任务完成率替代日期进度。
+- **每日负荷** `plan.week.days`：七条，从 `plan.week.window.startDate` 起连续；`meetingCount` 为当天 `plan.week.meetings` 中 `classification !== 'cancelled'` 的数量，`meetingMinutes` 为这些课节 `(endInstant - startInstant)` 的分钟和（跨日课节归入开始日、取全长），`taskCount` 为当天截止的 `plan.week.tasks` 数量（含 completed 与 skipped）。
+- **学期任务完成度** `plan.courses`：每门在 `plan.tasks` 或 `plan.meetings` 中出现过的课程一条，按 `courseId` 稳定排序；`completed`、`pending`（overdue + today + near-due + future）、`overdue`、`tba`、`skipped` 与 `countable = completed + pending + tba`。**跳过的任务不计入 `countable`**：跳过表示不再要做，分母也不算它。页面百分比为 `Σ completed / Σ countable`，`countable` 为 0 时显示 `0%`。分段条中每门课一段，段宽 ∝ `countable`，段内实心宽 ∝ `completed / countable`，段底色为同色浅一阶。没有任何实例的课程由 `setup.courses` 补齐并以 `0/0` 显示。
 
-**Renderer 边界**：本页不重新计算分类、选择或汇总。按稳定 ID 查 `setup.courses[].color`、按 PLAN 已给出的分类取列表首项、把 PLAN 事实放进日期列或时间轴位置、显示两个 PLAN 数字之差或之和，都属于呈现；新增一个投影里没有的判定、阈值或统计口径则不属于。
+**Renderer 边界**：本页不重新计算分类、选择或汇总。按稳定 ID 查 `setup.courses[].color`、按 PLAN 已给出的分类取列表首项、把 PLAN 事实放进日期列或时间轴位置、显示两个 PLAN 数字之差或之和、把 PLAN 的 Instant 换算成环上的比例，都属于呈现；新增一个投影里没有的判定、阈值或统计口径则不属于。每日负荷与按课程汇总因此由 PLAN 的 `buildPlanProjection` 产生，Shell 只读。
 
 ### 8.5 直接操作与真实状态
 
@@ -381,15 +404,15 @@ macOS 与 Windows 使用相同信息架构、状态语义和核心旅程；窗�
 真实状态：
 
 - 设置未完成：保留可用槽位，缺失槽位显示下一步与「继续设置」。
-- 当日无课：时间轴仍绘制导轨并说明今天没有课节，不隐藏「下一步」。
-- 无任务：「今日任务」显示一句话空状态并指向 TBA 数量。
-- 三项注意事实皆为 0：「需要注意」整卡移出网格，页脚一行说明被隐藏的是哪三项。
+- 当日无课：时间轴仍绘制导轨并在导轨中央说明今天没有课节，不隐藏「下一步」；「现在」卡进入「今天没有课」或「开学前」状态。
+- 无任务：「今日任务」显示一句话空状态并指向 TBA 数量；「本周截止」显示一句话；「学期任务」显示空状态。
+- 没有课程：「课程」卡显示空状态并提供「添加课程」。
 - 学期已结束：显示结束说明、100% 日期进度、「创建新学期」为主操作、「查看历史」为次操作。
 - 数据局部失败：不受影响的槽位继续工作；失败槽位说明范围和重试方式。
 
-**完成状态**：用户无需进入其他页面即可识别今天课节的时刻分布、下一步任务、需要注意的逾期/冲突/TBA、本周负荷和学期日期进度，并能完成/跳过任务。
+**完成状态**：用户无需进入其他页面即可识别现在正在上或将要上什么课、今天课节的时刻分布、下一步任务与本周截止、本周每天的负荷与冲突、当前学期课程清单和按课程的任务完成度，并能完成/跳过任务。
 
-**追溯**：UF-A-03；A-VIEW-001–006；A-TASK-002、A-TASK-003、A-TASK-008、A-TASK-009；A-ATTEND-003、A-ATTEND-005；STATE-001、STATE-002、STATE-006。
+**追溯**：UF-A-03；A-VIEW-001-006；A-TASK-002、A-TASK-003、A-TASK-008、A-TASK-009；A-ATTEND-003、A-ATTEND-005；STATE-001、STATE-002、STATE-006。
 
 ## 9. 课程与课表
 
@@ -1320,7 +1343,7 @@ Unmarked 不能按 Absent；Excused 不能按 Present 或 Absent；取消和假�
 空状态按槽位分级，不是每个空槽位都得到同一块完整空状态：
 
 - **主槽位**（页面的锚，例如 Today 的今日时间轴与今日任务）：保留结构，给一句话说明和一个可执行的下一步。
-- **次槽位**（例如 Today 的「需要注意」）：整卡移出布局，由页面底部一行说明被隐藏了什么。空卡片本身也是噪声。
+- **次槽位**（例如 Today 深色卡里的「本周截止」清单、「本周课时」的冲突 chip）：只保留一句话或直接不渲染该片段，不给动作；卡片本身仍在网格里，因为它同时承载其他事实。空卡片本身也是噪声，所以 Today 的七个槽位各自都有不为空的主内容或明确的下一步。
 - **页面级不可用**（投影读取失败）：说明范围与重试方式，不折叠。
 
 每个显示出来的空状态必须包含：
