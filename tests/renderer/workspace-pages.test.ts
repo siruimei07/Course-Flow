@@ -393,19 +393,23 @@ test('TodayPage renders only real unified Today, Week, next-task, and term-progr
     assert.match(html, /设置未完成/);
     assert.match(html, /继续设置/);
     assert.match(html, /class="content-card next-step-card"/);
-    assert.match(html, /id="today-attention-title"[^>]*>需要注意<\/h2>/);
-    const attention = html.match(
-        /<section aria-labelledby="today-attention-title"[\s\S]*?<\/section>/,
+    // Slice 12: the three attention facts sit in the cards that own their scope.
+    assert.doesNotMatch(html, /today-attention-title|需要注意/);
+    const weekLoad = html.match(
+        /<section aria-labelledby="today-week-title"[\s\S]*?<\/section>/,
     )?.[0] ?? '';
-    assert.match(attention, /本周时间冲突<\/dt><dd[^>]*>1 组</);
-    assert.match(attention, /TBA 任务<\/dt><dd[^>]*>1</);
-    assert.doesNotMatch(attention, /<time|2026-09-/);
+    assert.match(weekLoad, /data-severity="warning">1 组时间冲突</);
+    assert.match(weekLoad, /周四 13:00 CSC108 与 CSC108 重叠/);
+    const termTasks = html.match(
+        /<section aria-labelledby="today-term-tasks-title"[\s\S]*?<\/section>/,
+    )?.[0] ?? '';
+    assert.match(termTasks, /class="status-label">TBA 1</);
     assert.doesNotMatch(html, /出席|缺席|成绩|备份|保护|Attendance|Grade|Protect/);
 
     assert.equal(typeof TodayPage, 'function');
 });
 
-test('Today opens on a four-column grid anchored by the day timeline', () => {
+test('Today opens on a four-column grid with the day timeline as its left spine', () => {
     const html = renderWorkspacePage('today');
 
     // The Current Term name moved into the header capsule, with its own remaining-day fact.
@@ -423,17 +427,20 @@ test('Today opens on a four-column grid anchored by the day timeline', () => {
     assert.doesNotMatch(headline, /当前学期课程|今日已完成/);
     assert.doesNotMatch(html, /today-summary-title|today-column/);
 
-    // The five slots appear in grid order, and the timeline is the anchor.
+    // The seven slots appear in reading order; none of them is conditional.
     const order = [
         'today-timeline-title',
-        'today-next-step-title',
-        'today-attention-title',
-        'today-tasks-title',
+        'today-now-title',
         'today-week-title',
+        'today-next-step-title',
+        'today-tasks-title',
+        'today-courses-title',
+        'today-term-tasks-title',
     ].map(id => html.indexOf(id));
     assert.ok(order.every(position => position >= 0), 'every Today slot must render');
     assert.deepEqual(order.toSorted((left, right) => left - right), order);
     assert.match(html, /class="workspace-grid workspace-grid--today"/);
+    assert.doesNotMatch(html, /week-strip|attention-card|today-collapsed-note|next-step-card--wide/);
 
     // The timeline places real occurrences on the shared 33px hour geometry.
     assert.match(html, /--timeline-hour-count:15/);
@@ -449,7 +456,7 @@ test('Today opens on a four-column grid anchored by the day timeline', () => {
     assert.match(withoutMeetings, /id="today-timeline-empty"/);
 });
 
-test('Today collapses the attention slot out of the DOM and says so once', () => {
+test('Today keeps every slot on a quiet day and drops only the facts that are zero', () => {
     const quiet = planProjection({
         meetings: [TODAY_MEETING],
         tasks: [SMALL_TASK, LARGE_TASK],
@@ -460,17 +467,213 @@ test('Today collapses the attention slot out of the DOM and says so once', () =>
 
     const html = renderWorkspacePage('today', quiet);
 
-    assert.doesNotMatch(html, /today-attention-title|attention-facts/);
-    assert.match(
-        html,
-        /class="today-collapsed-note"[^>]*>没有逾期任务、本周时间冲突或 TBA 任务，「需要注意」已隐藏。</,
-    );
-    // The remaining first-row slot takes the freed column instead of leaving a hole.
-    assert.match(html, /class="content-card next-step-card next-step-card--wide"/);
+    for (const id of ['today-now-title', 'today-week-title', 'today-next-step-title', 'today-courses-title',
+        'today-term-tasks-title']) {
+        assert.match(html, new RegExp(`id="${id}"`), `${id} stays in the grid`);
+    }
+    assert.doesNotMatch(html, /组时间冲突|>TBA \d+<|逾期 \d+</);
+    assert.doesNotMatch(html, /today-attention-title|today-collapsed-note|next-step-card--wide/);
+});
 
-    const busy = renderWorkspacePage('today');
-    assert.doesNotMatch(busy, /today-collapsed-note/);
-    assert.match(busy, /class="content-card next-step-card"/);
+test('the 现在 card reads one state at a time from the PLAN classifications', () => {
+    // 12:00 Toronto with two upcoming classes: between classes, day ring at 0 of 2.
+    const between = renderWorkspacePage('today');
+    const nowCard = (html: string): string => html.match(
+        /<section aria-labelledby="today-now-title"[\s\S]*?<\/section>/,
+    )?.[0] ?? '';
+    assert.match(nowCard(between), /data-now-state="between"/);
+    assert.match(nowCard(between), /class="page-context now-clock"><time dateTime="2026-09-10T16:00:00.000Z">12:00</);
+    assert.match(nowCard(between), /class="now-state">课间</);
+    assert.match(nowCard(between), /class="now-value">1 小时后</);
+    assert.match(nowCard(between), /下一节 CSC108 Lecture · 13:00 · BA 1170/);
+    assert.match(nowCard(between), /data-course-color="blue" data-ring="day"/);
+    assert.match(nowCard(between), /--ring-ratio:0"/);
+
+    // 13:20 Toronto inside the lecture: in-class ratio and the Course colour on the arc.
+    const inClass = renderWorkspacePage('today', planProjection({
+        evaluationContext: { ...EVALUATION_CONTEXT, evaluatedAt: '2026-09-10T17:20:00.000Z' },
+    }));
+    assert.match(nowCard(inClass), /data-now-state="in-class"/);
+    assert.match(nowCard(inClass), /class="now-state" data-live="true">上课中</);
+    assert.match(nowCard(inClass), /class="now-value">剩 40 分钟</);
+    assert.match(nowCard(inClass), /CSC108 Lecture · 至 14:00 · BA 1170/);
+    assert.match(nowCard(inClass), /data-course-color="blue" data-ring="course"/);
+    assert.match(nowCard(inClass), /--ring-ratio:0.333/);
+
+    // 15:00 Toronto after both classes: the day is done, the next class is read from the Term list.
+    const done = renderWorkspacePage('today', planProjection({
+        meetings: [TODAY_MEETING, OVERLAPPING_MEETING, {
+            ...TUESDAY_MEETING,
+            occurrenceId: { ...TUESDAY_MEETING.occurrenceId, originalLogicalAnchor: '2026-09-15' },
+            date: '2026-09-15',
+            startInstant: '2026-09-15T13:00:00.000Z',
+            endInstant: '2026-09-15T14:30:00.000Z',
+        }],
+        evaluationContext: { ...EVALUATION_CONTEXT, evaluatedAt: '2026-09-10T19:00:00.000Z' },
+    }));
+    assert.match(nowCard(done), /data-now-state="done"/);
+    assert.match(nowCard(done), /class="now-value">今天 2 节课已结束</);
+    assert.match(nowCard(done), /下一节 周二 09:00 CSC108/);
+    assert.match(nowCard(done), /--ring-ratio:1"/);
+
+    // No class today inside the Term.
+    const free = renderWorkspacePage('today', planProjection({ meetings: [TUESDAY_MEETING] }));
+    assert.match(nowCard(free), /data-now-state="free"/);
+    assert.match(nowCard(free), /class="now-value">今天没有课</);
+    assert.match(nowCard(free), /本学期没有其他课节/);
+    assert.match(nowCard(free), /data-empty="true"/);
+
+    // Before the Term starts: days to go and the first class of the Term.
+    const beforeTerm = renderWorkspacePage('today', planProjection({
+        meetings: [TODAY_MEETING],
+        evaluationContext: {
+            evaluatedAt: '2026-09-01T16:00:00.000Z',
+            termZone: TERM.timeZone,
+            applicableDate: '2026-09-01',
+            requestedWindow: { startDate: '2026-08-31', endDate: '2026-09-06' },
+        },
+    }));
+    assert.match(nowCard(beforeTerm), /data-now-state="before-term"/);
+    assert.match(nowCard(beforeTerm), /class="now-state">开学前</);
+    assert.match(nowCard(beforeTerm), /class="now-value">6 天</);
+    assert.match(nowCard(beforeTerm), /第一节 周四 13:00 CSC108 · 09-10 · BA 1170/);
+});
+
+test('the 本周课时 chart plots the PLAN day load and marks today without relying on colour', () => {
+    const html = renderWorkspacePage('today');
+    const card = html.match(/<section aria-labelledby="today-week-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    assert.match(card, /class="page-context">2 小时 · 2 节</);
+    assert.equal((card.match(/<li /g) ?? []).length, 7);
+    assert.match(card, /data-current="true" data-day="2026-09-10"[^>]*>/);
+    assert.match(card, /data-day="2026-09-10"[^>]*><span class="week-load-peak">2 小时</);
+    assert.match(card, /data-day="2026-09-10"[\s\S]*?--load:1"/);
+    assert.match(card, /data-day="2026-09-07" data-empty="true"[\s\S]*?--load:0"/);
+    // Task dots: one deadline on Thursday and one on Friday, none elsewhere.
+    assert.match(card, /data-day="2026-09-10"[\s\S]*?class="week-load-tasks"><i><\/i><\/span>/);
+    assert.match(card, /data-day="2026-09-11"[\s\S]*?class="week-load-tasks"><i><\/i><\/span>/);
+    assert.match(card, /周四 2 节课 120 分钟 1 项任务/);
+
+    const beforeTerm = renderWorkspacePage('today', planProjection({
+        meetings: [],
+        tasks: [],
+        evaluationContext: {
+            evaluatedAt: '2026-09-01T16:00:00.000Z',
+            termZone: TERM.timeZone,
+            applicableDate: '2026-09-01',
+            requestedWindow: { startDate: '2026-08-31', endDate: '2026-09-06' },
+        },
+    }));
+    assert.match(beforeTerm, /学期 2026-09-07 开始，本周还是空的。/);
+});
+
+test('the dark card lists the week deadlines PLAN ordered and never acts on them', () => {
+    const html = renderWorkspacePage('today', planProjection({
+        tasks: [SMALL_TASK, LARGE_TASK, TBA_TASK, WEDNESDAY_ALL_DAY_TASK, FRIDAY_TIMED_TASK, FRIDAY_ADJACENT_TASK, {
+            ...SMALL_TASK,
+            occurrenceId: { ...SMALL_TASK.occurrenceId, taskSeriesId: '18181818-1818-4818-8818-181818181818' },
+            title: 'Finished reading',
+            status: 'completed',
+        }],
+    }));
+    const card = html.match(/<section aria-labelledby="today-next-step-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    assert.match(card, /<h3 id="today-week-deadlines-title">本周截止<\/h3>/);
+    assert.match(card, /class="week-deadlines-count"><strong>1<\/strong>\/6</);
+    const rows = card.match(/<li data-item-id="task:[^"]+"[^>]*>/g) ?? [];
+    assert.equal(rows.length, 5, 'five rows at most');
+    assert.match(card, /还有 1 项在任务页。/);
+    assert.match(rows[0]!, /data-severity="critical" data-state="pending"/);
+    assert.match(card, /Submit lab notes<\/span><span class="deadline-meta">CSC108 · 周三 · 逾期</);
+    assert.match(card, /data-state="completed"[\s\S]*?<svg viewBox="0 0 16 16">/);
+    assert.match(card, /Project checkpoint<\/span><span class="deadline-meta">CSC108 · 周五 10:00</);
+    assert.doesNotMatch(card, /<button[^>]*data-task-action/);
+    assert.equal((card.match(/<button/g) ?? []).length, 1);
+
+    const empty = renderWorkspacePage('today', planProjection({ tasks: [] }));
+    assert.match(empty, /class="week-deadlines-count"><strong>0<\/strong>\/0</);
+    assert.match(empty, /本周没有截止的任务。/);
+});
+
+test('the 课程 roster is native disclosure rows over the current Term Courses', () => {
+    const html = renderWorkspacePage('today');
+    const card = html.match(/<section aria-labelledby="today-courses-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    assert.match(card, /class="page-context">2 门 · 本周 2 节</);
+    assert.equal((card.match(/<details>/g) ?? []).length, 2);
+    assert.match(card, /data-course-color="blue" data-course-id="22222222-2222-4222-8222-222222222222"/);
+    assert.match(
+        card,
+        /class="course-code">CSC108<\/strong><span class="course-name">Introduction to Computer Programming</,
+    );
+    assert.match(card, /class="course-instructor">Ada Lovelace</);
+    assert.match(card, /class="course-summary-meta">周四 · 1 节/);
+    assert.match(card, /周四 13:00-14:00<\/span><span>Lecture<\/span><span>BA 1170</);
+    assert.match(card, /<dt>教师<\/dt><dd>Ada Lovelace<\/dd>/);
+    assert.match(card, /<dt>学分<\/dt><dd>0.5<\/dd>/);
+    assert.match(card, /class="course-summary-meta">0 节\/周/);
+    assert.match(card, /还没有课节。/);
+    assert.doesNotMatch(card, /<dt>Section<\/dt><dd><\/dd>/);
+    assert.match(card, /<svg aria-hidden="true" class="course-chevron"/);
+
+    const noCourses = renderToStaticMarkup(createElement(WorkspacePage, {
+        ...HANDLERS,
+        page: 'today',
+        setup: setupProjection({ courses: [] }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.match(noCourses, /id="today-courses-empty"[^>]*>还没有课程</);
+    assert.match(noCourses, />添加课程</);
+});
+
+test('the 学期任务 card renders the PLAN per-Course summary with one segment per Course', () => {
+    const html = renderWorkspacePage('today');
+    const card = html.match(/<section aria-labelledby="today-term-tasks-title"[\s\S]*?<\/section>/)?.[0] ?? '';
+
+    assert.match(card, /class="term-tasks-percent">0%</);
+    assert.match(card, /class="page-context">已完成 0 \/ 3 项 · 按课程</);
+    assert.match(card, /aria-label="按课程的任务完成度，共 3 项，已完成 0 项"/);
+    assert.match(
+        card,
+        /data-course-color="blue" data-course-id="22222222-2222-4222-8222-222222222222" style="--share:3;--done:0"/,
+    );
+    // A Course without occurrences is listed at 0/0 but gets no bar segment.
+    assert.match(card, /MAT137<\/span><span class="term-tasks-count">0\/0</);
+    assert.doesNotMatch(card, /data-course-id="44444444-4444-4444-8444-444444444444" style=/);
+    assert.match(card, /class="status-label">TBA 1</);
+    assert.doesNotMatch(card, /逾期 \d/);
+
+    const withProgress = renderWorkspacePage('today', planProjection({
+        tasks: [SMALL_TASK, WEDNESDAY_ALL_DAY_TASK, { ...LARGE_TASK, status: 'completed', displayProgress: 100 }],
+    }));
+    const progressed = withProgress.match(
+        /<section aria-labelledby="today-term-tasks-title"[\s\S]*?<\/section>/,
+    )?.[0] ?? '';
+    assert.match(progressed, /class="term-tasks-percent">33%</);
+    assert.match(progressed, /style="--share:3;--done:0.333/);
+    assert.match(progressed, /data-severity="critical">逾期 1</);
+
+    const empty = renderWorkspacePage('today', planProjection({ tasks: [] }));
+    assert.match(empty, /class="term-tasks-percent">0%</);
+    assert.match(empty, /id="today-term-tasks-empty"[^>]*>还没有任务</);
+});
+
+test('timed deadlines read as TermZone date-times wherever a Task row renders', () => {
+    const plan = planProjection({ tasks: [FRIDAY_TIMED_TASK] });
+    for (const page of ['tasks', 'calendar'] as const) {
+        const html = renderWorkspacePage(page, plan);
+        assert.match(html, /<time dateTime="2026-09-11T14:00:00.000Z">2026-09-11 10:00<\/time>/, page);
+        assert.doesNotMatch(html, /2026-09-11T14:00:00.000Z · America\/Toronto/, page);
+    }
+    const dueToday = renderWorkspacePage('today', planProjection({
+        tasks: [{
+            ...FRIDAY_TIMED_TASK,
+            deadline: { kind: 'timed', instant: '2026-09-10T20:00:00.000Z', timeZone: TERM.timeZone },
+        }],
+    }));
+    assert.match(dueToday, /<time dateTime="2026-09-10T20:00:00.000Z">2026-09-10 16:00<\/time>/);
+    assert.doesNotMatch(dueToday, /2026-09-10T20:00:00.000Z · America\/Toronto/);
 });
 
 test('Today conflict marks come only from the PLAN agenda warnings', () => {

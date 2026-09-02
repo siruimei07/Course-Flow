@@ -153,6 +153,7 @@ export function isPlanProjection(value: unknown): value is PlanProjection {
         'tba',
         'next',
         'termProgress',
+        'courses',
     ])
         || !isCanonicalUnsignedSqliteInteger(value.workspaceRevision)
         || !isCanonicalUnsignedSqliteInteger(value.planEntityVersion)
@@ -176,7 +177,9 @@ export function isPlanProjection(value: unknown): value is PlanProjection {
         || !value.today.tasks.every(isPlanTaskProjection)
         || !isExactDataArray(value.today.meetings)
         || !value.today.meetings.every(isPlanMeetingProjection)
-        || !hasExactDataKeys(value.week, ['window', 'tasks', 'meetings', 'holidayRanges'])
+        || !hasExactDataKeys(value.week, ['window', 'tasks', 'meetings', 'holidayRanges', 'days'])
+        || !isExactDataArray(value.week.days)
+        || !isExactDataArray(value.courses)
         || !isExactDataArray(value.week.tasks)
         || !value.week.tasks.every(isPlanTaskProjection)
         || !isExactDataArray(value.week.meetings)

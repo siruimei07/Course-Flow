@@ -274,6 +274,7 @@ test('the stylesheet keeps fixed type steps, three radius tiers and themed brows
     assert.match(root, /--radius-container:/);
     assert.match(root, /--radius-piece:/);
     assert.match(root, /--radius-pill:/);
+    assert.match(root, /--radius-mark: 4px;/);
     assert.match(styles, /Three corner-radius tiers and nothing else/);
     const radii = new Set(
         (styles.match(/border-radius:\s*[^;]+;/g) ?? [])
@@ -283,6 +284,8 @@ test('the stylesheet keeps fixed type steps, three radius tiers and themed brows
         'border-radius: var(--radius-container);',
         'border-radius: var(--radius-piece);',
         'border-radius: var(--radius-pill);',
+        // Slice 12: the only non-surface radius is a chart bar's rounded data end.
+        'border-radius: var(--radius-mark) var(--radius-mark) 0 0;',
         'border-radius: 0;',
         'border-radius: 50%;',
         'border-radius: inherit;',

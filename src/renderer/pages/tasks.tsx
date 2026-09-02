@@ -66,6 +66,7 @@ export function TasksPage(props: WorkspacePageContentProps): ReactElement {
                                         actions={props.taskActions}
                                         key={taskItemId(task)}
                                         task={task}
+                                        termZone={plan.evaluationContext.termZone}
                                     />
                                 ))}
                             </ul>
@@ -93,6 +94,7 @@ export function TasksPage(props: WorkspacePageContentProps): ReactElement {
                                         actions={props.taskActions}
                                         key={taskItemId(task)}
                                         task={task}
+                                        termZone={plan.evaluationContext.termZone}
                                     />
                                 ))}
                             </ul>

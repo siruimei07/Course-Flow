@@ -437,6 +437,28 @@ test('A-VIEW-001–006/TEST-WORKSPACE-001: one PLAN context builds Today and Wee
     assert.equal(projection.week.tasks.length, 5);
     assert.equal(projection.week.meetings.length, 3);
     assert.deepEqual(projection.week.holidayRanges, [holiday]);
+    // Slice 12: the per-day load and per-Course summary come from the same classified set.
+    assert.deepEqual(projection.week.days.map(day => day.date), [
+        '2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13',
+    ]);
+    assert.deepEqual(projection.week.days[3], {
+        date: '2026-09-10',
+        meetingCount: 2,
+        meetingMinutes: 120,
+        taskCount: 3,
+    });
+    assert.deepEqual(projection.week.days.map(day => day.taskCount), [0, 0, 1, 3, 1, 0, 0]);
+    assert.deepEqual(projection.week.days.map(day => day.meetingMinutes), [0, 0, 0, 120, 0, 0, 0]);
+    assert.deepEqual(projection.courses, [{
+        courseId: '66666666-6666-4666-8666-666666666666',
+        courseCode: 'CSC108',
+        completed: 1,
+        pending: 4,
+        overdue: 1,
+        tba: 1,
+        skipped: 1,
+        countable: 6,
+    }]);
     assert.deepEqual(projection.tba.tasks.map(task => task.occurrence.occurrenceId), [tba.occurrenceId]);
     assert.deepEqual(
         projection.today.meetings
@@ -763,6 +785,17 @@ test('A-CALENDAR-001–003/TEST-PLAN-008: Calendar, Agenda, and TBA reuse one cl
             holidaySegments: [holidaySegmentWithUnknownProperty],
         },
     }), false);
+    // Slice 12: the per-day load and per-Course summary are rebuilt and compared like the rest.
+    assert.equal(isPlanProjection({
+        ...projection,
+        week: { ...projection.week, days: projection.week.days.map(day => ({ ...day, meetingMinutes: 0 })) },
+    }), false);
+    assert.equal(isPlanProjection({
+        ...projection,
+        courses: projection.courses.map(course => ({ ...course, countable: course.countable + 1 })),
+    }), false);
+    const { courses: _courses, ...withoutCourses } = projection;
+    assert.equal(isPlanProjection(withoutCourses), false);
 });
 
 test('ADR-04/A-CALENDAR-002/TEST-PLAN-008: Agenda conflict warnings are bounded and deterministic', () => {

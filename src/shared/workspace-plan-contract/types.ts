@@ -134,6 +134,24 @@ export type TodaySummaryProjection = Readonly<{
     }>;
 }>;
 
+export type PlanWeekDayProjection = Readonly<{
+    date: string;
+    meetingCount: number;
+    meetingMinutes: number;
+    taskCount: number;
+}>;
+
+export type PlanCourseTaskSummary = Readonly<{
+    courseId: string;
+    courseCode: string;
+    completed: number;
+    pending: number;
+    overdue: number;
+    tba: number;
+    skipped: number;
+    countable: number;
+}>;
+
 export type PlanAttendanceAvailability = 'disabled' | 'unavailable';
 
 export type PlanAttendanceProjection = Readonly<{
@@ -180,6 +198,7 @@ export type PlanProjection = Readonly<{
         tasks: readonly PlanTaskProjection[];
         meetings: readonly PlanMeetingProjection[];
         holidayRanges: readonly HolidayRangeProjection[];
+        days: readonly PlanWeekDayProjection[];
     }>;
     calendar: CalendarWindowProjection;
     agenda: AgendaProjection;
@@ -189,6 +208,7 @@ export type PlanProjection = Readonly<{
         large: PlanNextTaskProjection;
     }>;
     termProgress: TermProgressProjection;
+    courses: readonly PlanCourseTaskSummary[];
 }>;
 
 export const MILLISECONDS_PER_DAY = 86_400_000;
@@ -822,6 +842,109 @@ export function buildAgendaProjection(
 }
 
 /**
+ * Summarises the requested window day by day so the Shell never sums minutes itself.
+ *
+ * Cancelled Meetings keep their slot on the week list but carry no load; a Meeting that
+ * crosses midnight is counted whole on its start date (ponytail: no per-day split until a
+ * real cross-midnight schedule asks for it).
+ * @param {readonly PlanTaskProjection[]} weekTasks - Tasks whose deadline falls in the window.
+ * @param {readonly PlanMeetingProjection[]} weekMeetings - Meetings inside the window.
+ * @param {PlanEvaluationContext} context - Shared TermZone evaluation context.
+ * @return {readonly PlanWeekDayProjection[]} Seven consecutive days from the window start.
+ */
+export function buildWeekDays(
+    weekTasks: readonly PlanTaskProjection[],
+    weekMeetings: readonly PlanMeetingProjection[],
+    context: PlanEvaluationContext,
+): readonly PlanWeekDayProjection[] {
+    const days: PlanWeekDayProjection[] = [];
+    for (let offset = 0; offset < 7; offset += 1) {
+        const date = addLocalDateDays(context.requestedWindow.startDate, offset);
+        const meetings = weekMeetings.filter(meeting => (
+            meeting.occurrence.date === date && meeting.classification !== 'cancelled'
+        ));
+        days.push(Object.freeze({
+            date,
+            meetingCount: meetings.length,
+            meetingMinutes: meetings.reduce((total, meeting) => total + Math.round(
+                (Date.parse(meeting.occurrence.endInstant)
+                    - Date.parse(meeting.occurrence.startInstant)) / 60_000,
+            ), 0),
+            taskCount: weekTasks.filter(task => (
+                taskDeadlineDate(task.occurrence, context) === date
+            )).length,
+        }));
+    }
+    return Object.freeze(days);
+}
+
+/**
+ * Summarises every Course's Task occurrences for the whole Term, one row per Course.
+ *
+ * Skipped occurrences are reported but excluded from `countable`: a skipped Task is no
+ * longer something to do, so it leaves the denominator as well as the numerator.
+ * @param {readonly PlanTaskProjection[]} tasks - Classified Term Task occurrences.
+ * @param {readonly PlanMeetingProjection[]} meetings - Classified Term Meeting occurrences.
+ * @return {readonly PlanCourseTaskSummary[]} Rows sorted by stable Course identity.
+ */
+export function buildCourseTaskSummaries(
+    tasks: readonly PlanTaskProjection[],
+    meetings: readonly PlanMeetingProjection[],
+): readonly PlanCourseTaskSummary[] {
+    const rows = new Map<string, {
+        courseCode: string;
+        completed: number;
+        pending: number;
+        overdue: number;
+        tba: number;
+        skipped: number;
+    }>();
+    const rowFor = (courseId: string, courseCode: string) => {
+        let row = rows.get(courseId);
+        if (row === undefined) {
+            row = { courseCode, completed: 0, pending: 0, overdue: 0, tba: 0, skipped: 0 };
+            rows.set(courseId, row);
+        }
+        return row;
+    };
+    for (const meeting of meetings) {
+        rowFor(meeting.courseId, meeting.courseCode);
+    }
+    for (const task of tasks) {
+        const row = rowFor(task.courseId, task.courseCode);
+        switch (task.classification) {
+            case 'completed':
+                row.completed += 1;
+                break;
+            case 'skipped':
+                row.skipped += 1;
+                break;
+            case 'TBA':
+                row.tba += 1;
+                break;
+            case 'overdue':
+                row.overdue += 1;
+                row.pending += 1;
+                break;
+            default:
+                row.pending += 1;
+        }
+    }
+    return Object.freeze([...rows.entries()]
+        .sort(([first], [second]) => compareCanonicalText(first, second))
+        .map(([courseId, row]) => Object.freeze({
+            courseId,
+            courseCode: row.courseCode,
+            completed: row.completed,
+            pending: row.pending,
+            overdue: row.overdue,
+            tba: row.tba,
+            skipped: row.skipped,
+            countable: row.completed + row.pending + row.tba,
+        })));
+}
+
+/**
  * Builds all unified PLAN projections from one revision-bound fact collection.
  * @param {PlanProjectionSource} source - Current-Term facts read from one DATA snapshot.
  * @param {PlanEvaluationContext} context - Single Workspace-owned evaluation context.
@@ -932,6 +1055,7 @@ export function buildPlanProjection(
             tasks: weekTasks,
             meetings: weekMeetings,
             holidayRanges: weekHolidayRanges,
+            days: buildWeekDays(weekTasks, weekMeetings, evaluationContext),
         }),
         calendar,
         agenda,
@@ -943,6 +1067,7 @@ export function buildPlanProjection(
             large: buildNextTask(tasks, 'large', evaluationContext),
         }),
         termProgress: calculateTermProgress(source.term, evaluationContext.applicableDate),
+        courses: buildCourseTaskSummaries(tasks, meetings),
     });
 }
 

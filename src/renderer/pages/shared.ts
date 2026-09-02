@@ -677,3 +677,116 @@ export function conflictingMeetingIds(plan: PlanProjection): ReadonlySet<string>
 export function courseColorFor(setup: SetupProjection, courseId: string): CourseColor | null {
     return setup.courses.find(course => course.courseId === courseId)?.color ?? null;
 }
+
+/** Weekday code order shared by the course roster and its slot lists. */
+export const meetingWeekdayOrder: readonly MeetingSeriesProjection['weekday'][] = [
+    'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN',
+];
+
+/** Single-character weekday marks used where a full 周x label would crowd the row. */
+export const weekdayMarks: Readonly<Record<MeetingSeriesProjection['weekday'], string>> = {
+    MON: '一',
+    TUE: '二',
+    WED: '三',
+    THU: '四',
+    FRI: '五',
+    SAT: '六',
+    SUN: '日',
+};
+
+/**
+ * Names one canonical LocalDate's weekday in the short 周x form.
+ *
+ * @param {string} date Canonical LocalDate.
+ * @return {string} 周x label.
+ */
+export function shortWeekdayOf(date: string): string {
+    return shortWeekdayNames[new Date(`${date}T00:00:00.000Z`).getUTCDay()]!;
+}
+
+/**
+ * Reads the first Meeting of the Term that has not started yet.
+ *
+ * PLAN sorts `plan.meetings` by start Instant and classifies every occurrence, so the
+ * first `upcoming` entry is the next class of the whole Term; this is a read, not an
+ * inference (UI spec §8.2).
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {PlanMeetingProjection | undefined} Next upcoming Meeting, if any.
+ */
+export function nextTermMeeting(plan: PlanProjection): PlanMeetingProjection | undefined {
+    return plan.meetings.find(meeting => meeting.classification === 'upcoming');
+}
+
+/**
+ * Formats a positive duration as the student would say it.
+ *
+ * @param {number} milliseconds Signed duration; the magnitude is used.
+ * @return {string} `n 分钟` under an hour, otherwise `n 小时 m 分`.
+ */
+export function durationLabel(milliseconds: number): string {
+    const minutes = Math.max(1, Math.ceil(Math.abs(milliseconds) / 60_000));
+    if (minutes < 60) {
+        return `${minutes} 分钟`;
+    }
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分`;
+}
+
+/**
+ * Formats Meeting minutes as hours with at most one decimal.
+ *
+ * @param {number} minutes Whole minutes.
+ * @return {string} `n 小时`, showing one decimal only when needed.
+ */
+export function hoursLabel(minutes: number): string {
+    const hours = Math.round(minutes / 6) / 10;
+    return `${Number.isInteger(hours) ? hours : hours.toFixed(1)} 小时`;
+}
+
+/**
+ * Formats one Task deadline for a list row, in the TermZone when the deadline is timed.
+ *
+ * @param {TaskDeadline} deadline Persisted Task deadline.
+ * @param {string | undefined} termZone Workspace-owned TermZone; absent keeps the raw form.
+ * @return {string} Local date-time, date, or TBA.
+ */
+export function taskDeadlineRowLabel(deadline: TaskDeadline, termZone?: string): string {
+    if (deadline.kind === 'timed' && termZone !== undefined) {
+        return localInstantLabel(deadline.instant, termZone);
+    }
+    return taskDeadlineLabel(deadline);
+}
+
+/**
+ * Lists the weekdays one Course meets on, deduplicated and in week order.
+ *
+ * @param {readonly MeetingSeriesProjection[]} meetings Course Meeting series.
+ * @return {string} `周一 三 五` style label, or an empty string without series.
+ */
+export function courseWeekdaySummary(meetings: readonly MeetingSeriesProjection[]): string {
+    const present = meetingWeekdayOrder.filter(weekday => (
+        meetings.some(meeting => meeting.weekday === weekday)
+    ));
+    if (present.length === 0) {
+        return '';
+    }
+    return `周${present.map(weekday => weekdayMarks[weekday]).join(' ')}`;
+}
+
+/**
+ * Orders Course Meeting series by weekday then start time for the roster.
+ *
+ * @param {readonly MeetingSeriesProjection[]} meetings Course Meeting series.
+ * @return {readonly MeetingSeriesProjection[]} Sorted copy.
+ */
+export function sortedCourseMeetings(
+    meetings: readonly MeetingSeriesProjection[],
+): readonly MeetingSeriesProjection[] {
+    return [...meetings].sort((first, second) => (
+        meetingWeekdayOrder.indexOf(first.weekday) - meetingWeekdayOrder.indexOf(second.weekday)
+        || first.localStart.localeCompare(second.localStart)
+        || first.meetingSeriesId.localeCompare(second.meetingSeriesId)
+    ));
+}

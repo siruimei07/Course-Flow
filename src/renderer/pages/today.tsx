@@ -10,21 +10,26 @@ import {
     calendarWeekdayNames,
     conflictingMeetingIds,
     courseColorFor,
+    courseWeekdaySummary,
+    durationLabel,
+    hoursLabel,
     localInstantLabel,
     localInstantParts,
     meetingItemId,
     meetingLocationLabel,
     minuteLabel,
+    nextTermMeeting,
     planItemId,
     remainingTimeLabel,
-    sevenDayDates,
-    shortWeekdayNames,
+    shortWeekdayOf,
+    sortedCourseMeetings,
     taskClassificationNames,
     taskItemId,
     taskSeverity,
     termWeekLabel,
     todayGreetingTitle,
     todayHeadlineMeeting,
+    weekdayMarks,
 } from './shared';
 import {
     EmptyState,
@@ -37,12 +42,13 @@ import {
 } from './widgets';
 import type { WorkspaceNavigationId } from '../navigation';
 import type { TaskActionPresentation, WorkspacePageContentProps } from '../workspace-pages';
+import type { CourseProjection } from '../../shared/workspace-course-contract';
 import {
     PlanMeetingProjection,
     PlanNextTaskProjection,
     PlanTaskProjection,
 } from '../../shared/workspace-plan-contract';
-import type { PlanProjection } from '../../shared/workspace-plan-contract';
+import type { PlanCourseTaskSummary, PlanProjection } from '../../shared/workspace-plan-contract';
 import type { SetupProjection } from '../../shared/workspace-term-contract';
 export type TermSpanStyle = CSSProperties & Readonly<{
     '--span-left': string;
@@ -63,6 +69,21 @@ export type TimelineEventStyle = CSSProperties & Readonly<{
 
 export type TimelineNowStyle = CSSProperties & Readonly<{ '--now-top': string }>;
 
+export type RingStyle = CSSProperties & Readonly<{ '--ring-ratio': string }>;
+
+export type LoadBarStyle = CSSProperties & Readonly<{ '--load': string }>;
+
+export type TermSegmentStyle = CSSProperties & Readonly<{
+    '--share': string;
+    '--done': string;
+}>;
+
+/** Rows the dark card shows before folding the rest into one line. */
+export const WEEK_DEADLINE_ROW_LIMIT = 5;
+
+/** Dots under one week-load column before the fourth dot means "more than three". */
+export const WEEK_LOAD_TASK_DOT_LIMIT = 3;
+
 /**
  * Renders Today without recalculating PLAN-owned classifications, selections, or summaries.
  *
@@ -72,7 +93,6 @@ export type TimelineNowStyle = CSSProperties & Readonly<{ '--now-top': string }>
 export function TodayPage(props: WorkspacePageContentProps): ReactElement {
     const { plan, setup, setupIncomplete } = props;
     const endedTerm = !setupIncomplete && setup.currentTerm === null && setup.everReachedMinimum;
-    const attention = plan ? attentionFacts(plan) : null;
     const dayContext = plan
         ? `${plan.evaluationContext.applicableDate} · ${plan.evaluationContext.termZone}`
             + ` · ${termWeekLabel(plan)}`
@@ -111,48 +131,39 @@ export function TodayPage(props: WorkspacePageContentProps): ReactElement {
                     fallbackPage="courses"
                 />
             ) : (
-                <>
-                    <div className="workspace-grid workspace-grid--today">
-                        <TodayTimeline
-                            onNavigate={props.onNavigate}
-                            onOpenManagement={props.onOpenManagement}
-                            plan={plan}
-                            setup={setup}
-                        />
-
-                        <NextStepCard
-                            next={plan.next}
-                            onOpenTasks={() => props.onNavigate('tasks')}
-                            termZone={plan.evaluationContext.termZone}
-                            wide={attention === null}
-                        />
-
-                        {attention === null ? null : (
-                            <AttentionCard
-                                facts={attention}
-                                onNavigate={props.onNavigate}
-                            />
-                        )}
-
-                        <TodayTasksCard
-                            onCreateTask={props.onCreateTask}
-                            onNavigate={props.onNavigate}
-                            plan={plan}
-                            taskActions={props.taskActions}
-                        />
-
-                        <WeekStrip
-                            onOpenCalendar={() => props.onNavigate('calendar')}
-                            plan={plan}
-                        />
-                    </div>
-                    {attention === null ? (
-                        <p
-                            className="today-collapsed-note"
-                            role="status"
-                        >没有逾期任务、本周时间冲突或 TBA 任务，「需要注意」已隐藏。</p>
-                    ) : null}
-                </>
+                <div className="workspace-grid workspace-grid--today">
+                    <TodayTimeline
+                        onNavigate={props.onNavigate}
+                        onOpenManagement={props.onOpenManagement}
+                        plan={plan}
+                        setup={setup}
+                    />
+                    <NowCard
+                        plan={plan}
+                        setup={setup}
+                    />
+                    <WeekLoadCard plan={plan} />
+                    <NextStepCard
+                        onOpenTasks={() => props.onNavigate('tasks')}
+                        plan={plan}
+                    />
+                    <TodayTasksCard
+                        onCreateTask={props.onCreateTask}
+                        onNavigate={props.onNavigate}
+                        plan={plan}
+                        taskActions={props.taskActions}
+                    />
+                    <CoursesCard
+                        onOpenManagement={props.onOpenManagement}
+                        plan={plan}
+                        setup={setup}
+                    />
+                    <TermTasksCard
+                        onCreateTask={props.onCreateTask}
+                        plan={plan}
+                        setup={setup}
+                    />
+                </div>
             )}
         </article>
     );
@@ -170,32 +181,6 @@ export function termContextFallback(setup: SetupProjection): string {
     }
 
     return `${setup.currentTerm.name} · ${setup.currentTerm.startDate} - ${setup.currentTerm.endDate}`;
-}
-
-export type AttentionFacts = Readonly<{
-    overdueTasks: number;
-    conflictGroups: number;
-    tbaTasks: number;
-}>;
-
-/**
- * Reads the three PLAN counts the attention slot exists for, or null when there are none.
- *
- * The conflict count covers the whole projected week, which is why its label says so.
- *
- * @param {PlanProjection} plan Unified PLAN projection.
- * @return {AttentionFacts | null} Facts worth a slot, or null when the slot must collapse.
- */
-export function attentionFacts(plan: PlanProjection): AttentionFacts | null {
-    const facts = {
-        overdueTasks: plan.today.summary.excluded.priorOverdueTasks,
-        conflictGroups: plan.agenda.warnings.length,
-        tbaTasks: plan.tba.tasks.length,
-    };
-    if (facts.overdueTasks === 0 && facts.conflictGroups === 0 && facts.tbaTasks === 0) {
-        return null;
-    }
-    return facts;
 }
 
 /**
@@ -390,15 +375,20 @@ export function TodayTimeline(props: Readonly<{
 }
 
 /**
- * Chooses the strongest sentence the projected week can actually support.
+ * Chooses the strongest sentence the projection can actually support (UI spec §8.3).
  *
- * The window is Monday through Sunday, so a next class outside it is not a fact this
- * page holds; the ladder degrades to the Term start date rather than inventing one.
+ * `plan.meetings` covers the whole Term and is already sorted and classified, so the
+ * cross-week level reads its first upcoming entry; only a Term with nothing left falls
+ * through to the last sentence.
  *
  * @param {PlanProjection} plan Unified PLAN projection.
  * @return {string} Student-facing reason for an empty day.
  */
 export function timelineEmptyCopy(plan: PlanProjection): string {
+    const laterToday = plan.today.meetings.find(meeting => meeting.classification === 'upcoming');
+    if (laterToday !== undefined) {
+        return `下一节 ${laterToday.occurrence.localStart} ${laterToday.courseCode}`;
+    }
     const laterThisWeek = plan.week.meetings.find(meeting => meeting.classification === 'upcoming');
     if (laterThisWeek !== undefined) {
         const weekday = calendarWeekdayNames[
@@ -406,10 +396,15 @@ export function timelineEmptyCopy(plan: PlanProjection): string {
         ]!;
         return `本周下一节是${weekday} ${laterThisWeek.occurrence.localStart} 的 ${laterThisWeek.courseCode}。`;
     }
-    if (plan.term.startDate > plan.evaluationContext.applicableDate) {
-        return `学期 ${plan.term.startDate} 开始，到那时这里才会排上课节。`;
+    const laterThisTerm = nextTermMeeting(plan);
+    if (laterThisTerm !== undefined) {
+        const { date, localStart } = laterThisTerm.occurrence;
+        return `下一节 ${date.slice(5)} ${shortWeekdayOf(date)} ${localStart} ${laterThisTerm.courseCode}。`;
     }
-    return '本周没有其他课节。';
+    if (plan.term.startDate > plan.evaluationContext.applicableDate) {
+        return `学期 ${plan.term.startDate} 开始，还没有排课节。`;
+    }
+    return '本学期没有其他课节。';
 }
 
 /**
@@ -494,32 +489,321 @@ export function TodayTimelineTask(props: Readonly<{ task: PlanTaskProjection }>)
     );
 }
 
+export type NowCardState = 'in-class' | 'between' | 'done' | 'free' | 'before-term';
+
+export type NowCardFacts = Readonly<{
+    state: NowCardState;
+    label: string;
+    value: string;
+    meta: string;
+    clock: string;
+    ratio: number | null;
+    ringKind: 'course' | 'day';
+    ringLabel: string;
+    courseId: string | null;
+    live: boolean;
+}>;
+
 /**
- * Renders the one dark surface on the page: the large Task PLAN already selected.
+ * Reads the one state the 现在 card is in, in the order UI spec §8.2 fixes.
+ *
+ * The in-class ratio is the same time geometry as the timeline's now-line; every count
+ * comes from PLAN. Nothing here classifies, selects, or sums.
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {NowCardFacts} Display facts for the current moment.
+ */
+export function nowCardFacts(plan: PlanProjection): NowCardFacts {
+    const { applicableDate, evaluatedAt, termZone } = plan.evaluationContext;
+    const now = Date.parse(evaluatedAt);
+    const clock = minuteLabel(localInstantParts(evaluatedAt, termZone).minute);
+    const meetingLabel = (meeting: PlanMeetingProjection): string => (
+        `${meeting.courseCode} ${meeting.typeLabel}`
+    );
+    const laterInTerm = (): string => {
+        const next = nextTermMeeting(plan);
+        return next === undefined
+            ? '本学期没有其他课节'
+            : `下一节 ${shortWeekdayOf(next.occurrence.date)} ${next.occurrence.localStart} ${next.courseCode}`;
+    };
+
+    const inProgress = plan.today.meetings.find(meeting => meeting.classification === 'in-progress');
+    if (inProgress !== undefined) {
+        const { occurrence } = inProgress;
+        const start = Date.parse(occurrence.startInstant);
+        const end = Date.parse(occurrence.endInstant);
+        const ratio = Math.min(1, Math.max(0, (now - start) / (end - start)));
+        return {
+            state: 'in-class',
+            label: '上课中',
+            value: `剩 ${Math.max(1, Math.ceil((end - now) / 60_000))} 分钟`,
+            meta: `${meetingLabel(inProgress)} · 至 ${occurrence.localEnd}`
+                + ` · ${meetingLocationLabel(occurrence.location)}`,
+            clock,
+            ratio,
+            ringKind: 'course',
+            ringLabel: `本节课已进行 ${Math.round(ratio * 100)}%`,
+            courseId: inProgress.courseId,
+            live: true,
+        };
+    }
+
+    const { completed, pending } = plan.today.summary.contributions.meetings;
+    const dayRatio = completed + pending === 0 ? null : completed / (completed + pending);
+    const dayRingLabel = `今天 ${completed + pending} 节课已上 ${completed} 节`;
+    const upcoming = plan.today.meetings.find(meeting => meeting.classification === 'upcoming');
+    if (upcoming !== undefined) {
+        const { occurrence } = upcoming;
+        return {
+            state: 'between',
+            label: '课间',
+            value: `${durationLabel(Date.parse(occurrence.startInstant) - now)}后`,
+            meta: `下一节 ${meetingLabel(upcoming)} · ${occurrence.localStart}`
+                + ` · ${meetingLocationLabel(occurrence.location)}`,
+            clock,
+            ratio: dayRatio,
+            ringKind: 'day',
+            ringLabel: dayRingLabel,
+            courseId: upcoming.courseId,
+            live: false,
+        };
+    }
+
+    const heldToday = plan.today.meetings.filter(meeting => (
+        meeting.classification !== 'cancelled' && meeting.classification !== 'holiday-suppressed'
+    ));
+    if (heldToday.length > 0) {
+        return {
+            state: 'done',
+            label: '今天的课上完了',
+            value: `今天 ${heldToday.length} 节课已结束`,
+            meta: laterInTerm(),
+            clock,
+            ratio: dayRatio,
+            ringKind: 'day',
+            ringLabel: dayRingLabel,
+            courseId: nextTermMeeting(plan)?.courseId ?? null,
+            live: false,
+        };
+    }
+
+    if (applicableDate < plan.term.startDate) {
+        const first = nextTermMeeting(plan);
+        return {
+            state: 'before-term',
+            label: '开学前',
+            value: `${calendarDayDifference(applicableDate, plan.term.startDate)} 天`,
+            meta: first === undefined
+                ? '还没有排课节'
+                : `第一节 ${shortWeekdayOf(first.occurrence.date)} ${first.occurrence.localStart} ${first.courseCode}`
+                    + ` · ${first.occurrence.date.slice(5)} · ${meetingLocationLabel(first.occurrence.location)}`,
+            clock,
+            ratio: null,
+            ringKind: 'day',
+            ringLabel: '学期尚未开始',
+            courseId: first?.courseId ?? null,
+            live: false,
+        };
+    }
+
+    return {
+        state: 'free',
+        label: '今天没有课',
+        value: '今天没有课',
+        meta: laterInTerm(),
+        clock,
+        ratio: null,
+        ringKind: 'day',
+        ringLabel: '今天没有课节',
+        courseId: nextTermMeeting(plan)?.courseId ?? null,
+        live: false,
+    };
+}
+
+/**
+ * Renders the current moment: a clock-face ring plus the state, value, and meta lines.
+ *
+ * @param {Object} props Unified PLAN projection and Course colours.
+ * @return {ReactElement} 现在 card.
+ */
+export function NowCard(props: Readonly<{
+    plan: PlanProjection;
+    setup: SetupProjection;
+}>): ReactElement {
+    const facts = nowCardFacts(props.plan);
+    const ringStyle: RingStyle = { '--ring-ratio': `${facts.ratio ?? 0}` };
+
+    return (
+        <section
+            aria-labelledby="today-now-title"
+            className="content-card now-card"
+            data-now-state={facts.state}
+        >
+            <div className="card-heading">
+                <h2 id="today-now-title">现在</h2>
+                <p className="page-context now-clock">
+                    <time dateTime={props.plan.evaluationContext.evaluatedAt}>{facts.clock}</time>
+                </p>
+            </div>
+            <div
+                className="now-body"
+                data-course-color={facts.courseId === null
+                    ? undefined
+                    : courseColorFor(props.setup, facts.courseId) ?? undefined}
+                data-ring={facts.ringKind}
+            >
+                <svg
+                    aria-label={facts.ringLabel}
+                    className="now-ring"
+                    role="img"
+                    viewBox="0 0 96 96"
+                >
+                    <circle
+                        className="now-ring-track"
+                        cx="48"
+                        cy="48"
+                        pathLength="100"
+                        r="42"
+                    />
+                    <circle
+                        className="now-ring-value"
+                        cx="48"
+                        cy="48"
+                        data-empty={facts.ratio === null ? 'true' : undefined}
+                        pathLength="100"
+                        r="42"
+                        style={ringStyle}
+                    />
+                </svg>
+                <div className="now-facts">
+                    <span
+                        className="now-state"
+                        data-live={facts.live ? 'true' : undefined}
+                    >{facts.label}</span>
+                    <strong className="now-value">{facts.value}</strong>
+                    <p className="now-meta">{facts.meta}</p>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+/**
+ * Renders the seven-day class load PLAN already summed, with today in the accent.
+ *
+ * @param {Object} props Unified PLAN projection.
+ * @return {ReactElement} 本周课时 card.
+ */
+export function WeekLoadCard(props: Readonly<{ plan: PlanProjection }>): ReactElement {
+    const { plan } = props;
+    const { days } = plan.week;
+    const { applicableDate } = plan.evaluationContext;
+    const peak = Math.max(0, ...days.map(day => day.meetingMinutes));
+    const totalMinutes = days.reduce((total, day) => total + day.meetingMinutes, 0);
+    const totalCount = days.reduce((total, day) => total + day.meetingCount, 0);
+    const conflict = plan.agenda.warnings[0];
+
+    return (
+        <section
+            aria-labelledby="today-week-title"
+            className="content-card week-load-card"
+        >
+            <div className="card-heading">
+                <h2 id="today-week-title">本周课时</h2>
+                <p className="page-context">{hoursLabel(totalMinutes)} · {totalCount} 节</p>
+            </div>
+            <ol
+                aria-label="本周每天的课时"
+                className="week-load"
+            >
+                {days.map(day => {
+                    const barStyle: LoadBarStyle = {
+                        '--load': `${peak === 0 ? 0 : day.meetingMinutes / peak}`,
+                    };
+                    const dots = Math.min(WEEK_LOAD_TASK_DOT_LIMIT + 1, day.taskCount);
+                    return (
+                        <li
+                            data-current={day.date === applicableDate ? 'true' : undefined}
+                            data-day={day.date}
+                            data-empty={day.meetingMinutes === 0 ? 'true' : undefined}
+                            key={day.date}
+                        >
+                            <span className="week-load-peak">{peak > 0 && day.meetingMinutes === peak
+                                ? hoursLabel(day.meetingMinutes)
+                                : ''}</span>
+                            <span className="week-load-track">
+                                <span
+                                    className="week-load-bar"
+                                    style={barStyle}
+                                    title={`${shortWeekdayOf(day.date)} ${day.meetingCount} 节`
+                                        + ` · ${day.meetingMinutes} 分钟`}
+                                />
+                            </span>
+                            <span className="week-load-day">{shortWeekdayOf(day.date).slice(1)}</span>
+                            <span
+                                aria-label={`${day.taskCount} 项任务`}
+                                className="week-load-tasks"
+                            >
+                                {Array.from({ length: dots }, (_value, index) => <i key={index} />)}
+                            </span>
+                            <span className="visually-hidden">
+                                {shortWeekdayOf(day.date)} {day.meetingCount} 节课 {day.meetingMinutes} 分钟
+                                {' '}{day.taskCount} 项任务
+                            </span>
+                        </li>
+                    );
+                })}
+            </ol>
+            <p
+                className="week-load-note"
+                role="status"
+            >
+                {conflict !== undefined ? (
+                    <>
+                        <span
+                            className="status-label"
+                            data-severity="warning"
+                        >{plan.agenda.warnings.length} 组时间冲突</span>
+                        <span>
+                            {shortWeekdayOf(conflict.first.occurrence.date)} {conflict.first.occurrence.localStart}
+                            {' '}{conflict.first.courseCode} 与 {conflict.second.courseCode} 重叠
+                        </span>
+                    </>
+                ) : totalCount === 0 ? (
+                    <span>{plan.term.startDate > applicableDate
+                        ? `学期 ${plan.term.startDate} 开始，本周还是空的。`
+                        : '本周没有课节。'}</span>
+                ) : null}
+            </p>
+        </section>
+    );
+}
+
+/**
+ * Renders the one dark surface on the page: the Task PLAN already selected, over the
+ * week's deadline register.
  *
  * The primary block is always the large Task and the compressed line is always the
  * small one; choosing between them by remaining time would be a Renderer selection.
  *
- * @param {Object} props PLAN-selected next Tasks and the Task-page action.
+ * @param {Object} props Unified PLAN projection and the Task-page action.
  * @return {ReactElement} Next-step card.
  */
 export function NextStepCard(props: Readonly<{
-    next: PlanProjection['next'];
-    termZone: string;
-    wide: boolean;
+    plan: PlanProjection;
     onOpenTasks: () => void;
 }>): ReactElement {
-    const { large, small } = props.next;
+    const { large, small } = props.plan.next;
+    const { termZone } = props.plan.evaluationContext;
+    const nothingNext = large.kind === 'empty' && small.kind === 'empty';
 
     return (
         <section
             aria-labelledby="today-next-step-title"
-            className={props.wide
-                ? 'content-card next-step-card next-step-card--wide'
-                : 'content-card next-step-card'}
+            className="content-card next-step-card"
         >
             <h2 id="today-next-step-title">下一步</h2>
-            {large.kind === 'empty' && small.kind === 'empty' ? (
+            {nothingNext ? (
                 <EmptyState
                     action={buttonAction('查看任务', props.onOpenTasks)}
                     compact
@@ -531,10 +815,18 @@ export function NextStepCard(props: Readonly<{
                 <>
                     <NextStepPrimary
                         next={large}
-                        termZone={props.termZone}
+                        termZone={termZone}
                     />
                     <NextStepSecondary next={small} />
                 </>
+            )}
+            <WeekDeadlines plan={props.plan} />
+            {nothingNext ? null : (
+                <button
+                    className="secondary-action"
+                    onClick={props.onOpenTasks}
+                    type="button"
+                >查看任务</button>
             )}
         </section>
     );
@@ -610,55 +902,86 @@ export function NextStepSecondary(props: Readonly<{ next: PlanNextTaskProjection
 }
 
 /**
- * Renders the three counts that decide whether today needs a correction.
+ * Names one week Task's deadline for the register: weekday, plus the clock when timed.
  *
- * @param {Object} props PLAN-owned counts and the navigation handler.
- * @return {ReactElement} Attention card.
+ * @param {PlanTaskProjection} task PLAN Task projection.
+ * @param {string} termZone Workspace-owned TermZone.
+ * @return {string} `周x HH:MM`, `周x`, or `TBA`.
  */
-export function AttentionCard(props: Readonly<{
-    facts: AttentionFacts;
-    onNavigate: (page: WorkspaceNavigationId) => void;
-}>): ReactElement {
-    const { facts } = props;
-    // Fixed precedence, so the action never changes with the order the counts arrive in.
-    const action: Readonly<{ label: string; page: WorkspaceNavigationId }> = facts.overdueTasks > 0
-        ? { label: '查看任务', page: 'tasks' }
-        : facts.conflictGroups > 0
-            ? { label: '查看日历', page: 'calendar' }
-            : { label: '查看 TBA 任务', page: 'tasks' };
+export function weekDeadlineMeta(task: PlanTaskProjection, termZone: string): string {
+    const { deadline } = task.occurrence;
+    if (deadline.kind === 'timed') {
+        const { date, minute } = localInstantParts(deadline.instant, termZone);
+        return `${shortWeekdayOf(date)} ${minuteLabel(minute)}`;
+    }
+    if (deadline.kind === 'date-only') {
+        return shortWeekdayOf(deadline.date);
+    }
+    return 'TBA';
+}
+
+/**
+ * Renders the week's deadline register under the next step, in PLAN's deadline order.
+ *
+ * Rows are not interactive: Task actions stay on 今日任务 and the Tasks page.
+ *
+ * @param {Object} props Unified PLAN projection.
+ * @return {ReactElement} Register block with its `n/N` figure.
+ */
+export function WeekDeadlines(props: Readonly<{ plan: PlanProjection }>): ReactElement {
+    const { tasks } = props.plan.week;
+    const { termZone } = props.plan.evaluationContext;
+    const completed = tasks.filter(task => task.classification === 'completed').length;
+    const visible = tasks.slice(0, WEEK_DEADLINE_ROW_LIMIT);
+    const hidden = tasks.length - visible.length;
 
     return (
-        <section
-            aria-labelledby="today-attention-title"
-            className="content-card attention-card"
-        >
-            <h2 id="today-attention-title">需要注意</h2>
-            <dl className="attention-facts">
-                {facts.overdueTasks === 0 ? null : (
-                    <div data-severity="critical">
-                        <dt>逾期任务</dt>
-                        <dd>{facts.overdueTasks}</dd>
-                    </div>
-                )}
-                {facts.conflictGroups === 0 ? null : (
-                    <div data-severity="warning">
-                        <dt>本周时间冲突</dt>
-                        <dd>{facts.conflictGroups} 组</dd>
-                    </div>
-                )}
-                {facts.tbaTasks === 0 ? null : (
-                    <div data-severity="neutral">
-                        <dt>TBA 任务</dt>
-                        <dd>{facts.tbaTasks}</dd>
-                    </div>
-                )}
-            </dl>
-            <button
-                className="secondary-action"
-                onClick={() => props.onNavigate(action.page)}
-                type="button"
-            >{action.label}</button>
-        </section>
+        <div className="week-deadlines">
+            <div className="card-heading week-deadlines-heading">
+                <h3 id="today-week-deadlines-title">本周截止</h3>
+                <p className="week-deadlines-count">
+                    <strong>{completed}</strong>/{tasks.length}
+                </p>
+            </div>
+            {tasks.length === 0 ? (
+                <p className="week-deadlines-empty">本周没有截止的任务。</p>
+            ) : (
+                <ol
+                    aria-labelledby="today-week-deadlines-title"
+                    className="week-deadlines-list"
+                >
+                    {visible.map(task => {
+                        const state = task.classification === 'completed' || task.classification === 'skipped'
+                            ? task.classification
+                            : 'pending';
+                        return (
+                            <li
+                                data-item-id={taskItemId(task)}
+                                data-severity={taskSeverity(task.classification)}
+                                data-state={state}
+                                key={taskItemId(task)}
+                            >
+                                <span
+                                    aria-hidden="true"
+                                    className="deadline-mark"
+                                >
+                                    {task.classification === 'completed' ? (
+                                        <svg viewBox="0 0 16 16"><path d="M3.5 8.5l3 3 6-7" /></svg>
+                                    ) : null}
+                                </span>
+                                <span className="deadline-title">{task.occurrence.title}</span>
+                                <span className="deadline-meta">
+                                    {task.courseCode} · {weekDeadlineMeta(task, termZone)}
+                                    {task.classification === 'overdue' ? ' · 逾期' : ''}
+                                    {task.classification === 'skipped' ? ' · 已跳过' : ''}
+                                </span>
+                            </li>
+                        );
+                    })}
+                </ol>
+            )}
+            {hidden > 0 ? <p className="week-deadlines-more">还有 {hidden} 项在任务页。</p> : null}
+        </div>
     );
 }
 
@@ -714,6 +1037,7 @@ export function TodayTasksCard(props: Readonly<{
                             actions={props.taskActions}
                             key={taskItemId(task)}
                             task={task}
+                            termZone={plan.evaluationContext.termZone}
                         />
                     ))}
                 </ul>
@@ -723,78 +1047,252 @@ export function TodayTasksCard(props: Readonly<{
 }
 
 /**
- * Renders the seven-day load strip from the PLAN-owned week window.
+ * Lists the current Term's Courses that Today may show.
  *
- * Placing week facts into their own date column is the same presentation move the
- * Calendar already makes; no new classification or filter is introduced here.
- *
- * @param {Object} props Unified PLAN projection and Calendar action.
- * @return {ReactElement} Week strip card.
+ * @param {SetupProjection} setup Current setup projection.
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @return {readonly CourseProjection[]} Unarchived Courses of the projected Term, in setup order.
  */
-export function WeekStrip(props: Readonly<{
+export function currentTermCourses(setup: SetupProjection, plan: PlanProjection): readonly CourseProjection[] {
+    return setup.courses.filter(course => course.termId === plan.term.termId && !course.archived);
+}
+
+/**
+ * Renders the Course roster as native disclosure rows.
+ *
+ * `<details>` keeps the open state in the browser and reachable from the keyboard
+ * without any Renderer state; the chevron is drawn, not a glyph.
+ *
+ * @param {Object} props Setup Courses, PLAN week facts, and the management handler.
+ * @return {ReactElement} 课程 card.
+ */
+export function CoursesCard(props: Readonly<{
     plan: PlanProjection;
-    onOpenCalendar: () => void;
+    setup: SetupProjection;
+    onOpenManagement: WorkspacePageContentProps['onOpenManagement'];
 }>): ReactElement {
-    const { plan } = props;
-    const { week } = plan;
-    const { applicableDate, termZone } = plan.evaluationContext;
-    const dates = sevenDayDates(week.window.startDate);
-    const taskDate = (task: PlanTaskProjection): string | null => {
-        if (task.occurrence.deadline.kind === 'date-only') {
-            return task.occurrence.deadline.date;
-        }
-        if (task.occurrence.deadline.kind === 'timed') {
-            return localInstantParts(task.occurrence.deadline.instant, termZone).date;
-        }
-        return null;
-    };
-    const quiet = week.meetings.length === 0 && week.tasks.length === 0;
+    const courses = currentTermCourses(props.setup, props.plan);
 
     return (
         <section
-            aria-labelledby="today-week-title"
-            className="content-card week-strip-card"
+            aria-labelledby="today-courses-title"
+            className="content-card courses-card"
         >
             <div className="card-heading">
-                <h2 id="today-week-title">本周</h2>
-                <p className="page-context">
-                    <time dateTime={week.window.startDate}>{week.window.startDate}</time>
-                    {' - '}
-                    <time dateTime={week.window.endDate}>{week.window.endDate}</time>
-                </p>
+                <h2 id="today-courses-title">课程</h2>
+                <p className="page-context">{courses.length} 门 · 本周 {props.plan.week.meetings.length} 节</p>
             </div>
-            <ol className="week-strip">
-                {dates.map(date => (
-                    <li
-                        data-current={date === applicableDate ? 'true' : undefined}
-                        data-day={date}
-                        key={date}
+            {courses.length === 0 ? (
+                <EmptyState
+                    action={buttonAction('添加课程', () => props.onOpenManagement('course'))}
+                    id="today-courses-empty"
+                    reason="添加当前学期的课程，课节和任务都会挂在它下面。"
+                    title="还没有课程"
+                />
+            ) : (
+                <ul className="course-roster">
+                    {courses.map(course => (
+                        <CourseRow
+                            course={course}
+                            key={course.courseId}
+                        />
+                    ))}
+                </ul>
+            )}
+        </section>
+    );
+}
+
+/**
+ * Renders one Course as a summary row that discloses its facts and weekly slots.
+ *
+ * @param {Object} props One Course projection.
+ * @return {ReactElement} Roster row.
+ */
+export function CourseRow(props: Readonly<{ course: CourseProjection }>): ReactElement {
+    const { course } = props;
+    const weekdays = courseWeekdaySummary(course.meetings);
+    const factEntries: readonly (readonly [string, string | null])[] = [
+        ['教师', course.instructor],
+        ['Section', course.section],
+        ['学分', course.credits],
+    ];
+    const facts = factEntries.filter((entry): entry is readonly [string, string] => entry[1] !== null);
+
+    return (
+        <li
+            data-course-color={course.color ?? undefined}
+            data-course-id={course.courseId}
+        >
+            <details>
+                <summary>
+                    <span
+                        aria-hidden="true"
+                        className="course-dot"
+                    />
+                    <strong className="course-code">{course.code}</strong>
+                    <span className="course-name">{course.name}</span>
+                    <span className="course-instructor">{course.instructor ?? ''}</span>
+                    <span className="course-summary-meta">
+                        {weekdays === '' ? '' : `${weekdays} · `}{course.meetings.length} 节/周
+                    </span>
+                    <svg
+                        aria-hidden="true"
+                        className="course-chevron"
+                        viewBox="0 0 16 16"
+                    ><path d="M4 6l4 4 4-4" /></svg>
+                </summary>
+                <div className="roster-details">
+                    {facts.length === 0 ? null : (
+                        <dl className="roster-facts">
+                            {facts.map(([label, value]) => (
+                                <div key={label}>
+                                    <dt>{label}</dt>
+                                    <dd>{value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    )}
+                    {course.meetings.length === 0 ? (
+                        <p className="course-no-slots">还没有课节。</p>
+                    ) : (
+                        <ul className="course-slots">
+                            {sortedCourseMeetings(course.meetings).map(meeting => (
+                                <li key={meeting.meetingSeriesId}>
+                                    <span>
+                                        周{weekdayMarks[meeting.weekday]} {meeting.localStart}-{meeting.localEnd}
+                                    </span>
+                                    <span>{meeting.type.name}</span>
+                                    <span>{meetingLocationLabel(meeting.location)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            </details>
+        </li>
+    );
+}
+
+export type TermTaskRow = PlanCourseTaskSummary & Readonly<{ color: CourseProjection['color'] }>;
+
+/**
+ * Joins PLAN's per-Course summary with Setup colours, adding 0/0 rows for Courses that
+ * have no occurrences yet.
+ *
+ * @param {PlanProjection} plan Unified PLAN projection.
+ * @param {SetupProjection} setup Current setup projection.
+ * @return {readonly TermTaskRow[]} One row per current-Term Course.
+ */
+export function termTaskRows(plan: PlanProjection, setup: SetupProjection): readonly TermTaskRow[] {
+    const summarised = plan.courses.map(course => ({
+        ...course,
+        color: courseColorFor(setup, course.courseId),
+    }));
+    const missing = currentTermCourses(setup, plan)
+        .filter(course => !plan.courses.some(summary => summary.courseId === course.courseId))
+        .map(course => ({
+            courseId: course.courseId,
+            courseCode: course.code,
+            completed: 0,
+            pending: 0,
+            overdue: 0,
+            tba: 0,
+            skipped: 0,
+            countable: 0,
+            color: course.color,
+        }));
+    return [...summarised, ...missing];
+}
+
+/**
+ * Renders the Term-wide Task completion PLAN summarised, one segment per Course.
+ *
+ * @param {Object} props PLAN summary, Setup colours, and the create handler.
+ * @return {ReactElement} 学期任务 card.
+ */
+export function TermTasksCard(props: Readonly<{
+    plan: PlanProjection;
+    setup: SetupProjection;
+    onCreateTask: () => void;
+}>): ReactElement {
+    const rows = termTaskRows(props.plan, props.setup);
+    const completed = rows.reduce((total, row) => total + row.completed, 0);
+    const countable = rows.reduce((total, row) => total + row.countable, 0);
+    const overdue = rows.reduce((total, row) => total + row.overdue, 0);
+    const tba = rows.reduce((total, row) => total + row.tba, 0);
+    const percent = countable === 0 ? 0 : Math.round((completed / countable) * 100);
+
+    return (
+        <section
+            aria-labelledby="today-term-tasks-title"
+            className="content-card term-tasks-card"
+        >
+            <div className="card-heading">
+                <h2 id="today-term-tasks-title">学期任务</h2>
+                <p className="term-tasks-percent">{percent}%</p>
+            </div>
+            <p className="page-context">{countable === 0
+                ? '还没有任务'
+                : `已完成 ${completed} / ${countable} 项 · 按课程`}</p>
+            {countable === 0 ? (
+                <EmptyState
+                    action={buttonAction('添加任务', props.onCreateTask)}
+                    id="today-term-tasks-empty"
+                    reason="给课程添加作业、测验或项目，这里会按课程统计完成度。"
+                    title="还没有任务"
+                />
+            ) : (
+                <>
+                    <div
+                        aria-label={`按课程的任务完成度，共 ${countable} 项，已完成 ${completed} 项`}
+                        className="term-tasks-bar"
+                        role="img"
                     >
-                        <span className="week-strip-day">
-                            {shortWeekdayNames[new Date(`${date}T00:00:00.000Z`).getUTCDay()]}
-                        </span>
-                        <time dateTime={date}>{date.slice(5)}</time>
-                        <span className="week-strip-counts">
-                            <span>{week.meetings.filter(meeting => (
-                                meeting.occurrence.date === date
-                            )).length} 课节</span>
-                            <span>{week.tasks.filter(task => taskDate(task) === date).length} 任务</span>
-                        </span>
-                    </li>
-                ))}
-            </ol>
-            {quiet ? (
-                <p
-                    className="week-strip-note"
-                    role="status"
-                >{plan.term.startDate > applicableDate
-                        ? `学期 ${plan.term.startDate} 开始，本周还是空的。`
-                        : '本周没有课节和任务。'}<button
-                            className="secondary-action"
-                            onClick={props.onOpenCalendar}
-                            type="button"
-                        >查看日历</button></p>
-            ) : null}
+                        {rows.filter(row => row.countable > 0).map(row => {
+                            const style: TermSegmentStyle = {
+                                '--share': `${row.countable}`,
+                                '--done': `${row.completed / row.countable}`,
+                            };
+                            return (
+                                <span
+                                    data-course-color={row.color ?? undefined}
+                                    data-course-id={row.courseId}
+                                    key={row.courseId}
+                                    style={style}
+                                />
+                            );
+                        })}
+                    </div>
+                    <ul className="term-tasks-legend">
+                        {rows.map(row => (
+                            <li
+                                data-course-color={row.color ?? undefined}
+                                data-course-id={row.courseId}
+                                key={row.courseId}
+                            >
+                                <span
+                                    aria-hidden="true"
+                                    className="course-dot"
+                                />
+                                <span>{row.courseCode}</span>
+                                <span className="term-tasks-count">{row.completed}/{row.countable}</span>
+                            </li>
+                        ))}
+                    </ul>
+                    {overdue === 0 && tba === 0 ? null : (
+                        <p className="term-tasks-note">
+                            {overdue === 0 ? null : (
+                                <span
+                                    className="status-label"
+                                    data-severity="critical"
+                                >逾期 {overdue}</span>
+                            )}
+                            {tba === 0 ? null : <span className="status-label">TBA {tba}</span>}
+                        </p>
+                    )}
+                </>
+            )}
         </section>
     );
 }

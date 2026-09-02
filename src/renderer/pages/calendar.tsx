@@ -315,6 +315,7 @@ export function CalendarContent(props: Readonly<{
                                                 <AgendaItem
                                                     item={item}
                                                     key={agendaItemId(item)}
+                                                    termZone={props.plan.evaluationContext.termZone}
                                                 />
                                             ))}
                                         </ul>
@@ -509,12 +510,20 @@ export function CalendarHolidayItem(props: Readonly<{
  * @param {Object} props Agenda item projection.
  * @return {ReactElement} Agenda row.
  */
-export function AgendaItem(props: Readonly<{ item: AgendaItemProjection }>): ReactElement {
+export function AgendaItem(props: Readonly<{
+    item: AgendaItemProjection;
+    termZone?: string;
+}>): ReactElement {
     if (props.item.kind === 'meeting') {
         return <MeetingItem meeting={props.item} />;
     }
     if (props.item.kind === 'task') {
-        return <TaskItem task={props.item} />;
+        return (
+            <TaskItem
+                task={props.item}
+                termZone={props.termZone}
+            />
+        );
     }
 
     return (

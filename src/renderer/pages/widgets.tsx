@@ -5,7 +5,7 @@ import {
     meetingItemId,
     meetingLocationLabel,
     taskClassificationNames,
-    taskDeadlineLabel,
+    taskDeadlineRowLabel,
     taskItemId,
     taskOccurrenceActionLabels,
     taskSeverity,
@@ -262,14 +262,17 @@ export function linkAction(label: string, href: string): EmptyStateAction {
 /**
  * Renders one classified PLAN task without reclassifying or inventing a deadline.
  *
- * @param {Object} props Task projection.
+ * @param {Object} props Task projection, optional actions, and the TermZone for timed deadlines.
  * @return {ReactElement} Task occurrence row.
  */
 export function TaskItem(props: Readonly<{
     task: PlanTaskProjection;
     actions?: TaskActionPresentation;
+    termZone?: string;
 }>): ReactElement {
     const { actions, task } = props;
+    const { deadline } = task.occurrence;
+    const deadlineLabel = taskDeadlineRowLabel(deadline, props.termZone);
     const itemId = taskItemId(task);
     const availableActions: readonly TaskOccurrenceAction[] = task.occurrence.status === 'pending'
         ? ['complete', 'skip']
@@ -287,7 +290,9 @@ export function TaskItem(props: Readonly<{
             >{taskClassificationNames[task.classification]}</span>
             <strong>{task.occurrence.title}</strong>
             <span>{task.courseCode} · {task.occurrence.size === 'small' ? '小任务' : '大任务'}</span>
-            <span>{taskDeadlineLabel(task.occurrence.deadline)}</span>
+            <span>{deadline.kind === 'timed'
+                ? <time dateTime={deadline.instant}>{deadlineLabel}</time>
+                : deadlineLabel}</span>
             {task.occurrence.displayProgress === null ? null : (
                 <span>进度 {task.occurrence.displayProgress}%</span>
             )}
