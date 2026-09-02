@@ -2318,23 +2318,54 @@ ul {
     grid-column: 2 / span 7;
     grid-row: 1;
     grid-template-columns: repeat(7, minmax(8rem, 1fr));
-    list-style: none;
 }
 
+/* Each column head is the control that selects its day, so it resets the button surface
+   and keeps the grid's own borders. */
 .calendar-day-column {
+    display: grid;
+    gap: 0.1rem;
+    justify-items: center;
     min-height: 3.4rem;
-    padding: 0.85rem 0.65rem;
+    padding: 0.6rem 0.65rem;
+    border: 0;
     border-right: 1px solid var(--line);
+    color: var(--ink-soft);
+    background: transparent;
+    font: inherit;
     text-align: center;
+    transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
 }
 
 .calendar-day-column:last-child {
     border-right: 0;
 }
 
+.calendar-day-weekday {
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
 .calendar-day-column time {
     font-size: 0.78rem;
     font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Selection is a state of its own: the rule and the weight carry it, not the accent, which
+   stays reserved for today. */
+.calendar-day-column[data-selected="true"] {
+    color: var(--ink);
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: inset 0 -3px 0 var(--dark);
+}
+
+.calendar-day-column[data-selected="true"] .calendar-day-weekday {
+    font-weight: 800;
+}
+
+.calendar-time-column[data-selected="true"] {
+    background-color: rgba(255, 255, 255, 0.45);
 }
 
 .calendar-day-column[data-current="true"],
@@ -2342,11 +2373,15 @@ ul {
     background-color: rgba(245, 212, 87, 0.2);
 }
 
+/* Today is a state, so the label carries it as well as the accent capsule. */
 .calendar-current-label {
-    display: block;
-    margin-top: 0.2rem;
+    padding: 0.05rem 0.4rem;
+    border-radius: var(--radius-pill);
     color: #50471e;
-    font-size: 0.75rem;
+    background: var(--morning-pale);
+    box-shadow: inset 0 0 0 1px var(--morning-deep);
+    font-size: 0.7rem;
+    font-weight: 700;
 }
 
 .calendar-all-day-label {
@@ -2362,7 +2397,6 @@ ul {
     grid-auto-rows: minmax(2.45rem, auto);
     grid-template-columns: repeat(7, minmax(8rem, 1fr));
     gap: 0.45rem;
-    min-height: 3rem;
     padding: 0.45rem;
     border-top: 1px solid var(--line);
     background-image: repeating-linear-gradient(
@@ -2451,12 +2485,12 @@ ul {
     top: var(--calendar-event-top);
     left: calc(var(--calendar-event-left) + 0.18rem);
     display: grid;
-    gap: 0.1rem;
+    align-content: start;
     box-sizing: border-box;
     min-height: var(--calendar-event-min-height);
     height: max(var(--calendar-event-min-height), var(--calendar-event-height));
     width: calc(var(--calendar-event-width) - 0.36rem);
-    padding: 0.35rem 0.45rem;
+    padding: 0.05rem 0.4rem 0.05rem 0.6rem;
     overflow: hidden;
     border: 1px solid rgba(255, 255, 255, 0.78);
     border-radius: var(--radius-piece);
@@ -2465,8 +2499,36 @@ ul {
     font-size: 0.75rem;
 }
 
-.calendar-timed-item-list > li[data-overlap-lane="1"] {
-    background: rgba(255, 244, 190, 0.94);
+/* The title keeps a real minimum height: an overflow-hidden grid item otherwise has an
+   automatic minimum of 0, and a 33px block would squeeze its own first line. Two 1.15 lines
+   fit inside the 30px minimum a short Task block is drawn at. */
+.calendar-timed-item-list > li > strong {
+    min-height: 1.15em;
+    line-height: 1.15;
+}
+
+.calendar-timed-item-list > li > span {
+    line-height: 1.15;
+}
+
+/* Two lines is what a 60-minute block holds, so the meta line is the last thing to clip. */
+.calendar-timed-item-list > li {
+    grid-template-rows: auto auto;
+}
+
+.calendar-timed-item-list > li::before {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 0.25rem;
+    background: var(--course-accent, #b8b6ad);
+    content: "";
+}
+
+/* The overlap is PLAN's finding; the block also says 冲突 in its own text. */
+.calendar-timed-item-list > li[data-conflict="true"] {
+    background: var(--warning-surface);
 }
 
 .calendar-timed-item-list > li > * {
@@ -2481,21 +2543,24 @@ ul {
     font-size: 0.76rem;
 }
 
-.agenda-groups {
-    display: grid;
-    gap: 1rem;
-    margin-top: 0.8rem;
-}
-
-.agenda-date-group {
-    display: grid;
+/* The detail is the panel of the day tablist, so it takes the same focus ring as a control. */
+.calendar-day-card > .card-heading h2 {
+    display: flex;
     gap: 0.45rem;
+    align-items: baseline;
 }
 
-.agenda-date-group > h3 {
-    color: var(--ink-soft);
-    font-size: 0.78rem;
-    letter-spacing: 0.035em;
+.calendar-day-card > .card-heading time {
+    font-variant-numeric: tabular-nums;
+}
+
+.calendar-day-today {
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-pill);
+    background: var(--morning-pale);
+    box-shadow: inset 0 0 0 1px var(--morning-deep);
+    font-size: var(--text-xs);
+    font-weight: 700;
 }
 
 .calendar-conflicts {
@@ -3309,6 +3374,76 @@ ul {
     align-items: center;
 }
 
+/* One control, three commands: the group carries the pill and the segments stay square
+   inside it, so no segment background can spill past a rounded end. */
+.segmented-control {
+    display: inline-flex;
+    border: 1px solid rgba(35, 34, 30, 0.25);
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.segmented-action {
+    min-height: 2rem;
+    padding: 0.3rem 0.85rem;
+    border: 0;
+    border-left: 1px solid rgba(35, 34, 30, 0.18);
+    border-radius: 0;
+    color: var(--ink-soft);
+    background: transparent;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: color 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+
+.segmented-action:first-child {
+    padding-left: 1rem;
+    border-left: 0;
+}
+
+.segmented-action:last-child {
+    padding-right: 1rem;
+}
+
+.segmented-action:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.segmented-action:disabled {
+    color: rgba(92, 88, 74, 0.5);
+}
+
+/* Week facts sit straight on the canvas beside the control, numbers first. */
+.calendar-week-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.75rem;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.calendar-week-range {
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.calendar-week-load {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.calendar-conflict-chip {
+    cursor: pointer;
+    transition: transform 120ms var(--ease-out);
+}
+
+.calendar-conflict-chip:active {
+    transform: scale(0.98);
+}
+
 .calendar-week-offset {
     min-width: 4.5rem;
     color: var(--ink-soft);
@@ -4049,6 +4184,15 @@ h2:focus-visible {
         color: var(--ink);
     }
 
+    .calendar-day-column:hover:not([data-selected="true"]) {
+        color: var(--ink);
+        background: rgba(255, 255, 255, 0.55);
+    }
+
+    .segmented-action:hover:not(:disabled) {
+        color: var(--ink);
+    }
+
     .task-direct-actions button:hover:not(:disabled) {
         border-color: rgba(35, 34, 30, 0.45);
         background: var(--morning-pale);
@@ -4062,13 +4206,18 @@ h2:focus-visible {
     .task-archive > summary,
     .task-filter-chip,
     .task-direct-actions button,
-    .task-rows > li {
+    .task-rows > li,
+    .calendar-day-column,
+    .segmented-action,
+    .calendar-conflict-chip {
         transition: none;
     }
 
     .course-roster summary:active,
     .task-filter-chip:active,
-    .task-direct-actions button:active {
+    .task-direct-actions button:active,
+    .segmented-action:active,
+    .calendar-conflict-chip:active {
         transform: none;
     }
 
@@ -4153,7 +4302,8 @@ h2:focus-visible {
     }
 
     .status-label,
-    .task-filter-chip {
+    .task-filter-chip,
+    .segmented-control {
         border-color: #2d291a;
     }
 }
@@ -4187,10 +4337,20 @@ h2:focus-visible {
     .settings-category-button[aria-current="true"],
     .activity-choice button[aria-pressed="true"],
     .task-filter-chip[aria-checked="true"],
+    .calendar-day-column[data-selected="true"],
     .primary-action {
         color: HighlightText;
         background: Highlight;
         forced-color-adjust: none;
+    }
+
+    .segmented-control {
+        border: 1px solid CanvasText;
+    }
+
+    .calendar-timed-item-list > li[data-conflict="true"] {
+        outline: 2px solid CanvasText;
+        outline-offset: -2px;
     }
 
     .by-course-card .term-tasks-legend > li[data-selected="true"] {
@@ -4216,7 +4376,8 @@ h2:focus-visible {
     .week-load-bar,
     .term-tasks-bar > span::before,
     .course-dot,
-    .week-load-tasks > i {
+    .week-load-tasks > i,
+    .calendar-timed-item-list > li::before {
         background: CanvasText;
     }
 

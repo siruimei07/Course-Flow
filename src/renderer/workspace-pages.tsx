@@ -64,6 +64,9 @@ export type CalendarWeekPresentation = Readonly<{
     problem: string | null;
     /** PLAN projection for the requested week, or null while the default week is shown. */
     plan: PlanProjection | null;
+    /** Renderer view state: the day the detail reads, or null to follow today. */
+    selectedDate: string | null;
+    onSelectDate(date: string): void;
     onShift(weeks: number): void;
     onReturnToCurrentWeek(): void;
 }>;

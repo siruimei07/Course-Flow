@@ -19,6 +19,7 @@ import {
     TasksPage,
     TodayPage,
     WorkspacePage,
+    type CalendarWeekPresentation,
     type TaskActionPresentation,
 } from '../../src/renderer/workspace-pages';
 import {
@@ -375,6 +376,36 @@ function renderWorkspacePage(
     }));
 }
 
+/**
+ * Renders the Calendar page with the week presentation the Shell always supplies.
+ *
+ * @param {PlanProjection} plan Unified plan data evaluated for the visible week.
+ * @param {Partial<CalendarWeekPresentation>} week Week presentation fields to replace.
+ * @return {string} Static semantic HTML.
+ */
+function renderCalendarPage(
+    plan: PlanProjection = planProjection(),
+    week: Partial<CalendarWeekPresentation> = {},
+): string {
+    return renderToStaticMarkup(createElement(CalendarPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan,
+        setupIncomplete: false,
+        calendarWeek: {
+            offset: 0,
+            busy: false,
+            problem: null,
+            plan: null,
+            selectedDate: null,
+            onSelectDate(): void {},
+            onShift(): void {},
+            onReturnToCurrentWeek(): void {},
+            ...week,
+        },
+    }));
+}
+
 test('TodayPage renders only real unified Today, Week, next-task, and term-progress facts', () => {
     const html = renderWorkspacePage('today', planProjection(), true);
 
@@ -662,7 +693,8 @@ test('the 学期任务 card renders the PLAN per-Course summary with one segment
 
 test('timed deadlines read as TermZone date-times wherever a Task row renders', () => {
     const plan = planProjection({ tasks: [FRIDAY_TIMED_TASK] });
-    const calendar = renderWorkspacePage('calendar', plan);
+    // Slice 14: a Task row reaches the Calendar through the detail of the day it falls on.
+    const calendar = renderCalendarPage(plan, { selectedDate: '2026-09-11' });
     assert.match(calendar, /<time dateTime="2026-09-11T14:00:00.000Z">2026-09-11 10:00<\/time>/);
     assert.doesNotMatch(calendar, /2026-09-11T14:00:00.000Z · America\/Toronto/);
     // Slice 13: the Task page names the day and weekday in the row itself, never behind a tooltip.
@@ -861,13 +893,8 @@ test('an ended setup milestone keeps Today and Courses on truthful historical fa
     assert.doesNotMatch(coursesHtml, /历史课程不会冒充当前课程/);
 });
 
-test('CalendarPage keeps seven day columns and separates Calendar, Agenda, conflict, and TBA facts', () => {
-    const html = renderToStaticMarkup(createElement(CalendarPage, {
-        ...HANDLERS,
-        setup: setupProjection(),
-        plan: planProjection(),
-        setupIncomplete: false,
-    }));
+test('CalendarPage keeps seven day columns and separates the grid, the day detail, and TBA facts', () => {
+    const html = renderCalendarPage();
 
     assert.match(html, /<h1[^>]*>日历<\/h1>/);
     assert.equal((html.match(/class="calendar-day-column"/g) ?? []).length, 7);
@@ -875,19 +902,22 @@ test('CalendarPage keeps seven day columns and separates Calendar, Agenda, confl
     assert.match(html, /2026-09-07/);
     assert.match(html, /2026-09-13/);
     assert.match(html, /Reading Week/);
-    assert.match(html, /议程/);
+    assert.match(html, /class="content-card calendar-day-card"/);
     assert.match(html, /时间冲突/);
     assert.match(html, /Confirm research topic/);
     assert.match(html, /TBA/);
+    // The header carries the week range and the week load as sums of the PLAN per-day counts.
+    assert.match(html, /class="calendar-week-load">2 节课 · 2 项任务</);
+    // The whole-week Agenda list is gone: the same facts are the grid and one day's detail.
+    assert.doesNotMatch(html, /agenda-date-group|agenda-groups|id="agenda-title"/);
 
-    const onlyTbaHtml = renderToStaticMarkup(createElement(CalendarPage, {
-        ...HANDLERS,
-        setup: setupProjection(),
-        plan: planProjection({ tasks: [TBA_TASK], meetings: [], holidayRanges: [] }),
-        setupIncomplete: false,
-    }));
+    const onlyTbaHtml = renderCalendarPage(
+        planProjection({ tasks: [TBA_TASK], meetings: [], holidayRanges: [] }),
+    );
     assert.match(onlyTbaHtml, /当前范围没有已排期事项/);
     assert.match(onlyTbaHtml, /Confirm research topic/);
+    // No date-only Task and no visible Holiday: the all-day lane is not drawn at all.
+    assert.doesNotMatch(onlyTbaHtml, /class="calendar-all-day-grid"/);
 });
 
 test('A-CALENDAR-001: Calendar week controls move the grid without moving today', () => {
@@ -908,6 +938,8 @@ test('A-CALENDAR-001: Calendar week controls move the grid without moving today'
             busy: false,
             problem: null,
             plan: nextWeekPlan,
+            selectedDate: null,
+            onSelectDate(): void {},
             onShift(weeks: number): void {
                 shifts.push(weeks);
             },
@@ -936,6 +968,8 @@ test('A-CALENDAR-001: Calendar week controls move the grid without moving today'
             busy: true,
             problem: '无法读取该周的统一计划投影；正式数据没有改变。',
             plan: null,
+            selectedDate: null,
+            onSelectDate(): void {},
             onShift(): void {},
             onReturnToCurrentWeek(): void {},
         },
@@ -1025,7 +1059,7 @@ test('the Calendar hour band defaults to 07:00–22:00 and widens for real outli
     assert.match(widened, /--calendar-hour-count:\s*17/);
 });
 
-test('CalendarPage gives every simultaneous item a visible lane and groups Agenda facts by date', () => {
+test('CalendarPage gives every simultaneous item a visible lane and names one day in its detail', () => {
     const html = renderToStaticMarkup(createElement(CalendarPage, {
         ...HANDLERS,
         setup: setupProjection(),
@@ -1057,10 +1091,10 @@ test('CalendarPage gives every simultaneous item a visible lane and groups Agend
             + 'data-overlap-lane="2"[^>]*data-overlap-lane-count="3"',
         ),
     );
+    // One panel, one day: the detail names the selected day and nothing else.
     assert.equal((html.match(/data-agenda-date="2026-09-10"/g) ?? []).length, 1);
-    assert.match(html, /data-agenda-date="2026-09-10"[^>]*>[\s\S]*?<time dateTime="2026-09-10">2026-09-10<\/time>/);
-    assert.match(html, /data-agenda-date="2026-09-07"/);
-    assert.doesNotMatch(html, /data-agenda-date="2026-09-01"/);
+    assert.match(html, /id="calendar-day-title">周四 <time dateTime="2026-09-10">09-10<\/time>/);
+    assert.doesNotMatch(html, /data-agenda-date="2026-09-07"|data-agenda-date="2026-09-01"/);
 });
 
 test('CalendarPage lanes adjacent short items by their rendered minimum height', () => {
@@ -1083,6 +1117,84 @@ test('CalendarPage lanes adjacent short items by their rendered minimum height',
         html,
         /task:17171717-1717-4717-8717-171717171717:once[^>]*data-overlap-lane="1"[^>]*data-overlap-lane-count="2"/,
     );
+});
+
+test('UI-CALENDAR-02 the selected day only chooses which day the detail reads', () => {
+    const writes: string[] = [];
+    const plan = planProjection();
+    const detail = (html: string): string => (
+        html.match(/<section aria-labelledby="calendar-day-title"[\s\S]*?<\/section>/)?.[0] ?? ''
+    );
+
+    // No held day: the detail opens on today and reads today's own PLAN facts.
+    const thursday = renderCalendarPage(plan, { onSelectDate: date => writes.push(date) });
+    assert.match(thursday, /data-agenda-date="2026-09-10"/);
+    assert.match(detail(thursday), /class="page-context">2 节课 · 1 项任务</);
+    assert.match(detail(thursday), /Read chapter one/);
+    assert.doesNotMatch(detail(thursday), /Draft project outline/);
+
+    // Another day swaps the panel and nothing else: 今天 and the header numbers stay put.
+    const friday = renderCalendarPage(plan, { selectedDate: '2026-09-11' });
+    assert.match(friday, /data-agenda-date="2026-09-11"/);
+    assert.match(detail(friday), /Draft project outline/);
+    assert.doesNotMatch(detail(friday), /Read chapter one/);
+    assert.equal((friday.match(/class="calendar-current-label"/g) ?? []).length, 1);
+    assert.match(friday, /class="calendar-week-load">2 节课 · 2 项任务</);
+    assert.match(friday, /class="page-context">0 节课 · 1 项任务</);
+
+    // A day inside the week with nothing on it says so and offers the way back to today.
+    const tuesday = renderCalendarPage(plan, { selectedDate: '2026-09-08' });
+    assert.match(detail(tuesday), /id="calendar-day-empty"[^>]*>这一天没有已排期事项/);
+    assert.match(detail(tuesday), /这一周还有 2 节课和 2 项任务/);
+    assert.match(detail(tuesday), /<button[^>]*>看今天<\/button>/);
+    // Rendering never writes the view state.
+    assert.deepEqual(writes, []);
+});
+
+test('A-CALENDAR-001 the day tablist is one Tab stop and its selection resets with the week', () => {
+    const html = renderCalendarPage();
+    const tabs = html.match(/<button aria-controls="calendar-day-detail"[^>]*>/g) ?? [];
+
+    assert.match(html, /role="tablist"/);
+    assert.match(html, /id="calendar-day-detail"[^>]*role="tabpanel"/);
+    assert.equal(tabs.length, 7);
+    // One radio-style Tab stop: only the selected head is in the tab order.
+    assert.equal(tabs.filter(tab => tab.includes('tabindex="0"')).length, 1);
+    assert.match(tabs[3] ?? '', /aria-current="date" aria-selected="true"[^>]*data-selected="true"/);
+    assert.match(tabs[0] ?? '', /aria-selected="false"[^>]*tabindex="-1"/);
+    assert.match(html, /class="calendar-day-weekday">周一<\/span><time dateTime="2026-09-07">09-07</);
+
+    // A held day from last week cannot survive into a week that does not draw it.
+    const nextWeek = planProjection({
+        evaluationContext: {
+            ...EVALUATION_CONTEXT,
+            requestedWindow: { startDate: '2026-09-14', endDate: '2026-09-20' },
+        },
+    });
+    const moved = renderCalendarPage(planProjection(), {
+        offset: 1,
+        plan: nextWeek,
+        selectedDate: '2026-09-10',
+    });
+    assert.match(moved, /data-agenda-date="2026-09-14"/);
+    assert.doesNotMatch(moved, /class="calendar-current-label"/);
+});
+
+test('the Calendar conflict chip and the warning ground come only from the PLAN agenda warnings', () => {
+    const marked = renderCalendarPage();
+
+    assert.match(
+        marked,
+        /<button class="status-label calendar-conflict-chip" data-severity="warning" type="button">1 组时间冲突<\/button>/,
+    );
+    // Both overlapping Meetings say 冲突 in words, not only in their warning ground.
+    assert.equal((marked.match(/data-conflict="true"/g) ?? []).length, 2);
+    assert.match(marked, /冲突 · 13:00-14:00 · /);
+    assert.match(marked, /data-course-color="blue"/);
+
+    // One Meeting cannot overlap itself: no chip, no warning ground, no invented count.
+    const silent = renderCalendarPage(planProjection({ meetings: [TODAY_MEETING] }));
+    assert.doesNotMatch(silent, /calendar-conflict-chip|组时间冲突|data-conflict="true"/);
 });
 
 test('TasksPage groups known PLAN tasks by their classification and keeps TBA in its own card', () => {

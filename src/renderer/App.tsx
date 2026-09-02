@@ -178,6 +178,8 @@ export function App(): ReactElement {
     const [calendarWeekPlan, setCalendarWeekPlan] = useState<PlanProjection | null>(null);
     const [calendarWeekBusy, setCalendarWeekBusy] = useState(false);
     const [calendarWeekProblem, setCalendarWeekProblem] = useState<string | null>(null);
+    // Renderer view state: which day the Calendar detail reads; null follows today.
+    const [calendarSelectedDate, setCalendarSelectedDate] = useState<string | null>(null);
     const [taskListFilter, setTaskListFilter] = useState<TaskListFilter>(ALL_TASKS_FILTER);
     const [managementOpen, setManagementOpen] = useState(false);
     const [managementSurface, setManagementSurface] = useState<ManagementSurfaceId>('course');
@@ -518,6 +520,7 @@ export function App(): ReactElement {
         setCalendarWeekOffset(0);
         setCalendarWeekPlan(null);
         setCalendarWeekProblem(null);
+        setCalendarSelectedDate(null);
         void loadPlan(window.courseFlow, setup).then(result => {
             setState(current => current.kind === 'ready'
                 && current.setup.projection.workspaceRevision === setup.workspaceRevision
@@ -540,6 +543,7 @@ export function App(): ReactElement {
             setCalendarWeekOffset(0);
             setCalendarWeekPlan(null);
             setCalendarWeekProblem(null);
+            setCalendarSelectedDate(null);
             return;
         }
 
@@ -561,6 +565,8 @@ export function App(): ReactElement {
                 }
                 setCalendarWeekOffset(offset);
                 setCalendarWeekPlan(result.plan);
+                // Another week is another set of days; the detail falls back to today or that Monday.
+                setCalendarSelectedDate(null);
             })
             .catch(() => setCalendarWeekProblem(
                 '无法读取该周的统一计划投影；正式数据没有改变。',
@@ -874,6 +880,8 @@ export function App(): ReactElement {
                     busy: calendarWeekBusy,
                     problem: calendarWeekProblem,
                     plan: calendarWeekPlan,
+                    selectedDate: calendarSelectedDate,
+                    onSelectDate: setCalendarSelectedDate,
                     onShift: weeks => showCalendarWeek(calendarWeekOffset + weeks),
                     onReturnToCurrentWeek: () => showCalendarWeek(0),
                 }}

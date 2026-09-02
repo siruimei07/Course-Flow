@@ -7,9 +7,11 @@ import test from 'node:test';
 
 import {
     ALL_TASKS_FILTER,
+    calendarDateFromKey,
     evaluateSetupMinimum,
     initialWorkspaceSurfaceFrom,
     planProjectionStateFrom,
+    resolveCalendarSelectedDate,
     resolveTaskListFilter,
     sameTaskListFilter,
     setupProjectionStateFrom,
@@ -398,4 +400,37 @@ test('UI-TASK-01 the Task list filter is Renderer view state that only decides w
         { kind: 'course', courseId: CURRENT_COURSE_ID },
     );
     assert.deepEqual(resolveTaskListFilter({ kind: 'size', size: 'large' }, []), { kind: 'size', size: 'large' });
+});
+
+test('UI-CALENDAR-02 the Calendar selected day is view state bounded by the visible week', () => {
+    const week = ['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13'];
+    const nextWeek = ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20'];
+
+    // No held day: the detail opens on today.
+    assert.equal(resolveCalendarSelectedDate(null, week, '2026-09-10'), '2026-09-10');
+    // A held day inside the visible week survives.
+    assert.equal(resolveCalendarSelectedDate('2026-09-08', week, '2026-09-10'), '2026-09-08');
+    // Moving to another week resets the detail: that week has no today, so it opens on its Monday.
+    assert.equal(resolveCalendarSelectedDate('2026-09-08', nextWeek, '2026-09-10'), '2026-09-14');
+    assert.equal(resolveCalendarSelectedDate(null, nextWeek, '2026-09-10'), '2026-09-14');
+    // Coming back to the week that holds today selects today again, not the stale day.
+    assert.equal(resolveCalendarSelectedDate('2026-09-20', week, '2026-09-10'), '2026-09-10');
+});
+
+test('TEST-USABILITY-001 the Calendar day keys move inside the visible week and wrap', () => {
+    const week = ['2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11', '2026-09-12', '2026-09-13'];
+
+    assert.equal(calendarDateFromKey('2026-09-10', 'ArrowRight', week), '2026-09-11');
+    assert.equal(calendarDateFromKey('2026-09-10', 'ArrowLeft', week), '2026-09-09');
+    assert.equal(calendarDateFromKey('2026-09-10', 'ArrowDown', week), '2026-09-11');
+    assert.equal(calendarDateFromKey('2026-09-10', 'ArrowUp', week), '2026-09-09');
+    assert.equal(calendarDateFromKey('2026-09-10', 'Home', week), '2026-09-07');
+    assert.equal(calendarDateFromKey('2026-09-10', 'End', week), '2026-09-13');
+    // Movement wraps inside the week: an arrow key never changes which week is on screen.
+    assert.equal(calendarDateFromKey('2026-09-13', 'ArrowRight', week), '2026-09-07');
+    assert.equal(calendarDateFromKey('2026-09-07', 'ArrowLeft', week), '2026-09-13');
+    // Keys that move nothing, and a day this week does not draw, leave the selection alone.
+    assert.equal(calendarDateFromKey('2026-09-10', 'Enter', week), null);
+    assert.equal(calendarDateFromKey('2026-09-10', 'Tab', week), null);
+    assert.equal(calendarDateFromKey('2026-09-21', 'ArrowRight', week), null);
 });

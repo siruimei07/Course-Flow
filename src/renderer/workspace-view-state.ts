@@ -158,3 +158,64 @@ export function resolveTaskListFilter(filter: TaskListFilter, courseIds: readonl
     }
     return filter;
 }
+
+/**
+ * Resolves which visible day the Calendar detail reads, a Renderer view state and never a Query.
+ *
+ * A held day survives only while its own week is on screen, so moving to another week resets the
+ * detail to today when that week contains it and to the week's Monday otherwise. The 今天 marker
+ * is unaffected: it stays on the PLAN applicable date whatever day is selected.
+ *
+ * @param {string | null} selected LocalDate the Shell holds, or null when it holds none.
+ * @param {readonly string[]} dates The seven LocalDates the grid draws, Monday first.
+ * @param {string} todayDate PLAN-owned applicable date.
+ * @return {string} One of `dates`.
+ */
+export function resolveCalendarSelectedDate(
+    selected: string | null,
+    dates: readonly string[],
+    todayDate: string,
+): string {
+    if (selected !== null && dates.includes(selected)) {
+        return selected;
+    }
+    if (dates.includes(todayDate)) {
+        return todayDate;
+    }
+    return dates[0];
+}
+
+/**
+ * Names the day one key press moves the Calendar selection to.
+ *
+ * Movement wraps inside the visible week, the way the navigation bar and the Task filter wrap;
+ * an arrow key selects another day, never another week.
+ *
+ * @param {string} current Selected LocalDate.
+ * @param {string} key Pressed key name.
+ * @param {readonly string[]} dates The seven LocalDates the grid draws, Monday first.
+ * @return {string | null} Day to select, or null when the key moves nothing.
+ */
+export function calendarDateFromKey(
+    current: string,
+    key: string,
+    dates: readonly string[],
+): string | null {
+    const index = dates.indexOf(current);
+    if (index < 0) {
+        return null;
+    }
+    const steps: Readonly<Record<string, number>> = {
+        ArrowRight: index + 1,
+        ArrowDown: index + 1,
+        ArrowLeft: index - 1,
+        ArrowUp: index - 1,
+        Home: 0,
+        End: dates.length - 1,
+    };
+    const step = steps[key];
+    if (step === undefined) {
+        return null;
+    }
+    return dates[(step + dates.length) % dates.length];
+}
