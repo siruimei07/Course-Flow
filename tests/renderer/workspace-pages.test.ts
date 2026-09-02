@@ -778,7 +778,7 @@ test('Today greeting uses the PLAN TermZone when UTC is already on the next date
     assert.doesNotMatch(html, /星期五|早上好/);
 });
 
-test('CoursesPage renders setup courses and distinguishes a real no-meeting state', () => {
+test('UI-COURSE-01 a Course card carries identity, its weekly rules, and PLAN completion', () => {
     const html = renderToStaticMarkup(createElement(CoursesPage, {
         ...HANDLERS,
         setup: setupProjection(),
@@ -787,12 +787,55 @@ test('CoursesPage renders setup courses and distinguishes a real no-meeting stat
     }));
 
     assert.match(html, /<h1[^>]*>课程<\/h1>/);
-    assert.match(html, /Introduction to Computer Programming/);
-    assert.match(html, /Ada Lovelace/);
-    assert.match(html, /LEC/);
-    assert.match(html, /BA 1170/);
+    // Header facts: the visible Course count; MAT137 has no credit, so no total can be honest.
+    const headline = html.match(/<dl class="page-headline-stats">[\s\S]*?<\/dl>/)?.[0] ?? '';
+    assert.match(headline, /<dt>课程<\/dt><dd>2<\/dd>/);
+    assert.doesNotMatch(headline, /学分/);
+    // Identity: the colour is an attribute, and the heading names the Course by code then name.
+    assert.match(
+        html,
+        new RegExp(
+            '<li class="content-card course-card" data-course-color="blue"[^>]*>'
+            + '<header class="course-card-header"><h3 class="course-card-heading">'
+            + '<span class="course-card-identity"><span aria-hidden="true" class="course-dot"></span>'
+            + '<span class="course-card-code">CSC108</span></span>'
+            + '<span class="course-card-name">Introduction to Computer Programming</span></h3>'
+            + '<p class="course-card-credits">0.5 学分</p>'
+            + '<p class="course-card-meta">Ada Lovelace · L0101</p></header>',
+        ),
+    );
+    // The weekly rule keeps its full type name; the room belongs to the Calendar, not to this card.
+    assert.match(
+        html,
+        new RegExp(
+            '<p class="course-block-label">每周课节</p><dl class="course-slot-groups">'
+            + '<div><dt>Lecture</dt><dd><ul class="course-slot-chips">'
+            + '<li>周四 13:00-14:00</li></ul></dd></div></dl>',
+        ),
+    );
+    assert.doesNotMatch(html, /BA 1170/);
+    // A teaching range that follows the Term says nothing the header has not said already.
+    assert.doesNotMatch(html, /教学范围/);
+    // Optional fields nobody filled in stay absent instead of printing a placeholder six times.
+    assert.doesNotMatch(html, /未设置/);
+    // No chip on a live Term, and no entry the build cannot open.
+    assert.doesNotMatch(html, /已归档|>当前<|>编辑</);
+    assert.doesNotMatch(html, /course-facts|meeting-rule-list/);
+    // Completion is PLAN's own row for this Course: two pending plus one TBA, none finished.
+    assert.match(
+        html,
+        new RegExp(
+            '<div class="course-progress"><p class="course-block-label">任务完成度</p>'
+            + '<p class="course-progress-count">已完成 0 / 3 项</p>'
+            + '<p class="course-progress-note"><span class="status-label">TBA 1</span></p>'
+            + '<div aria-hidden="true" class="term-tasks-bar course-progress-bar">'
+            + '<span style="--done:0"></span></div></div>',
+        ),
+    );
+    // MAT137 has no Meeting rule, so the card shows that one thing and not a second empty state.
     assert.match(html, /Calculus with Proofs/);
     assert.match(html, /尚未添加课节/);
+    assert.doesNotMatch(html, /还没有任务。/);
 
     const emptyHtml = renderToStaticMarkup(createElement(CoursesPage, {
         ...HANDLERS,
@@ -847,7 +890,203 @@ test('CoursesPage renders setup courses and distinguishes a real no-meeting stat
         setupIncomplete: true,
     }));
     assert.match(archivedOnlyHtml, /当前学期还没有课程/);
-    assert.doesNotMatch(archivedOnlyHtml, /Introduction to Computer Programming/);
+    // The archived Course is real history, so it keeps its own place instead of disappearing.
+    const mainGrid = archivedOnlyHtml.slice(0, archivedOnlyHtml.indexOf('<details'));
+    assert.doesNotMatch(mainGrid, /Introduction to Computer Programming/);
+    assert.match(archivedOnlyHtml, /<details class="course-archive"><summary><span>已归档课程 1 门<\/span>/);
+    assert.match(archivedOnlyHtml, /<details[\s\S]*Introduction to Computer Programming/);
+});
+
+test('UI-COURSE-01 archived Courses fold under the roster and history is not split twice', () => {
+    const archived = { ...COURSE_WITHOUT_MEETINGS, archived: true };
+    const html = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({ courses: [COURSE, archived] }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+
+    // The grid holds the live Course only, and the header numbers count that same set.
+    assert.match(html, /<dt>课程<\/dt><dd>1<\/dd>/);
+    assert.match(html, /<dt>学分<\/dt><dd>0.5<\/dd>/);
+    const grid = html.match(/<ul class="workspace-grid workspace-grid--courses">[\s\S]*?<\/section>/)?.[0] ?? '';
+    assert.match(grid, /CSC108/);
+    assert.doesNotMatch(grid, /MAT137/);
+    // The disclosure is closed by default and native, so it needs no Renderer state.
+    assert.match(html, /<details class="course-archive"><summary><span>已归档课程 1 门<\/span>/);
+    assert.doesNotMatch(html, /<details class="course-archive" open/);
+    const archive = html.slice(html.indexOf('<details class="course-archive"'));
+    assert.match(archive, /MAT137/);
+    // Archived is the one Course state a badge still has to carry.
+    assert.match(archive, /<p class="status-label" data-severity="neutral">已归档<\/p>/);
+
+    // Nothing archived means no disclosure at all, not an empty one.
+    const live = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.doesNotMatch(live, /course-archive/);
+
+    // History is already history: it stays in one grid and keeps its own badge.
+    const historyHtml = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({
+            minimum: {
+                hasCurrentTerm: false,
+                hasCurrentTermCourse: false,
+                hasMeetingOrTask: false,
+                isSatisfied: false,
+            },
+            currentTerm: null,
+            courses: [{ ...COURSE, archived: true }],
+        }),
+        plan: null,
+        setupIncomplete: false,
+    }));
+    assert.match(historyHtml, /<h2[^>]*id="course-list-title">历史课程<\/h2>/);
+    assert.doesNotMatch(historyHtml, /course-archive/);
+    assert.match(historyHtml, /已归档/);
+    assert.doesNotMatch(historyHtml, /添加课程|添加课节/);
+});
+
+test('UI-COURSE-01 the header sums credits only when every visible Course carries one', () => {
+    const summed = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({
+            courses: [COURSE, { ...COURSE_WITHOUT_MEETINGS, credits: '1.25' }],
+        }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.match(summed, /<dt>课程<\/dt><dd>2<\/dd>/);
+    assert.match(summed, /<dt>学分<\/dt><dd>1.75<\/dd>/);
+
+    // One Course without a credit withdraws the whole total instead of counting it as zero.
+    const partial = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.match(partial, /<dt>课程<\/dt><dd>2<\/dd>/);
+    assert.doesNotMatch(partial, /<dt>学分<\/dt>/);
+    // The Course that does carry one still prints it on its own card.
+    assert.match(partial, /<p class="course-card-credits">0.5 学分<\/p>/);
+
+    // The archived Course sits outside the grid, so it is outside the count and the sum.
+    const withArchived = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({
+            courses: [COURSE, { ...COURSE, courseId: 'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1', archived: true }],
+        }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.match(withArchived, /<dt>课程<\/dt><dd>1<\/dd>/);
+    assert.match(withArchived, /<dt>学分<\/dt><dd>0.5<\/dd>/);
+});
+
+test('A-COURSE-001 the completion meter reads PLAN per-Course counts and degrades honestly', () => {
+    // PLAN counts one completed of two countable for this Course; skipped never joins the denominator.
+    const plan = planProjection({
+        tasks: [
+            { ...SMALL_TASK, status: 'completed' },
+            LARGE_TASK,
+            { ...TBA_TASK, status: 'skipped' as const },
+        ],
+    });
+    const html = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection(),
+        plan,
+        setupIncomplete: false,
+    }));
+    assert.match(html, /<p class="course-progress-count">已完成 1 \/ 2 项<\/p>/);
+    assert.match(html, /<span style="--done:0.5"><\/span>/);
+    assert.doesNotMatch(html, /TBA 1/);
+
+    // A Course PLAN never summarised, but that has rules, says so in one sentence and offers nothing.
+    const quiet = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({ courses: [{ ...COURSE_WITHOUT_MEETINGS, meetings: COURSE.meetings }] }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+    assert.match(quiet, /<p class="course-progress-empty">还没有任务。<\/p>/);
+    assert.doesNotMatch(quiet, /course-progress-bar/);
+
+    // Without PLAN the page stays on its setup facts and says once why the meters are gone.
+    const unavailable = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        onRetryPlan(): void {},
+        setup: setupProjection(),
+        plan: null,
+        setupIncomplete: false,
+    }));
+    assert.match(unavailable, /Introduction to Computer Programming/);
+    assert.doesNotMatch(unavailable, /course-progress|计划数据当前不可用|无法显示计划事项/);
+    assert.match(
+        unavailable,
+        new RegExp(
+            '<div class="status-banner courses-plan-banner"><p role="status">'
+            + '这次没能读到计划，每门课的任务完成度暂时不显示；课程本身的事实照常显示。</p>'
+            + '<button class="secondary-action" type="button">重试</button></div>',
+        ),
+    );
+    // No Course, no notice: there is nothing for the missing meters to be missing from.
+    const emptyTerm = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({ courses: [] }),
+        plan: null,
+        setupIncomplete: false,
+    }));
+    assert.doesNotMatch(emptyTerm, /courses-plan-banner/);
+});
+
+test('UI-COURSE-01 weekly rules merge by clock and only a shortened range is written out', () => {
+    const wednesday = {
+        ...COURSE.meetings[0],
+        meetingSeriesId: '1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a',
+        weekday: 'WED' as const,
+    };
+    const shortened = {
+        ...COURSE.meetings[0],
+        meetingSeriesId: '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b',
+        type: { code: 'TUT', name: 'Tutorial' } as const,
+        weekday: 'TUE' as const,
+        localStart: '22:00',
+        localEnd: '01:00',
+        endDayOffset: 1 as const,
+        effectiveRange: {
+            kind: 'explicit' as const,
+            startDate: '2026-09-14',
+            endDate: '2026-09-18',
+        },
+    };
+    const html = renderToStaticMarkup(createElement(CoursesPage, {
+        ...HANDLERS,
+        setup: setupProjection({
+            courses: [{
+                ...COURSE,
+                teachingRange: { kind: 'explicit', startDate: TERM.startDate, endDate: '2026-09-18' },
+                meetings: [COURSE.meetings[0]!, wednesday, shortened],
+            }],
+        }),
+        plan: planProjection(),
+        setupIncomplete: false,
+    }));
+
+    // Two rules that share a clock read as one line, in weekday order.
+    assert.match(html, /<dt>Lecture<\/dt><dd><ul class="course-slot-chips"><li>周三 四 13:00-14:00<\/li>/);
+    // A next-day end stays visible, and only the rule that shortened its own range says so.
+    assert.match(
+        html,
+        /<dt>Tutorial<\/dt><dd><ul class="course-slot-chips"><li>周二 22:00-次日 01:00 · 2026-09-14 起<\/li>/,
+    );
+    // The Course itself shortened the Term range, so that one line appears.
+    assert.match(html, /<p class="course-card-range">教学范围 2026-09-07 - 2026-09-18<\/p>/);
 });
 
 test('an ended setup milestone keeps Today and Courses on truthful historical facts', () => {

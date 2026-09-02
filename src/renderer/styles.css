@@ -534,8 +534,10 @@ ul {
     gap: 1rem;
 }
 
+/* The roster is a list of Courses, so the grid is a list and each card is one of its items. */
 .workspace-grid--courses {
     grid-template-columns: repeat(auto-fill, minmax(21rem, 1fr));
+    list-style: none;
 }
 
 .workspace-grid--tasks {
@@ -1406,7 +1408,8 @@ ul {
 }
 
 .course-roster summary::-webkit-details-marker,
-.task-archive > summary::-webkit-details-marker {
+.task-archive > summary::-webkit-details-marker,
+.course-archive > summary::-webkit-details-marker {
     display: none;
 }
 
@@ -1467,7 +1470,8 @@ ul {
 }
 
 .course-roster details[open] .course-chevron,
-.task-archive[open] .course-chevron {
+.task-archive[open] .course-chevron,
+.course-archive[open] .course-chevron {
     transform: rotate(180deg);
 }
 
@@ -1812,13 +1816,15 @@ ul {
 }
 
 /* Completed and skipped fold under the pending groups; the browser keeps the open state. */
-.task-archive {
+.task-archive,
+.course-archive {
     margin-top: 0.3rem;
     padding-top: 0.45rem;
     border-top: 1px solid var(--line);
 }
 
-.task-archive > summary {
+.task-archive > summary,
+.course-archive > summary {
     display: flex;
     gap: 0.5rem;
     align-items: center;
@@ -1835,7 +1841,8 @@ ul {
 }
 
 /* A full-width row answers a press with a background step, not a sub-percent scale. */
-.task-archive > summary:active {
+.task-archive > summary:active,
+.course-archive > summary:active {
     background: rgba(255, 255, 255, 0.6);
 }
 
@@ -2133,69 +2140,191 @@ ul {
 
 .course-card {
     position: relative;
-    align-content: start;
-    padding: clamp(0.85rem, 1.3vw, 1.1rem);
-    padding-left: clamp(1.15rem, 1.7vw, 1.45rem);
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+    padding: clamp(0.9rem, 1.4vw, 1.15rem);
     overflow: hidden;
 }
 
+/* Course identity is a hairline, not a band. The rule is inset past the container radius so it
+   keeps both of its ends instead of being clipped into a stub by the card's own rounded corner. */
 .course-card::before {
     position: absolute;
     top: 0;
-    bottom: 0;
-    left: 0;
-    width: 0.35rem;
-    background: #b8b6ad;
+    right: var(--radius-container);
+    left: var(--radius-container);
+    height: 1px;
+    background: var(--course-accent, #b8b6ad);
     content: "";
-}
-
-.course-card--red::before {
-    background: #bd5a51;
-}
-
-.course-card--orange::before {
-    background: #d1813d;
-}
-
-.course-card--yellow::before {
-    background: #d8b62f;
-}
-
-.course-card--green::before {
-    background: #4f8563;
-}
-
-.course-card--blue::before {
-    background: #4b73a0;
-}
-
-.course-card--purple::before {
-    background: #755f91;
 }
 
 .course-card-header {
     display: grid;
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) max-content;
     gap: 0.2rem 0.75rem;
+    align-items: baseline;
 }
 
-.course-card-header .status-label {
-    grid-column: 2;
-    grid-row: 1 / span 2;
-    align-self: start;
+.course-card-heading {
+    display: grid;
+    grid-column: 1;
+    gap: 0.1rem;
+    font-size: var(--text-sm);
+    font-weight: 400;
 }
 
-.course-card-header h2 {
-    font-size: 1.15rem;
-    letter-spacing: -0.04em;
+.course-card-identity {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
 }
 
-.course-card-header p:not(.status-label) {
+.course-card-code {
+    font-size: var(--text-lg);
+    font-weight: 600;
+    letter-spacing: -0.035em;
+    line-height: 1.15;
+}
+
+.course-card-name {
     color: var(--ink-soft);
-    font-size: 0.78rem;
+    font-size: var(--text-sm);
+    overflow-wrap: anywhere;
 }
 
-.course-facts,
+.course-card-credits {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.course-card-meta,
+.course-card-range {
+    grid-column: 1 / -1;
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+}
+
+.course-card-range {
+    font-variant-numeric: tabular-nums;
+}
+
+/* Archived is the one Course state worth a badge: it is false on every card of a live Term. */
+.course-card-header .status-label {
+    grid-column: 1;
+    justify-self: start;
+    margin-top: 0.2rem;
+}
+
+/* Two hairlines per card, not one under every fact: identity, then schedule, then progress. */
+.course-slots-block {
+    display: grid;
+    gap: 0.35rem;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+}
+
+.course-block-label {
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
+/* One label column for the whole card, so every chip lane starts on the same edge; each dt/dd
+   pair only exists to keep the definition list valid, so it contributes no box of its own. */
+.course-slot-groups {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    gap: 0.3rem 0.55rem;
+    align-items: baseline;
+}
+
+.course-slot-groups > div {
+    display: contents;
+}
+
+.course-slot-groups dt {
+    font-size: var(--text-xs);
+    font-weight: 600;
+}
+
+.course-slot-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    list-style: none;
+}
+
+.course-slot-chips > li {
+    padding: 0.1rem 0.45rem;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-pill);
+    background: var(--card-inner);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* Progress sits on the card floor, so the bars of one grid row line up and can be compared. */
+.course-progress {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    gap: 0.35rem 0.75rem;
+    align-items: baseline;
+    margin-top: auto;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+}
+
+.course-progress-count {
+    grid-column: 2;
+    grid-row: 1;
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+/* The mark itself is the Today term bar with one segment, so both surfaces read the same way.
+   It is the last row of every card, so the bars of one grid row share a baseline and compare. */
+.course-progress-bar,
+.course-progress-note {
+    grid-column: 1 / -1;
+}
+
+.course-progress-note {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.course-progress-empty {
+    margin-top: auto;
+    padding-top: 0.6rem;
+    border-top: 1px solid var(--line);
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+}
+
+.courses-plan-banner {
+    font-size: var(--text-sm);
+}
+
+/* The Task archive summary spans one card column; this one spans the page, so the label and
+   its chevron stay together on the left instead of sitting 1400px apart. */
+.course-archive > summary {
+    gap: 0.6rem;
+    justify-content: flex-start;
+}
+
+.course-archive > .workspace-grid {
+    margin-top: 0.75rem;
+}
+
 .setup-fact-list,
 .settings-fact-list {
     display: grid;
@@ -2204,7 +2333,6 @@ ul {
     margin-top: 1rem;
 }
 
-.course-facts > div,
 .setup-fact-list > div,
 .settings-fact-list > div {
     min-width: 0;
@@ -2213,69 +2341,12 @@ ul {
     background: var(--card-inner);
 }
 
-.course-facts dd,
 .setup-fact-list dd,
 .settings-fact-list dd {
     margin-top: 0.2rem;
     overflow-wrap: anywhere;
     font-size: 0.8rem;
     font-weight: 600;
-}
-
-.course-card .course-facts {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0 0.9rem;
-    margin-top: 0.7rem;
-}
-
-/* Two paired label/value rows per line keep a narrow card readable; the teaching
-   range is the one fact whose value cannot survive a half-width column. */
-.course-card .course-facts > div {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: 0.6rem;
-    align-items: baseline;
-    padding: 0.3rem 0;
-    border-bottom: 1px solid var(--line);
-    border-radius: 0;
-    background: transparent;
-}
-
-.course-card .course-facts > div:first-child {
-    grid-column: 1 / -1;
-}
-
-.course-card .course-facts dd {
-    margin-top: 0;
-    font-size: 0.76rem;
-    text-align: right;
-}
-
-.course-card .meeting-rule-list > li {
-    grid-template-columns: minmax(0, 1fr) max-content;
-    gap: 0.2rem 0.6rem;
-    align-items: baseline;
-    padding: 0.5rem 0.65rem;
-}
-
-.course-card .meeting-rule-list > li > :nth-child(2),
-.course-card .meeting-rule-list > li > :nth-child(4) {
-    justify-self: end;
-    text-align: right;
-}
-
-.course-meetings {
-    margin-top: 0.75rem;
-    padding-top: 0.6rem;
-    border-top: 1px solid var(--line);
-}
-
-.course-meetings h3 {
-    font-size: 0.8rem;
-}
-
-.meeting-rule-list > li {
-    grid-template-columns: minmax(9rem, 1fr) repeat(3, auto);
 }
 
 .calendar-card {
@@ -4070,14 +4141,12 @@ h2:focus-visible {
         display: none;
     }
 
-    .course-facts,
     .setup-fact-list,
     .settings-fact-list {
         grid-template-columns: 1fr;
     }
 
-    .fact-list > li,
-    .meeting-rule-list > li {
+    .fact-list > li {
         grid-template-columns: max-content minmax(0, 1fr);
     }
 
@@ -4175,6 +4244,7 @@ h2:focus-visible {
 @media (hover: hover) and (pointer: fine) {
     .course-roster summary:hover,
     .task-archive > summary:hover,
+    .course-archive > summary:hover,
     .task-rows > li:hover {
         background: rgba(255, 255, 255, 0.45);
     }
@@ -4204,6 +4274,7 @@ h2:focus-visible {
     .course-chevron,
     .course-roster summary,
     .task-archive > summary,
+    .course-archive > summary,
     .task-filter-chip,
     .task-direct-actions button,
     .task-rows > li,

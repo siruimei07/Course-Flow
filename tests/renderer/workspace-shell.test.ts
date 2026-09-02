@@ -253,16 +253,33 @@ test('course cards stay compact instead of filling half the Courses page', () =>
         /grid-template-columns:\s*repeat\(auto-fill, minmax\(21rem, 1fr\)\);/,
     );
     assert.match(rule('.course-card'), /padding:\s*clamp\(/);
-    assert.match(rule('.course-card-header .status-label'), /align-self:\s*start;/);
-    assert.match(
-        rule('.course-card .course-facts'),
-        /grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\);/,
-    );
-    assert.match(rule('.course-card .course-facts > div'), /background:\s*transparent;/);
-    assert.match(
-        rule('.course-card .meeting-rule-list > li'),
-        /grid-template-columns:\s*minmax\(0, 1fr\) max-content;/,
-    );
+    assert.match(rule('.workspace-grid--courses'), /list-style:\s*none;/);
+    // Slice 15: the five-row hairline spec sheet and its 5.6px colour band are gone for good.
+    assert.doesNotMatch(styles, /\.course-card \.course-facts|\.course-card--|\.meeting-rule-list/);
+    // Course identity is one dot plus one hairline, inset so the card radius cannot clip its ends.
+    assert.match(rule('.course-card::before'), /height:\s*1px;/);
+    assert.match(rule('.course-card::before'), /right:\s*var\(--radius-container\);/);
+    assert.match(rule('.course-card::before'), /background:\s*var\(--course-accent, #b8b6ad\);/);
+    // The archived badge is the one Course badge left, on its own row under the identity.
+    assert.match(rule('.course-card-header .status-label'), /justify-self:\s*start;/);
+    // The completion bar is the last row of every card, so one grid row shares a baseline.
+    assert.match(rule('.course-progress'), /margin-top:\s*auto;/);
+    assert.match(styles, /\.course-progress-bar,\r?\n\.course-progress-note \{\s*grid-column: 1 \/ -1;/);
+    // One label column per card, so every chip lane starts on the same edge.
+    assert.match(rule('.course-slot-groups'), /grid-template-columns:\s*minmax\(0, max-content\) minmax\(0, 1fr\);/);
+    assert.match(rule('.course-slot-groups > div'), /display:\s*contents;/);
+    // Every line of the card takes a declared type step; no card-local sizes survive.
+    for (const selector of [
+        '.course-card-code', '.course-card-name', '.course-card-credits',
+        '.course-block-label', '.course-slot-groups dt', '.course-slot-chips > li',
+        '.course-progress-count', '.course-progress-empty',
+    ]) {
+        assert.match(rule(selector), /font-size:\s*var\(--text-(xs|sm|base|md|lg)\);/, selector);
+    }
+    // The page-wide disclosure reuses the Task archive rather than growing a second vocabulary.
+    assert.match(styles, /\.task-archive,\r?\n\.course-archive \{[^}]*border-top: 1px solid var\(--line\);/);
+    assert.match(styles, /\.task-archive > summary,\r?\n\.course-archive > summary \{[^}]*cursor: pointer;/);
+    assert.doesNotMatch(rule('.course-archive > summary'), /transform/);
 });
 
 test('the stylesheet keeps fixed type steps, three radius tiers and themed browser surfaces', () => {
