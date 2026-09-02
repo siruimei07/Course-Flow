@@ -1,6 +1,7 @@
 # Local tool state
 /.superpowers/
 /.worktrees/
+/_scratch/
 
 # Local secrets
 .env
