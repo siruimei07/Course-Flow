@@ -57,7 +57,6 @@
     background: transparent;
     font: inherit;
     text-align: center;
-    transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
 }
 
 .calendar-day-column:last-child {
@@ -85,6 +84,26 @@
 
 .calendar-day-column[data-selected="true"] .calendar-day-weekday {
     font-weight: 800;
+}
+
+/* The largest pressable on the page answers a press the way the disclosure rows do. The hover wash
+   in media.css carries a :not(:active) guard so the pointer press reaches this rule; the second
+   selector outranks the selected head's own fill, which hover never reaches. The head selects a
+   day, so it takes a background step and no scale: arrow keys drive it too. */
+.calendar-day-column:active,
+.calendar-day-column[data-selected="true"]:active {
+    background: rgba(45, 44, 38, 0.07);
+}
+
+/* The scroll region clips at the grid's own top edge, so the head takes the ring inside its box
+   the way a Task row does, and the selected head keeps its underline under that ring. */
+.calendar-day-column:focus-visible {
+    outline-offset: -3px;
+    box-shadow: none;
+}
+
+.calendar-day-column[data-selected="true"]:focus-visible {
+    box-shadow: inset 0 -3px 0 var(--dark);
 }
 
 .calendar-time-column[data-selected="true"] {
@@ -166,6 +185,7 @@
     border-top: 1px solid var(--line);
     color: var(--ink-soft);
     font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
     text-align: right;
 }
 
@@ -231,6 +251,7 @@
 }
 
 .calendar-timed-item-list > li > span {
+    font-variant-numeric: tabular-nums;
     line-height: 1.15;
 }
 
@@ -266,11 +287,17 @@
     font-size: 0.76rem;
 }
 
-/* The detail is the panel of the day tablist, so it takes the same focus ring as a control. */
+/* The heading is one baseline: the weekday, its date, and on today its 今天 capsule. It is nested
+   inside .card-heading rather than a direct child of the card, so it missed the shared card-title
+   rule and fell through to the browser's 1.5em default, which made its date the largest number on
+   the page. Card titles keep the size every other page's cards use. */
 .calendar-day-card > .card-heading h2 {
     display: flex;
     gap: 0.45rem;
     align-items: baseline;
+    font-size: 1.04rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .calendar-day-card > .card-heading time {
@@ -296,4 +323,9 @@
 
 .calendar-conflicts h3 {
     font-size: 0.85rem;
+}
+
+/* An overlap is read as a range, so its two clock times keep one digit width. */
+.conflict-list time {
+    font-variant-numeric: tabular-nums;
 }

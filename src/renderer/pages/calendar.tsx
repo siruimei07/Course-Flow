@@ -345,7 +345,7 @@ export function CalendarContent(props: Readonly<{
                     <p
                         className="calendar-empty-status"
                         role="status"
-                    >此七日网格没有已排期事项。</p>
+                    >这七天没有已排期事项。</p>
                 ) : null}
             </section>
 
@@ -363,12 +363,12 @@ export function CalendarContent(props: Readonly<{
                     className="content-card calendar-tba-card"
                 >
                     <h2 id="calendar-tba-title">TBA</h2>
-                    <p className="section-intro">尚无日期或时间的任务不会落入虚构日历位置。</p>
+                    <p className="section-intro">还没有日期或时间的任务留在这里，不会被放进日历。</p>
                     {tba.tasks.length === 0 ? (
                         <EmptyState
                             action={buttonAction('查看任务', () => props.onNavigate('tasks'))}
                             id="calendar-tba-empty"
-                            reason="统一计划投影中的任务都已有日期或时间。"
+                            reason="现在每项任务都有日期或时间。"
                             title="没有 TBA 事项"
                         />
                     ) : (
@@ -491,8 +491,8 @@ export function CalendarDayDetail(props: Readonly<{
                         : buttonAction('查看课程', () => props.onNavigate('courses'))}
                     id="calendar-day-empty"
                     reason={tba.tasks.length > 0
-                        ? '当前范围没有已排期事项；尚未确定日期的任务仍保留在 TBA 分组。'
-                        : '统一计划投影确认当前范围没有课节、任务或假期。'}
+                        ? '当前范围没有课节、任务或假期；还没有确定日期的任务留在 TBA 分组。'
+                        : '当前范围没有课节、任务或假期。'}
                     title="当前范围没有已排期事项"
                 />
             ) : (

@@ -30,7 +30,10 @@
     letter-spacing: -0.02em;
 }
 
-.task-filter-summary {
+/* Every count in the grid restates a filtered number; the digits must not jitter. */
+.task-filter-summary,
+.by-course-card > .page-context,
+.tba-tasks-card .page-context {
     font-variant-numeric: tabular-nums;
 }
 
@@ -65,7 +68,7 @@
     margin-left: 0.4rem;
 }
 
-.task-filter-chip:active:not([aria-checked="true"]) {
+.task-filter-chip:active {
     transform: scale(0.98);
 }
 
@@ -88,7 +91,7 @@
     align-items: baseline;
     padding: 0.45rem 0.2rem 0.15rem;
     font-size: var(--text-sm);
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: -0.01em;
 }
 
@@ -234,10 +237,12 @@
     transition: background-color 150ms var(--ease-out);
 }
 
-/* A full-width row answers a press with a background step, not a sub-percent scale. */
+/* A full-width row answers a press with a background step, not a sub-percent scale. The hover wash
+   in media.css carries a :not(:active) guard so this rule wins the pointer press; the hover
+   selectors stay inside the fine-pointer gate, which workspace-shell.test.ts asserts. */
 .task-archive > summary:active,
 .course-archive > summary:active {
-    background: rgba(255, 255, 255, 0.6);
+    background: rgba(45, 44, 38, 0.07);
 }
 
 /* The checked Course chip echoes on the shares: the same dark ring, plus hidden words. */

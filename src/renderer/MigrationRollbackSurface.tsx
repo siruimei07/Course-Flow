@@ -395,6 +395,7 @@ export function MigrationProtectionDialog(
     return (
         <dialog
             aria-labelledby="migration-dialog-title"
+            aria-modal="true"
             className="migration-dialog"
             onCancel={cancel}
             ref={dialogRef}

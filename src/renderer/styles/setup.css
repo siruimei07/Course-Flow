@@ -312,9 +312,11 @@
     transition: border-color 150ms var(--ease-out), background-color 150ms var(--ease-out);
 }
 
+/* Read-only mode disables these while they still show real saved values, so the text stays
+   body-legible and strengthens with the user contrast preference. */
 .field input:disabled,
 .field select:disabled {
-    color: #6b6a65;
+    color: var(--ink-soft);
     background: rgba(224, 224, 218, 0.8);
 }
 

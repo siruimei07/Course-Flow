@@ -106,7 +106,14 @@
     font-size: 0.82rem;
     font-weight: 600;
     white-space: nowrap;
-    transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+    transition: color 140ms var(--ease-out), background-color 140ms var(--ease-out),
+        box-shadow 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+
+/* The topbar was the one pressable in the shell that never answered the press. */
+.navigation-button:active,
+.settings-button:active {
+    transform: scale(0.97);
 }
 
 .navigation-button:hover,

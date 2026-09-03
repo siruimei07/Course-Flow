@@ -258,7 +258,14 @@ ul {
     font-size: 0.82rem;
     font-weight: 600;
     white-space: nowrap;
-    transition: color 140ms ease, background-color 140ms ease, box-shadow 140ms ease;
+    transition: color 140ms var(--ease-out), background-color 140ms var(--ease-out),
+        box-shadow 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+
+/* The topbar was the one pressable in the shell that never answered the press. */
+.navigation-button:active,
+.settings-button:active {
+    transform: scale(0.97);
 }
 
 .navigation-button:hover,
@@ -1304,7 +1311,7 @@ ul {
     border-radius: var(--radius-pill);
     color: #ffffff;
     background: var(--dark);
-    font-size: 0.68rem;
+    font-size: var(--text-xs);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
@@ -1403,7 +1410,7 @@ ul {
     border-radius: var(--radius-piece);
     cursor: pointer;
     list-style: none;
-    transition: background-color 150ms var(--ease-out), transform 120ms var(--ease-out);
+    transition: background-color 150ms var(--ease-out);
 }
 
 .course-roster summary::-webkit-details-marker,
@@ -1412,13 +1419,11 @@ ul {
     display: none;
 }
 
-.course-roster summary:focus-visible {
-    outline: 2px solid var(--dark);
-    outline-offset: 1px;
-}
-
+/* A full-width row answers a press with a background step, not a sub-percent scale. The hover wash
+   in media.css carries a :not(:active) guard so this rule wins the pointer press it would otherwise
+   tie with and lose on import order. */
 .course-roster summary:active {
-    transform: scale(0.995);
+    background: rgba(45, 44, 38, 0.07);
 }
 
 .course-dot {
@@ -1635,7 +1640,10 @@ ul {
     letter-spacing: -0.02em;
 }
 
-.task-filter-summary {
+/* Every count in the grid restates a filtered number; the digits must not jitter. */
+.task-filter-summary,
+.by-course-card > .page-context,
+.tba-tasks-card .page-context {
     font-variant-numeric: tabular-nums;
 }
 
@@ -1670,7 +1678,7 @@ ul {
     margin-left: 0.4rem;
 }
 
-.task-filter-chip:active:not([aria-checked="true"]) {
+.task-filter-chip:active {
     transform: scale(0.98);
 }
 
@@ -1693,7 +1701,7 @@ ul {
     align-items: baseline;
     padding: 0.45rem 0.2rem 0.15rem;
     font-size: var(--text-sm);
-    font-weight: 700;
+    font-weight: 800;
     letter-spacing: -0.01em;
 }
 
@@ -1839,10 +1847,12 @@ ul {
     transition: background-color 150ms var(--ease-out);
 }
 
-/* A full-width row answers a press with a background step, not a sub-percent scale. */
+/* A full-width row answers a press with a background step, not a sub-percent scale. The hover wash
+   in media.css carries a :not(:active) guard so this rule wins the pointer press; the hover
+   selectors stay inside the fine-pointer gate, which workspace-shell.test.ts asserts. */
 .task-archive > summary:active,
 .course-archive > summary:active {
-    background: rgba(255, 255, 255, 0.6);
+    background: rgba(45, 44, 38, 0.07);
 }
 
 /* The checked Course chip echoes on the shares: the same dark ring, plus hidden words. */
@@ -1924,11 +1934,13 @@ ul {
     overflow-wrap: anywhere;
 }
 
+/* This line carries the dates and counts of a fact list, so its digits keep one width. */
 .fact-list > li span:not(.status-label),
 .fact-list > li time,
 .fact-list > li small {
     color: var(--ink-soft);
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
 }
 
 .task-direct-actions {
@@ -1958,6 +1970,12 @@ ul {
 
 /* The most-pressed control on two pages answers the press; the accent stays for selection. */
 .task-direct-actions button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+/* Undo shares the pill above but not its rule, so the one-shot control was the last
+   pressable in the shared layer with no press state of its own. */
+.task-undo-toast button:active:not(:disabled) {
     transform: scale(0.98);
 }
 
@@ -2413,7 +2431,6 @@ ul {
     background: transparent;
     font: inherit;
     text-align: center;
-    transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out);
 }
 
 .calendar-day-column:last-child {
@@ -2441,6 +2458,26 @@ ul {
 
 .calendar-day-column[data-selected="true"] .calendar-day-weekday {
     font-weight: 800;
+}
+
+/* The largest pressable on the page answers a press the way the disclosure rows do. The hover wash
+   in media.css carries a :not(:active) guard so the pointer press reaches this rule; the second
+   selector outranks the selected head's own fill, which hover never reaches. The head selects a
+   day, so it takes a background step and no scale: arrow keys drive it too. */
+.calendar-day-column:active,
+.calendar-day-column[data-selected="true"]:active {
+    background: rgba(45, 44, 38, 0.07);
+}
+
+/* The scroll region clips at the grid's own top edge, so the head takes the ring inside its box
+   the way a Task row does, and the selected head keeps its underline under that ring. */
+.calendar-day-column:focus-visible {
+    outline-offset: -3px;
+    box-shadow: none;
+}
+
+.calendar-day-column[data-selected="true"]:focus-visible {
+    box-shadow: inset 0 -3px 0 var(--dark);
 }
 
 .calendar-time-column[data-selected="true"] {
@@ -2522,6 +2559,7 @@ ul {
     border-top: 1px solid var(--line);
     color: var(--ink-soft);
     font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
     text-align: right;
 }
 
@@ -2587,6 +2625,7 @@ ul {
 }
 
 .calendar-timed-item-list > li > span {
+    font-variant-numeric: tabular-nums;
     line-height: 1.15;
 }
 
@@ -2622,11 +2661,17 @@ ul {
     font-size: 0.76rem;
 }
 
-/* The detail is the panel of the day tablist, so it takes the same focus ring as a control. */
+/* The heading is one baseline: the weekday, its date, and on today its 今天 capsule. It is nested
+   inside .card-heading rather than a direct child of the card, so it missed the shared card-title
+   rule and fell through to the browser's 1.5em default, which made its date the largest number on
+   the page. Card titles keep the size every other page's cards use. */
 .calendar-day-card > .card-heading h2 {
     display: flex;
     gap: 0.45rem;
     align-items: baseline;
+    font-size: 1.04rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .calendar-day-card > .card-heading time {
@@ -2652,6 +2697,11 @@ ul {
 
 .calendar-conflicts h3 {
     font-size: 0.85rem;
+}
+
+/* An overlap is read as a range, so its two clock times keep one digit width. */
+.conflict-list time {
+    font-variant-numeric: tabular-nums;
 }
 
 /* One statement, so the card is bounded to reading width: the heading and its state chip
@@ -3011,9 +3061,11 @@ ul {
     transition: border-color 150ms var(--ease-out), background-color 150ms var(--ease-out);
 }
 
+/* Read-only mode disables these while they still show real saved values, so the text stays
+   body-legible and strengthens with the user contrast preference. */
 .field input:disabled,
 .field select:disabled {
-    color: #6b6a65;
+    color: var(--ink-soft);
     background: rgba(224, 224, 218, 0.8);
 }
 
@@ -3377,7 +3429,9 @@ ul {
     background: #a2483f;
     font-size: var(--text-xs);
     font-weight: 700;
-    transition: background-color 150ms var(--ease-out), transform 150ms var(--ease-out);
+    /* Arming this button changes colour, border and background at once, so they move together. */
+    transition: color 150ms var(--ease-out), border-color 150ms var(--ease-out),
+        background-color 150ms var(--ease-out), transform 150ms var(--ease-out);
 }
 
 .destructive-action:active:not(:disabled) {
@@ -3576,7 +3630,7 @@ h2:focus-visible {
     }
 }
 
-@keyframes courseflow-backdrop-fade {
+@keyframes courseflow-fade {
     from {
         opacity: 0;
     }
@@ -3603,7 +3657,7 @@ h2:focus-visible {
 .setup-dialog[open]::backdrop,
 .settings-dialog[open]::backdrop,
 .migration-dialog[open]::backdrop {
-    animation: courseflow-backdrop-fade 200ms ease-out both;
+    animation: courseflow-fade 200ms var(--ease-out) both;
 }
 
 .migration-dialog {
@@ -3646,9 +3700,8 @@ h2:focus-visible {
 
 .migration-dialog-header h1 {
     margin-top: .12rem;
-    font-size: 1.45rem;
-    font-weight: 550;
-    letter-spacing: -.04em;
+    font-size: var(--text-lg);
+    letter-spacing: -0.035em;
 }
 
 .migration-dialog-body {
@@ -3688,14 +3741,17 @@ h2:focus-visible {
     justify-content: space-between;
 }
 
+/* A card heading is one step under the dialog title, on the same step the setup and settings
+   panels already use for the same role. */
 .migration-card-heading h2,
 .migration-confirmation-card h2,
+.migration-empty-card > h2,
 .migration-preview-card > h2,
 .migration-target-card h2 {
     margin-top: .15rem;
-    font-size: 1.5rem;
-    font-weight: 550;
-    letter-spacing: -.04em;
+    font-size: var(--text-md);
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .migration-verified-status {
@@ -3704,7 +3760,7 @@ h2:focus-visible {
     border-radius: var(--radius-pill);
     color: #245f3d;
     background: rgba(220, 242, 224, .78);
-    font-size: .78rem;
+    font-size: var(--text-xs);
     font-weight: 750;
 }
 
@@ -3723,14 +3779,14 @@ h2:focus-visible {
 
 .migration-facts dt {
     color: var(--ink-soft);
-    font-size: .75rem;
+    font-size: var(--text-xs);
     font-weight: 700;
 }
 
 .migration-facts dd {
     margin-top: .28rem;
     overflow-wrap: anywhere;
-    font-size: .86rem;
+    font-size: var(--text-sm);
     font-variant-numeric: tabular-nums;
     line-height: 1.45;
 }
@@ -3841,9 +3897,11 @@ h2:focus-visible {
         grid-template-columns: 1fr;
     }
 
+    /* column, never column-reverse: the safe action stays first in both tab order and paint
+       order, the way .form-footer and .setup-modal-footer collapse at this width. */
     .migration-actions {
         align-items: stretch;
-        flex-direction: column-reverse;
+        flex-direction: column;
     }
 }
 
@@ -3867,12 +3925,21 @@ h2:focus-visible {
     .migration-empty-card,
     .migration-confirmation-card,
     .migration-preview-card,
-    .migration-target-card {
+    .migration-target-card,
+    .migration-warning,
+    .migration-verified-status {
         border-color: rgba(0, 0, 0, .55);
     }
 }
 
 @media (forced-colors: active) {
+    /* Both group their content by background alone, and the phase status is the live region
+       announcing rollback state, so forced colours must give them an explicit edge. */
+    .migration-facts > div,
+    .migration-phase-status {
+        border: 1px solid CanvasText;
+    }
+
     .migration-dialog-surface,
     .migration-maintenance-card,
     .migration-safety-card,
@@ -4223,9 +4290,13 @@ h2:focus-visible {
         border-color: rgba(74, 66, 41, 0.4);
     }
 
-    .course-roster summary:hover,
-    .task-archive > summary:hover,
-    .course-archive > summary:hover,
+    /* The :not(:active) guard is load-bearing. These rows answer a press with a background step
+       declared in their own surface file, and this file is imported last at the same specificity,
+       so without the guard the hover wash would outrank the press and a pointer press, which
+       always implies hover, would paint nothing. */
+    .course-roster summary:hover:not(:active),
+    .task-archive > summary:hover:not(:active),
+    .course-archive > summary:hover:not(:active),
     .task-rows > li:hover {
         background: rgba(255, 255, 255, 0.45);
     }
@@ -4235,7 +4306,7 @@ h2:focus-visible {
         color: var(--ink);
     }
 
-    .calendar-day-column:hover:not([data-selected="true"]) {
+    .calendar-day-column:hover:not([data-selected="true"]):not(:active) {
         color: var(--ink);
         background: rgba(255, 255, 255, 0.55);
     }
@@ -4251,29 +4322,32 @@ h2:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .now-ring-value,
-    .course-chevron,
-    .course-roster summary,
-    .task-archive > summary,
-    .course-archive > summary,
-    .task-filter-chip,
-    .task-direct-actions button,
-    .task-rows > li,
-    .calendar-day-column,
-    .segmented-action,
-    .calendar-conflict-chip,
-    .settings-modal-actions button,
-    .setup-modal-actions button,
-    .settings-category-button,
-    .destructive-action,
-    .progress-track span {
-        transition: none;
+    /* Reduced motion removes movement, not meaning. Narrowing the property list instead of
+       crushing every duration keeps the opacity and colour transitions each element already
+       declared, resolves transform, stroke and geometry instantly, and still leaves an element
+       that declared no transition with none, because its own duration is already 0s. */
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-property: opacity, color, background-color, border-color !important;
+        animation-iteration-count: 1 !important;
     }
 
-    .course-roster summary:active,
+    /* A press or a hover may still change colour; what it must not do is move or resize.
+       Every selector repeats the guard of the rule it turns off, or it would not outrank it. */
+    .primary-action:hover:not(:disabled),
+    .secondary-action:hover:not(:disabled),
+    .primary-action:active:not(:disabled),
+    .secondary-action:active:not(:disabled),
+    .window-control-button:hover,
+    .window-control-button:active,
+    .navigation-button:active,
+    .settings-button:active,
     .task-filter-chip:active,
-    .task-direct-actions button:active,
-    .segmented-action:active,
+    .task-direct-actions button:active:not(:disabled),
+    .task-undo-toast button:active:not(:disabled),
+    .segmented-action:active:not(:disabled),
     .calendar-conflict-chip:active,
     .settings-modal-actions button:active:not(:disabled),
     .setup-modal-actions button:active:not(:disabled),
@@ -4282,17 +4356,44 @@ h2:focus-visible {
         transform: none;
     }
 
-    *,
-    *::before,
-    *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 0.001ms !important;
-        animation-duration: 0.001ms !important;
-        animation-iteration-count: 1 !important;
+    /* Eleven of the selectors above answer a press with a scale and nothing else, so cancelling
+       the scale would leave them answering nothing. The two that also drop a shadow keep that as
+       their acknowledgement and are left out. An inset wash darkens whatever ground the control
+       sits on, light chip or dark button alike, follows its corner radius, and paints under the
+       label rather than over it, so the press stays legible without inventing a colour. */
+    .navigation-button:active,
+    .settings-button:active,
+    .task-filter-chip:active,
+    .task-direct-actions button:active:not(:disabled),
+    .task-undo-toast button:active:not(:disabled),
+    .segmented-action:active:not(:disabled),
+    .calendar-conflict-chip:active,
+    .settings-modal-actions button:active:not(:disabled),
+    .setup-modal-actions button:active:not(:disabled),
+    .settings-category-button:active,
+    .destructive-action:active:not(:disabled) {
+        box-shadow: inset 0 0 0 100vmax rgba(0, 0, 0, 0.12);
+    }
+
+    /* The three keyframes that travel are swapped for the opacity-only one the dialog backdrops
+       already run, so an arriving surface still explains itself without moving. */
+    .workspace-page,
+    .startup-surface .status-card,
+    .task-action-feedback,
+    .setup-dialog[open] .setup-modal,
+    .settings-dialog[open] .settings-modal,
+    .migration-dialog[open] .migration-dialog-surface {
+        animation-name: courseflow-fade;
     }
 }
 
 @media (prefers-reduced-transparency: reduce) {
+    /* The inset surface token is translucent as well, so every piece painted on it resolves to
+       the flat value it composites to over the card that is now opaque. */
+    :root {
+        --card-inner: #fcfaf0;
+    }
+
     .workspace-frame,
     .content-card,
     .status-banner,
@@ -4331,6 +4432,42 @@ h2:focus-visible {
         backdrop-filter: none;
     }
 
+    .calendar-scroll-region {
+        background: #fbfaf3;
+    }
+
+    .empty-state {
+        background: #f9f9f5;
+    }
+
+    /* The compact variant is a bare block on both grounds, so it keeps no box at all. */
+    .empty-state--compact {
+        background: transparent;
+    }
+
+    .next-step-card .empty-state,
+    .dark-card .empty-state {
+        background: #3c3c3c;
+    }
+
+    /* The pill controls and the week-grid blocks stay raised against the opaque cards. */
+    .segmented-control,
+    .task-filter-chip,
+    .task-direct-actions button,
+    .secondary-action,
+    .calendar-all-day-grid > li,
+    .calendar-timed-item-list > li {
+        background: #ffffff;
+    }
+
+    .calendar-all-day-grid > .calendar-holiday-item {
+        background: #fce995;
+    }
+
+    .calendar-conflicts {
+        background: #fcf1e5;
+    }
+
     .setup-dialog::backdrop,
     .settings-dialog::backdrop {
         background: #4a4a45;
@@ -4358,6 +4495,16 @@ h2:focus-visible {
     .settings-modal,
     .settings-panel,
     .settings-category-nav,
+    .fact-list > li,
+    .empty-state,
+    .today-timeline-lane > li:not(.today-now-line):not([data-current="true"]),
+    .calendar-scroll-region,
+    .calendar-all-day-grid > li,
+    .calendar-timed-item-list > li,
+    .calendar-conflicts,
+    .activity-form,
+    .form-section,
+    .location-choice,
     .field input,
     .field select,
     .window-control-button {
@@ -4366,8 +4513,17 @@ h2:focus-visible {
 
     .status-label,
     .task-filter-chip,
+    .task-direct-actions button,
+    .secondary-action,
+    .segmented-action,
     .segmented-control {
         border-color: #2d291a;
+    }
+
+    /* 回到本周 is disabled in the view this page opens on, so raised contrast still has to read
+       it; the label stays clearly quieter than the two live segments. */
+    .segmented-action:disabled {
+        color: #4a4738;
     }
 }
 
@@ -4399,6 +4555,8 @@ h2:focus-visible {
     .navigation-button[aria-current="page"],
     .settings-category-button[aria-current="true"],
     .task-filter-chip[aria-checked="true"],
+    .week-load > li[data-current="true"] .week-load-bar,
+    .week-load > li[data-current="true"] .week-load-day,
     .calendar-day-column[data-selected="true"],
     .primary-action {
         color: HighlightText;
@@ -4408,6 +4566,35 @@ h2:focus-visible {
 
     .segmented-control {
         border: 1px solid CanvasText;
+    }
+
+    /* Both week grids draw their day and hour rules as --line gradients, and forced colors
+       rewrites background-color but not background-image, so the structure would flatten. */
+    .today-timeline-lane,
+    .calendar-all-day-grid,
+    .calendar-time-column {
+        --line: CanvasText;
+    }
+
+    /* 今天 is a capsule whose edge is an inset box-shadow, which forced colors drops. */
+    .calendar-current-label,
+    .calendar-day-today {
+        outline: 1px solid CanvasText;
+    }
+
+    /* An in-progress class is a border colour plus an inset ring and nothing else, so it takes
+       a ring here: Highlight rather than CanvasText, because this file reserves Highlight for
+       what is current or selected and CanvasText for what is merely drawn. */
+    .today-timeline-lane > li[data-current="true"] {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
+
+    /* The setup wizard marks the step you are on with a translucent white fill and nothing else,
+       and this branch rewrites exactly that; without a ring the four steps read alike. */
+    .setup-step-list li[data-status="current"] {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
     }
 
     .calendar-timed-item-list > li[data-conflict="true"] {
@@ -4430,22 +4617,62 @@ h2:focus-visible {
         forced-color-adjust: none;
     }
 
+    .course-chevron,
+    .deadline-mark svg,
     .now-ring-track,
     .now-ring-value {
         stroke: CanvasText;
     }
 
+    /* Outside a class the arc is repainted at higher specificity, so it repeats the colour;
+       an empty ring still draws nothing, because that rule is more specific again. */
+    .now-body[data-ring="day"] .now-ring-value {
+        stroke: CanvasText;
+    }
+
     .week-load-bar,
+    .term-progress-elapsed,
     .term-tasks-bar > span::before,
     .course-dot,
+    .course-card::before,
+    .now-state::before,
+    .now-state[data-live="true"]::before,
     .week-load-tasks > i,
+    .task-rows > li + li::before,
+    .today-timeline-lane > li:not(.today-now-line)::before,
     .calendar-timed-item-list > li::before {
         background: CanvasText;
     }
 
-    .term-tasks-bar > span {
+    /* Every remaining bar is a filled length inside an empty rail: the rail is outlined so it
+       still bounds the value, and a Holiday gap is punched out of the elapsed segment. */
+    .term-tasks-bar > span,
+    .term-progress-track,
+    .term-progress-holiday,
+    .progress-track {
         background: Canvas;
         outline: 1px solid CanvasText;
+    }
+
+    .progress-track span {
+        background: CanvasText;
+    }
+
+    /* Chromium draws the native bar from its own pseudo-elements, so both parts repeat it. */
+    .today-task-progress progress::-webkit-progress-bar {
+        background: Canvas;
+        outline: 1px solid CanvasText;
+    }
+
+    .today-task-progress progress::-webkit-progress-value {
+        background: CanvasText;
+    }
+
+    /* The selected day head is the tablist's only Tab stop, it is filled with Highlight, and
+       calendar.css moves its ring inside that fill so the scroll region cannot clip it. The ring
+       therefore inverts instead of repeating the same keyword over itself. */
+    .calendar-day-column[data-selected="true"]:focus-visible {
+        outline-color: HighlightText;
     }
 
     :focus-visible {

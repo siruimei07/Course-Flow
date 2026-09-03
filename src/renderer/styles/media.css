@@ -1,5 +1,5 @@
 /* Every media query the rest of the product answers: three width steps, hover capability, and the
-   four preference branches. The contrast branch also re-declares two of the :root tokens. */
+   four preference branches. The contrast and reduced-transparency branches re-declare :root tokens. */
 
 @media (max-width: 1080px) {
     .topbar {
@@ -336,9 +336,13 @@
         border-color: rgba(74, 66, 41, 0.4);
     }
 
-    .course-roster summary:hover,
-    .task-archive > summary:hover,
-    .course-archive > summary:hover,
+    /* The :not(:active) guard is load-bearing. These rows answer a press with a background step
+       declared in their own surface file, and this file is imported last at the same specificity,
+       so without the guard the hover wash would outrank the press and a pointer press, which
+       always implies hover, would paint nothing. */
+    .course-roster summary:hover:not(:active),
+    .task-archive > summary:hover:not(:active),
+    .course-archive > summary:hover:not(:active),
     .task-rows > li:hover {
         background: rgba(255, 255, 255, 0.45);
     }
@@ -348,7 +352,7 @@
         color: var(--ink);
     }
 
-    .calendar-day-column:hover:not([data-selected="true"]) {
+    .calendar-day-column:hover:not([data-selected="true"]):not(:active) {
         color: var(--ink);
         background: rgba(255, 255, 255, 0.55);
     }
@@ -364,29 +368,32 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    .now-ring-value,
-    .course-chevron,
-    .course-roster summary,
-    .task-archive > summary,
-    .course-archive > summary,
-    .task-filter-chip,
-    .task-direct-actions button,
-    .task-rows > li,
-    .calendar-day-column,
-    .segmented-action,
-    .calendar-conflict-chip,
-    .settings-modal-actions button,
-    .setup-modal-actions button,
-    .settings-category-button,
-    .destructive-action,
-    .progress-track span {
-        transition: none;
+    /* Reduced motion removes movement, not meaning. Narrowing the property list instead of
+       crushing every duration keeps the opacity and colour transitions each element already
+       declared, resolves transform, stroke and geometry instantly, and still leaves an element
+       that declared no transition with none, because its own duration is already 0s. */
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        transition-property: opacity, color, background-color, border-color !important;
+        animation-iteration-count: 1 !important;
     }
 
-    .course-roster summary:active,
+    /* A press or a hover may still change colour; what it must not do is move or resize.
+       Every selector repeats the guard of the rule it turns off, or it would not outrank it. */
+    .primary-action:hover:not(:disabled),
+    .secondary-action:hover:not(:disabled),
+    .primary-action:active:not(:disabled),
+    .secondary-action:active:not(:disabled),
+    .window-control-button:hover,
+    .window-control-button:active,
+    .navigation-button:active,
+    .settings-button:active,
     .task-filter-chip:active,
-    .task-direct-actions button:active,
-    .segmented-action:active,
+    .task-direct-actions button:active:not(:disabled),
+    .task-undo-toast button:active:not(:disabled),
+    .segmented-action:active:not(:disabled),
     .calendar-conflict-chip:active,
     .settings-modal-actions button:active:not(:disabled),
     .setup-modal-actions button:active:not(:disabled),
@@ -395,17 +402,44 @@
         transform: none;
     }
 
-    *,
-    *::before,
-    *::after {
-        scroll-behavior: auto !important;
-        transition-duration: 0.001ms !important;
-        animation-duration: 0.001ms !important;
-        animation-iteration-count: 1 !important;
+    /* Eleven of the selectors above answer a press with a scale and nothing else, so cancelling
+       the scale would leave them answering nothing. The two that also drop a shadow keep that as
+       their acknowledgement and are left out. An inset wash darkens whatever ground the control
+       sits on, light chip or dark button alike, follows its corner radius, and paints under the
+       label rather than over it, so the press stays legible without inventing a colour. */
+    .navigation-button:active,
+    .settings-button:active,
+    .task-filter-chip:active,
+    .task-direct-actions button:active:not(:disabled),
+    .task-undo-toast button:active:not(:disabled),
+    .segmented-action:active:not(:disabled),
+    .calendar-conflict-chip:active,
+    .settings-modal-actions button:active:not(:disabled),
+    .setup-modal-actions button:active:not(:disabled),
+    .settings-category-button:active,
+    .destructive-action:active:not(:disabled) {
+        box-shadow: inset 0 0 0 100vmax rgba(0, 0, 0, 0.12);
+    }
+
+    /* The three keyframes that travel are swapped for the opacity-only one the dialog backdrops
+       already run, so an arriving surface still explains itself without moving. */
+    .workspace-page,
+    .startup-surface .status-card,
+    .task-action-feedback,
+    .setup-dialog[open] .setup-modal,
+    .settings-dialog[open] .settings-modal,
+    .migration-dialog[open] .migration-dialog-surface {
+        animation-name: courseflow-fade;
     }
 }
 
 @media (prefers-reduced-transparency: reduce) {
+    /* The inset surface token is translucent as well, so every piece painted on it resolves to
+       the flat value it composites to over the card that is now opaque. */
+    :root {
+        --card-inner: #fcfaf0;
+    }
+
     .workspace-frame,
     .content-card,
     .status-banner,
@@ -444,6 +478,42 @@
         backdrop-filter: none;
     }
 
+    .calendar-scroll-region {
+        background: #fbfaf3;
+    }
+
+    .empty-state {
+        background: #f9f9f5;
+    }
+
+    /* The compact variant is a bare block on both grounds, so it keeps no box at all. */
+    .empty-state--compact {
+        background: transparent;
+    }
+
+    .next-step-card .empty-state,
+    .dark-card .empty-state {
+        background: #3c3c3c;
+    }
+
+    /* The pill controls and the week-grid blocks stay raised against the opaque cards. */
+    .segmented-control,
+    .task-filter-chip,
+    .task-direct-actions button,
+    .secondary-action,
+    .calendar-all-day-grid > li,
+    .calendar-timed-item-list > li {
+        background: #ffffff;
+    }
+
+    .calendar-all-day-grid > .calendar-holiday-item {
+        background: #fce995;
+    }
+
+    .calendar-conflicts {
+        background: #fcf1e5;
+    }
+
     .setup-dialog::backdrop,
     .settings-dialog::backdrop {
         background: #4a4a45;
@@ -471,6 +541,16 @@
     .settings-modal,
     .settings-panel,
     .settings-category-nav,
+    .fact-list > li,
+    .empty-state,
+    .today-timeline-lane > li:not(.today-now-line):not([data-current="true"]),
+    .calendar-scroll-region,
+    .calendar-all-day-grid > li,
+    .calendar-timed-item-list > li,
+    .calendar-conflicts,
+    .activity-form,
+    .form-section,
+    .location-choice,
     .field input,
     .field select,
     .window-control-button {
@@ -479,8 +559,17 @@
 
     .status-label,
     .task-filter-chip,
+    .task-direct-actions button,
+    .secondary-action,
+    .segmented-action,
     .segmented-control {
         border-color: #2d291a;
+    }
+
+    /* 回到本周 is disabled in the view this page opens on, so raised contrast still has to read
+       it; the label stays clearly quieter than the two live segments. */
+    .segmented-action:disabled {
+        color: #4a4738;
     }
 }
 
@@ -512,6 +601,8 @@
     .navigation-button[aria-current="page"],
     .settings-category-button[aria-current="true"],
     .task-filter-chip[aria-checked="true"],
+    .week-load > li[data-current="true"] .week-load-bar,
+    .week-load > li[data-current="true"] .week-load-day,
     .calendar-day-column[data-selected="true"],
     .primary-action {
         color: HighlightText;
@@ -521,6 +612,35 @@
 
     .segmented-control {
         border: 1px solid CanvasText;
+    }
+
+    /* Both week grids draw their day and hour rules as --line gradients, and forced colors
+       rewrites background-color but not background-image, so the structure would flatten. */
+    .today-timeline-lane,
+    .calendar-all-day-grid,
+    .calendar-time-column {
+        --line: CanvasText;
+    }
+
+    /* 今天 is a capsule whose edge is an inset box-shadow, which forced colors drops. */
+    .calendar-current-label,
+    .calendar-day-today {
+        outline: 1px solid CanvasText;
+    }
+
+    /* An in-progress class is a border colour plus an inset ring and nothing else, so it takes
+       a ring here: Highlight rather than CanvasText, because this file reserves Highlight for
+       what is current or selected and CanvasText for what is merely drawn. */
+    .today-timeline-lane > li[data-current="true"] {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
+
+    /* The setup wizard marks the step you are on with a translucent white fill and nothing else,
+       and this branch rewrites exactly that; without a ring the four steps read alike. */
+    .setup-step-list li[data-status="current"] {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
     }
 
     .calendar-timed-item-list > li[data-conflict="true"] {
@@ -543,22 +663,62 @@
         forced-color-adjust: none;
     }
 
+    .course-chevron,
+    .deadline-mark svg,
     .now-ring-track,
     .now-ring-value {
         stroke: CanvasText;
     }
 
+    /* Outside a class the arc is repainted at higher specificity, so it repeats the colour;
+       an empty ring still draws nothing, because that rule is more specific again. */
+    .now-body[data-ring="day"] .now-ring-value {
+        stroke: CanvasText;
+    }
+
     .week-load-bar,
+    .term-progress-elapsed,
     .term-tasks-bar > span::before,
     .course-dot,
+    .course-card::before,
+    .now-state::before,
+    .now-state[data-live="true"]::before,
     .week-load-tasks > i,
+    .task-rows > li + li::before,
+    .today-timeline-lane > li:not(.today-now-line)::before,
     .calendar-timed-item-list > li::before {
         background: CanvasText;
     }
 
-    .term-tasks-bar > span {
+    /* Every remaining bar is a filled length inside an empty rail: the rail is outlined so it
+       still bounds the value, and a Holiday gap is punched out of the elapsed segment. */
+    .term-tasks-bar > span,
+    .term-progress-track,
+    .term-progress-holiday,
+    .progress-track {
         background: Canvas;
         outline: 1px solid CanvasText;
+    }
+
+    .progress-track span {
+        background: CanvasText;
+    }
+
+    /* Chromium draws the native bar from its own pseudo-elements, so both parts repeat it. */
+    .today-task-progress progress::-webkit-progress-bar {
+        background: Canvas;
+        outline: 1px solid CanvasText;
+    }
+
+    .today-task-progress progress::-webkit-progress-value {
+        background: CanvasText;
+    }
+
+    /* The selected day head is the tablist's only Tab stop, it is filled with Highlight, and
+       calendar.css moves its ring inside that fill so the scroll region cannot clip it. The ring
+       therefore inverts instead of repeating the same keyword over itself. */
+    .calendar-day-column[data-selected="true"]:focus-visible {
+        outline-color: HighlightText;
     }
 
     :focus-visible {

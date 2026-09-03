@@ -1,4 +1,5 @@
-/* The four keyframes and the surfaces that run them. media.css turns them off for reduced motion. */
+/* The four keyframes and the surfaces that run them. Three of them travel as well as fade, so under
+   prefers-reduced-motion media.css swaps those three onto courseflow-fade instead of stopping them. */
 
 @keyframes courseflow-page-enter {
     from {
@@ -36,7 +37,7 @@
     }
 }
 
-@keyframes courseflow-backdrop-fade {
+@keyframes courseflow-fade {
     from {
         opacity: 0;
     }
@@ -63,5 +64,5 @@
 .setup-dialog[open]::backdrop,
 .settings-dialog[open]::backdrop,
 .migration-dialog[open]::backdrop {
-    animation: courseflow-backdrop-fade 200ms ease-out both;
+    animation: courseflow-fade 200ms var(--ease-out) both;
 }

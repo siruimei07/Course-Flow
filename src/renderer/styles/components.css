@@ -32,11 +32,13 @@
     overflow-wrap: anywhere;
 }
 
+/* This line carries the dates and counts of a fact list, so its digits keep one width. */
 .fact-list > li span:not(.status-label),
 .fact-list > li time,
 .fact-list > li small {
     color: var(--ink-soft);
-    font-size: 0.75rem;
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
 }
 
 .task-direct-actions {
@@ -66,6 +68,12 @@
 
 /* The most-pressed control on two pages answers the press; the accent stays for selection. */
 .task-direct-actions button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+/* Undo shares the pill above but not its rule, so the one-shot control was the last
+   pressable in the shared layer with no press state of its own. */
+.task-undo-toast button:active:not(:disabled) {
     transform: scale(0.98);
 }
 

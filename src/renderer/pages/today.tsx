@@ -387,7 +387,7 @@ export function TodayTimeline(props: Readonly<{
 export function timelineEmptyCopy(plan: PlanProjection): string {
     const laterToday = plan.today.meetings.find(meeting => meeting.classification === 'upcoming');
     if (laterToday !== undefined) {
-        return `下一节 ${laterToday.occurrence.localStart} ${laterToday.courseCode}`;
+        return `下一节 ${laterToday.occurrence.localStart} ${laterToday.courseCode}。`;
     }
     const laterThisWeek = plan.week.meetings.find(meeting => meeting.classification === 'upcoming');
     if (laterThisWeek !== undefined) {

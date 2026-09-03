@@ -1,6 +1,7 @@
 /**
- * @file WP-RF-02: proves the per-surface split of styles.css is still, byte for byte, the single
- * stylesheet that shipped before it.
+ * @file The Renderer CSS contract. Proves styles.css carries nothing but an ordered import list,
+ * that the per-surface split of WP-RF-02 still owns exactly the boundaries it was cut on, and that
+ * those files concatenated in import order still reproduce the frozen baseline byte for byte.
  */
 
 import assert from 'node:assert/strict';
@@ -17,13 +18,19 @@ import {
 } from './renderer-styles.fixture';
 
 /**
- * The baseline is a frozen copy rather than `git show <commit>:src/renderer/styles.css`. The
- * repository is checked out with core.autocrlf, so the blob is LF while both this fixture and the
- * split files arrive CRLF, and a blob read would compare two different encodings of the same text.
- * A committed file also keeps the suite hermetic: no child process, no git binary, no pinned hash
- * that a later rebase invalidates.
+ * The baseline is the stylesheet as of the last deliberate CSS change, not a fixed point in the
+ * project history. WP-RF-02 first froze it to prove the split was a no-op; every later slice that
+ * changes CSS on purpose re-freezes it in the same commit. That keeps the assertion honest in both
+ * directions: unintended drift still fails the suite, and a deliberate change cannot land without
+ * the stylesheet diff showing up in this fixture for a reviewer to read.
+ *
+ * It stays a committed copy rather than `git show <commit>:src/renderer/styles.css`. The repository
+ * is checked out with core.autocrlf, so the blob is LF while both this fixture and the split files
+ * arrive CRLF, and a blob read would compare two different encodings of the same text. A committed
+ * file also keeps the suite hermetic: no child process, no git binary, no pinned hash that a later
+ * rebase invalidates.
  */
-const BASELINE = 'tests/fixtures/styles-before-split.css';
+const BASELINE = 'tests/fixtures/styles-baseline.css';
 
 /**
  * The partition, not just the concatenated stream. Byte equality alone cannot see a rule drifting
@@ -31,25 +38,25 @@ const BASELINE = 'tests/fixtures/styles-before-split.css';
  */
 const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/tokens.css', 155],
-    ['./styles/shell.css', 394],
-    ['./styles/today.css', 1058],
-    ['./styles/tasks.css', 270],
+    ['./styles/shell.css', 401],
+    ['./styles/today.css', 1056],
+    ['./styles/tasks.css', 275],
     ['./styles/term-ended.css', 17],
-    ['./styles/components.css', 240],
+    ['./styles/components.css', 248],
     ['./styles/courses.css', 191],
     ['./styles/dialog-facts.css', 33],
-    ['./styles/calendar.css', 297],
+    ['./styles/calendar.css', 329],
     ['./styles/files.css', 11],
     ['./styles/startup.css', 35],
-    ['./styles/setup.css', 482],
+    ['./styles/setup.css', 484],
     ['./styles/settings.css', 131],
-    ['./styles/management.css', 95],
+    ['./styles/management.css', 97],
     ['./styles/calendar-controls.css', 89],
     ['./styles/settings-lists.css', 10],
     ['./styles/focus.css', 33],
     ['./styles/motion.css', 66],
-    ['./styles/migration.css', 282],
-    ['./styles/media.css', 566],
+    ['./styles/migration.css', 295],
+    ['./styles/media.css', 726],
 ];
 
 test('WP-RF-02 styles.css is nothing but the ordered import list', () => {
@@ -88,7 +95,7 @@ test('WP-RF-02 the split keeps the boundaries it was cut on', () => {
     assert.deepEqual(measured, PARTITION);
 });
 
-test('WP-RF-02 concatenating the imports reproduces the pre-split stylesheet byte for byte', () => {
+test('WP-RF-02 concatenating the imports reproduces the frozen baseline byte for byte', () => {
     const rebuilt = Buffer.from(readRendererStyles(), 'utf8');
     const baseline = readFileSync(path.join(process.cwd(), BASELINE));
     if (Buffer.compare(rebuilt, baseline) !== 0) {

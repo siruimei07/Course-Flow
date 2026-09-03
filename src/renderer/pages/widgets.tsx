@@ -91,7 +91,7 @@ export function SetupIncompleteNotice(props: Readonly<{ onContinueSetup: () => v
         >
             <div>
                 <h2 id="setup-incomplete-title">设置未完成</h2>
-                <p role="status">缺少最低设置事实的区域会保持真实空状态；已保存的区域仍可使用。</p>
+                <p role="status">最低设置还没填完的部分会保持空着；已经保存的部分照常可用。</p>
             </div>
             <button
                 className="secondary-action"

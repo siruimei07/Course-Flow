@@ -105,9 +105,9 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
                             : buttonAction('继续设置', props.onContinueSetup)}
                         id="courses-empty"
                         reason={historicalMode
-                            ? '曾达到最低设置条件，但当前投影没有可显示的历史课程。'
+                            ? '曾达到最低设置条件，但现在没有可显示的历史课程。'
                             : currentTermId
-                            ? '最低设置条件还缺少当前学期课程，因此这里没有课程事实。'
+                            ? '最低设置条件还缺少当前学期课程，所以这里还是空的。'
                             : '尚无当前学期，无法确定要显示哪一组课程；历史课程不会冒充当前课程。'}
                         title={historicalMode
                             ? '没有可显示的历史课程'
@@ -247,8 +247,8 @@ export function CourseCard(props: Readonly<{
                     headingLevel="h4"
                     id={`course-${course.courseId}-meetings-empty`}
                     reason={props.historical
-                        ? '这门历史课程没有保存课节规则；不会为它补造日程。'
-                        : '这门课程已保存，但还没有真实课节规则。'}
+                        ? '这门历史课程没有保存课节；不会为它补造日程。'
+                        : '这门课程已保存，但还没有每周课节。'}
                     title="尚未添加课节"
                 />
             ) : (
