@@ -56,7 +56,7 @@ const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/focus.css', 33],
     ['./styles/motion.css', 66],
     ['./styles/migration.css', 291],
-    ['./styles/media.css', 830],
+    ['./styles/media.css', 903],
 ];
 
 test('WP-RF-02 styles.css is nothing but the ordered import list', () => {

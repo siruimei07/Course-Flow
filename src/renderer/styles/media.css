@@ -490,10 +490,12 @@
 }
 
 @media (prefers-reduced-transparency: reduce) {
-    /* The inset surface token is translucent as well, so every piece painted on it resolves to
-       the flat value it composites to over the card that is now opaque. */
+    /* Both surface tokens are translucent, so each resolves to the flat value it composites to
+       over the card that is now opaque. --card-strong has one user, the explanation floating on
+       the Today timeline rail, and it was left at 88% when the inset token was flattened. */
     :root {
         --card-inner: #fcfaf0;
+        --card-strong: #fefdf9;
     }
 
     /* These three draw a warm corner in their own rule, and it is the light the page header and
@@ -589,6 +591,24 @@
 
     .calendar-conflicts {
         background: #fcf1e5;
+    }
+
+    /* The dialogs' fields and header buttons were still translucent after the page pills went
+       flat. Each takes the colour it composited to in this branch, read off the render: the
+       fields over the opaque panel, the header buttons over the amber corner they sit in. */
+    .field input,
+    .field select {
+        background: #fefdf8;
+    }
+
+    .field input:disabled,
+    .field select:disabled {
+        background: #e5e5df;
+    }
+
+    .settings-modal-actions button,
+    .setup-modal-actions button {
+        background: #fdf7dd;
     }
 
     .setup-dialog::backdrop,
@@ -711,12 +731,65 @@
         border: 1px solid CanvasText;
     }
 
-    /* Both week grids draw their day and hour rules as --line gradients, and forced colors
-       rewrites background-color but not background-image, so the structure would flatten. */
+    /* The next-step card shares the rule above with six plain cards, and its dark fill was the
+       only thing that ranked it above them. It takes the inset ring this branch already gives a
+       conflicting calendar item: CanvasText, because it is drawn, not current. */
+    .next-step-card {
+        outline: 2px solid CanvasText;
+        outline-offset: -2px;
+    }
+
+    /* The brand disc is a dark circle and nothing else, so with its fill gone the C floated
+       inside a bordered pill. An outline gives it an edge without touching the 1.9rem box. */
+    .brand-symbol {
+        outline: 1px solid CanvasText;
+    }
+
+    /* Both week grids draw their day and hour rules two ways: the lane, all-day and hour
+       column edges are 1px borders that read --line, and the rules inside them are --line
+       gradients in background-image. Forced colors drops a gradient background-image to none
+       (Chromium keeps only url() images), so the token only reaches the borders. The rules
+       inside come back on a ::before that opts out of the adjustment and paints the same three
+       gradients in the token, under the items and the now line. */
     .today-timeline-lane,
     .calendar-all-day-grid,
     .calendar-time-column {
         --line: CanvasText;
+
+        position: relative;
+        isolation: isolate;
+    }
+
+    .today-timeline-lane::before,
+    .calendar-all-day-grid::before,
+    .calendar-time-column::before {
+        content: "";
+        position: absolute;
+        z-index: -1;
+        inset: 0;
+        pointer-events: none;
+        forced-color-adjust: none;
+    }
+
+    .today-timeline-lane::before,
+    .calendar-time-column::before {
+        background-image: repeating-linear-gradient(
+            to bottom,
+            transparent 0,
+            transparent 32px,
+            var(--line) 32px,
+            var(--line) 33px
+        );
+    }
+
+    .calendar-all-day-grid::before {
+        background-image: repeating-linear-gradient(
+            90deg,
+            transparent 0,
+            transparent calc(14.2857% - 1px),
+            var(--line) calc(14.2857% - 1px),
+            var(--line) 14.2857%
+        );
     }
 
     /* 今天 is a capsule whose edge is an inset box-shadow, which forced colors drops. */
