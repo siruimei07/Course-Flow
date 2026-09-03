@@ -164,10 +164,7 @@ export function SettingsDialog(props: SettingsDialogProps): ReactElement {
         >
             <div className="settings-modal">
                 <header className="settings-modal-header">
-                    <div>
-                        <p className="eyebrow">Settings</p>
-                        <h1 id="settings-dialog-title">设置</h1>
-                    </div>
+                    <h1 id="settings-dialog-title">设置</h1>
                     <div className="settings-modal-actions">
                         <button
                             aria-label="关闭设置"
@@ -231,8 +228,11 @@ export function TermSettings(props: SettingsDialogProps): ReactElement {
     const taskCount = props.setup.tasks.filter(task => courseIds.has(task.courseId)).length;
     return (
         <div className="settings-section">
-            <h2>学期与课程</h2>
-            <p>当前学期、课程、课节与假期都由同一份本地正式数据决定。</p>
+            <div className="card-heading">
+                <h2>学期与课程</h2>
+                <p className="page-context">{currentTerm?.name ?? '尚无当前学期'}</p>
+            </div>
+            <p className="section-intro">学期、课程、课节和假期都存在这台电脑上；在这里改完，Today 和日历会跟着变。</p>
             <dl className="settings-fact-list">
                 <div><dt>当前学期</dt><dd>{currentTerm?.name ?? '尚无当前学期'}</dd></div>
                 <div>
@@ -307,7 +307,7 @@ export function CurrentTermReset(props: SettingsDialogProps): ReactElement {
         return (
             <div className="settings-section settings-section--danger">
                 <h3>重置当前学期</h3>
-                <p>尚无当前学期，没有可以重置的正式数据。</p>
+                <p className="section-intro">还没有当前学期，没有可以重置的东西。</p>
             </div>
         );
     }
@@ -447,7 +447,7 @@ export function DataSettings(props: SettingsDialogProps): ReactElement {
     return (
         <div className="settings-section">
             <h2>数据与备份</h2>
-            <p>课程与任务数据只保存在这台设备上；快照、恢复保护与迁移安全副本在数据与备份中管理。</p>
+            <p className="section-intro">课程和任务只存在这台电脑上，不会上传。备份、恢复和升级前的副本都在下面那一页管理。</p>
             <dl className="settings-fact-list">
                 <div>
                     <dt>数据模式</dt>
@@ -476,14 +476,17 @@ export function AboutSettings(props: SettingsDialogProps): ReactElement {
         return (
             <div className="settings-section">
                 <h2>关于与版本</h2>
-                <p role="status">当前无法读取精确构建身份；正式课程与任务数据没有改变。</p>
+                <p
+                    className="section-intro"
+                    role="status"
+                >当前无法读取精确构建身份；课程与任务数据没有改变。</p>
             </div>
         );
     }
     return (
         <div className="settings-section">
             <h2>关于与版本</h2>
-            <p>以下身份由本地 Workspace 精确确认，不来自网络。</p>
+            <p className="section-intro">下面这些信息由这台电脑上的程序自己确认，不来自网络。</p>
             <dl className="settings-fact-list">
                 <div><dt>版本</dt><dd>{descriptor.releaseVersion}</dd></div>
                 <div><dt>Tag</dt><dd><code>{descriptor.tag}</code></dd></div>

@@ -253,10 +253,7 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
                 className="settings-modal"
             >
                 <header className="settings-modal-header">
-                    <div>
-                        <p className="eyebrow">Manage</p>
-                        <h1 id="management-dialog-title">学期与课程管理</h1>
-                    </div>
+                    <h1 id="management-dialog-title">学期与课程管理</h1>
                     <div className="settings-modal-actions">
                         <button
                             aria-label="关闭管理页面"
@@ -336,7 +333,6 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
                         ) : null}
                         {props.surface === 'meeting' ? (
                             <div className="setup-step-panel">
-                                <p className="eyebrow">课节</p>
                                 <h2>添加课节</h2>
                                 <MeetingForm
                                     blocked={editorBlocked('meeting')}
@@ -357,7 +353,6 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
                         ) : null}
                         {props.surface === 'task' ? (
                             <div className="setup-step-panel">
-                                <p className="eyebrow">任务</p>
                                 <h2>添加任务</h2>
                                 <TaskForm
                                     blocked={editorBlocked('task')}
@@ -443,6 +438,7 @@ export function ManagementFacts(props: Readonly<{
             note: term.termId === currentTerm?.termId
                 ? '当前学期'
                 : term.archived ? '已归档' : '历史',
+            current: term.termId === currentTerm?.termId,
         }))
         : props.surface === 'course'
             ? courses.map(course => ({
@@ -450,6 +446,7 @@ export function ManagementFacts(props: Readonly<{
                 title: `${course.code} · ${course.name}`,
                 detail: `${course.teachingRange.startDate} - ${course.teachingRange.endDate}`,
                 note: `${course.meetings.length} 条课节`,
+                current: false,
             }))
             : props.surface === 'meeting'
                 ? courses.flatMap(course => course.meetings.map(meeting => ({
@@ -457,6 +454,7 @@ export function ManagementFacts(props: Readonly<{
                     title: `${course.code} · ${meeting.type.code}`,
                     detail: `${weekdayNames[meeting.weekday]} ${meeting.localStart}-${meeting.localEnd}`,
                     note: meeting.location.kind === 'tba' ? 'TBA' : meeting.location.value,
+                    current: false,
                 })))
                 : props.surface === 'task'
                     ? projection.tasks.filter(task => courseIds.has(task.courseId)).map(task => ({
@@ -465,6 +463,7 @@ export function ManagementFacts(props: Readonly<{
                         detail: courses.find(course => course.courseId === task.courseId)?.code
                             ?? '未知课程',
                         note: 'schedule' in task ? '每周' : '一次性',
+                        current: false,
                     }))
                     : projection.holidayRanges
                         .filter(range => range.termId === currentTerm?.termId)
@@ -473,12 +472,13 @@ export function ManagementFacts(props: Readonly<{
                             title: range.name,
                             detail: `${range.startDate} - ${range.endDate}`,
                             note: '当前学期',
+                            current: false,
                         }));
 
     if (rows.length === 0) {
         return (
             <p
-                className="empty-state-reason"
+                className="empty-state empty-state-reason"
                 role="status"
             >当前没有已保存的记录；下面的表单会创建第一条。</p>
         );
@@ -488,12 +488,16 @@ export function ManagementFacts(props: Readonly<{
         <ul className="fact-list management-fact-list">
             {rows.map(row => (
                 <li
+                    data-current={row.current ? 'true' : undefined}
                     data-item-id={row.id}
                     key={row.id}
                 >
                     <strong>{row.title}</strong>
                     <span>{row.detail}</span>
-                    <small>{row.note}</small>
+                    <span
+                        className="status-label"
+                        data-severity="neutral"
+                    >{row.note}</span>
                 </li>
             ))}
         </ul>

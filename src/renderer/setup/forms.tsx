@@ -142,11 +142,12 @@ export function HolidayForm(props: Readonly<{
 
     return (
         <div className="setup-step-panel setup-holiday-panel">
-            <p className="eyebrow">可选步骤</p>
-            <h2>添加假期（可选）</h2>
-            <p>
-                当前已有 {holidayCount} 个假期。周期课节和选择
-                “跟随教学周”的任务会消费这些正式范围。
+            <div className="card-heading">
+                <h2>添加假期（可选）</h2>
+                <p className="page-context">已有 {holidayCount} 个</p>
+            </div>
+            <p className="section-intro">
+                假期里的每周课节会自动停掉，选了“跟随教学周”的任务也会跟着停。
             </p>
             <form
                 className="setup-form"
@@ -232,7 +233,7 @@ export function HolidayForm(props: Readonly<{
                 disabled={saving || props.blocked || props.exitBlocked}
                 onClick={props.onSkip}
                 type="button"
-            >暂不添加，进入 Today</button>
+            >暂不添加，关闭</button>
         </div>
     );
 }
@@ -362,9 +363,8 @@ export function TermForm(props: Readonly<{
 
     return (
         <div className="setup-step-panel">
-            <p className="eyebrow">当前学期</p>
             <h2>创建当前学期</h2>
-            <p>先确定名称、起止日期和默认时区。所有信息只保存在这台设备上。</p>
+            <p className="section-intro">先定名称、起止日期和默认时区。这些只存在这台电脑上。</p>
             <form
                 className="setup-form"
                 noValidate
@@ -606,9 +606,11 @@ export function CourseForm(props: Readonly<{
 
     return (
         <div className="setup-step-panel">
-            <p className="eyebrow">课程 · {currentTerm.name}</p>
-            <h2>添加课程</h2>
-            <p>教学范围默认与学期相同；课程晚开始或提前结束时可以明确缩短。</p>
+            <div className="card-heading">
+                <h2>添加课程</h2>
+                <p className="page-context">{currentTerm.name}</p>
+            </div>
+            <p className="section-intro">教学范围默认跟学期一样；这门课晚开始或提前结束时再改。</p>
             <form
                 className="setup-form setup-form--course"
                 noValidate
@@ -990,9 +992,9 @@ export function MeetingForm(props: Readonly<{
                         required
                         value={props.draft.meetingType}
                     >
-                        <option value="LEC">LEC — Lecture</option>
-                        <option value="TUT">TUT — Tutorial</option>
-                        <option value="PRA">PRA — Practical</option>
+                        <option value="LEC">LEC · Lecture</option>
+                        <option value="TUT">TUT · Tutorial</option>
+                        <option value="PRA">PRA · Practical</option>
                     </select>
                 </label>
                 <label className="field">
@@ -1546,8 +1548,7 @@ export function TaskForm(props: Readonly<{
                                 className="form-hint field--full"
                                 role="status"
                             >
-                                当前还没有命名假期。可先保存任务；最低条件满足后可添加假期，
-                                或明确选择暂不添加。
+                                还没有假期。任务可以先存下来；等你加了假期，这条任务会跟着停。
                             </p>
                         ) : null}
                     </>

@@ -41,7 +41,7 @@ export function SetupProgress(props: Readonly<{
                         {hasCurrentTerm ? '首次设置已完成' : '当前学期'}
                     </span>
                     <ol className="setup-step-list">
-                        <li data-status={hasCurrentTerm ? '完成' : '当前'}>
+                        <li data-status={hasCurrentTerm ? 'done' : 'current'}>
                             <span aria-hidden="true">{hasCurrentTerm ? '✓' : '•'}</span>
                             <span>
                                 <strong>当前学期</strong>
@@ -105,11 +105,16 @@ export function IncompatibleDraft(props: Readonly<{
 }>) {
     return (
         <div className="setup-step-panel">
-            <p className="eyebrow">草稿需要处理</p>
-            <h2>这份设置草稿无法由当前版本读取</h2>
-            <p>{props.dataMode === 'read-only'
-                ? '正式学期、课程、课节和任务没有改变。只读模式不能丢弃这份旧草稿。'
-                : '正式学期、课程、课节和任务没有改变。你可以进入 Today，或明确丢弃旧草稿后重新填写。'}</p>
+            <div className="card-heading">
+                <h2>这份设置草稿无法由当前版本读取</h2>
+                <p
+                    className="status-label"
+                    data-severity="warning"
+                >草稿需要处理</p>
+            </div>
+            <p className="section-intro">{props.dataMode === 'read-only'
+                ? '已保存的学期、课程、课节和任务都没有变。只读模式不能丢弃这份旧草稿。'
+                : '已保存的学期、课程、课节和任务都没有变。你可以直接进入 Today，或者丢弃旧草稿重新填。'}</p>
             <button
                 className="secondary-action"
                 disabled={props.saving || props.dataMode === 'read-only'}
@@ -142,13 +147,18 @@ export function SetupComplete(props: Readonly<{
                 aria-live="polite"
                 className="setup-complete-announcement"
             >
-                <p className="eyebrow">首次设置已完成</p>
-                <h2
-                    id="setup-complete-title"
-                    ref={props.headingRef}
-                    tabIndex={-1}
-                >你的 Today 已经可以使用</h2>
-                <p>{currentTerm === null
+                <div className="card-heading">
+                    <h2
+                        id="setup-complete-title"
+                        ref={props.headingRef}
+                        tabIndex={-1}
+                    >你的 Today 已经可以使用</h2>
+                    <p
+                        className="status-label"
+                        data-severity="success"
+                    >首次设置已完成</p>
+                </div>
+                <p className="page-context">{currentTerm === null
                     ? '当前学期'
                     : `${currentTerm.name} · ${currentTerm.startDate} - ${currentTerm.endDate}`}</p>
             </div>
@@ -162,11 +172,11 @@ export function SetupComplete(props: Readonly<{
                 <div><dt>假期</dt><dd>{facts.holidayCount} 个，可稍后补充</dd></div>
             </dl>
             <div
-                aria-label="继续补充正式课程数据"
+                aria-label="继续补充课程数据"
                 className="setup-complete-actions"
             >
                 <strong>继续补充</strong>
-                <p>课程、课节、任务和假期都有各自的管理页面，可以随时补充，也可直接进入 Today。</p>
+                <p>课程、课节、任务和假期各有一个管理页面，随时可以补；也可以先进入 Today。</p>
                 <div>
                     <button
                         className="secondary-action"

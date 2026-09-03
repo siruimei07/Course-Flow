@@ -1896,7 +1896,13 @@ test('FilesPage reports unavailable library facts and exposes only executable bo
     const html = renderWorkspacePage('files', null, true);
 
     assert.match(html, /<h1[^>]*>文件<\/h1>/);
-    assert.match(html, /当前 Workspace 没有提供资料库投影，因此不能判断文件列表是否为空。/);
+    // Slice 16: the library is undelivered, not an unreadable projection, and the card names
+    // that state in the shared status vocabulary instead of reporting a failed read.
+    assert.match(html, /<h2[^>]*>资料库还没有做出来<\/h2>/);
+    assert.match(html, /<p class="status-label" data-severity="neutral">后续版本<\/p>/);
+    assert.match(html, /资料库会在后续版本提供/);
+    assert.match(html, /CourseFlow 不会动它们。/);
+    assert.doesNotMatch(html, /资料库投影|不能判断文件列表是否为空/);
     assert.match(html, /返回 Today/);
     assert.match(html, /继续设置/);
     assert.equal((html.match(/<button/g) ?? []).length, 2);

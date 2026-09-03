@@ -70,9 +70,11 @@ test('UI-SETUP-01 requires only a Current Term and moves every supplement to its
     assert.match(renderer, /颜色（可选）/);
     assert.match(renderer, /学分（可选）/);
     assert.match(renderer, /课节类型/);
-    assert.match(renderer, /LEC — Lecture/);
-    assert.match(renderer, /TUT — Tutorial/);
-    assert.match(renderer, /PRA — Practical/);
+    // Slice 16: the three type options use the product's own separator; the em-dash is banned.
+    assert.match(renderer, /LEC · Lecture/);
+    assert.match(renderer, /TUT · Tutorial/);
+    assert.match(renderer, /PRA · Practical/);
+    assert.doesNotMatch(renderer, /—|–/);
     assert.match(renderer, /星期/);
     assert.match(renderer, /开始时间/);
     assert.match(renderer, /结束时间/);

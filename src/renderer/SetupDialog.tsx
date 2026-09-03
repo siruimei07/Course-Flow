@@ -388,10 +388,7 @@ export function SetupDialog(props: SetupDialogProps) {
                 className="setup-modal"
             >
                 <header className="setup-modal-header">
-                    <div>
-                        <p className="eyebrow">First setup</p>
-                        <h1 id="setup-dialog-title">完成首次设置</h1>
-                    </div>
+                    <h1 id="setup-dialog-title">完成首次设置</h1>
                     <div className="setup-modal-actions">
                         <button
                             aria-label={readOnly ? '关闭设置' : '保存设置草稿并关闭'}

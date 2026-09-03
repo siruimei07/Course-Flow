@@ -243,7 +243,7 @@ test('read-only data cannot reach the reset, and a missing Term offers nothing t
             terms: [],
         },
     });
-    assert.match(withoutTerm, /尚无当前学期，没有可以重置的正式数据。/);
+    assert.match(withoutTerm, /还没有当前学期，没有可以重置的东西。/);
     assert.doesNotMatch(withoutTerm, /name="reset-term-confirmation"/);
     assert.doesNotMatch(withoutTerm, /destructive-action/);
 });
