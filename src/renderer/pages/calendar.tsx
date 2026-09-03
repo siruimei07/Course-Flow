@@ -491,9 +491,9 @@ export function CalendarDayDetail(props: Readonly<{
                         : buttonAction('查看课程', () => props.onNavigate('courses'))}
                     id="calendar-day-empty"
                     reason={tba.tasks.length > 0
-                        ? '当前范围没有课节、任务或假期；还没有确定日期的任务留在 TBA 分组。'
-                        : '当前范围没有课节、任务或假期。'}
-                    title="当前范围没有已排期事项"
+                        ? `${tba.tasks.length} 项任务还没有日期，定好日期就会排进日历。`
+                        : '添加课节或任务后，它们会按日期排进日历。'}
+                    title="这一周没有已排期事项"
                 />
             ) : (
                 <EmptyState

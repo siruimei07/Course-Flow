@@ -735,6 +735,32 @@ export function durationLabel(milliseconds: number): string {
 }
 
 /**
+ * Says how far away a later calendar day is, the way the student would.
+ *
+ * @param {number} days Calendar days ahead, at least 1.
+ * @return {string} `明天`, `后天`, or `n 天后`.
+ */
+export function daysAheadLabel(days: number): string {
+    if (days === 1) {
+        return '明天';
+    }
+    return days === 2 ? '后天' : `${days} 天后`;
+}
+
+/**
+ * Says how much of the Term is left once PLAN lists no later class in it.
+ *
+ * @param {number} days Calendar days from the applicable date to the Term end date.
+ * @return {string} `学期还剩 n 天`, `学期今天结束`, or `学期已结束`.
+ */
+export function termDaysLeftLabel(days: number): string {
+    if (days > 0) {
+        return `学期还剩 ${days} 天`;
+    }
+    return days === 0 ? '学期今天结束' : '学期已结束';
+}
+
+/**
  * Formats Meeting minutes as hours with at most one decimal.
  *
  * @param {number} minutes Whole minutes.

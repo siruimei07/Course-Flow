@@ -105,15 +105,15 @@ export function CoursesPage(props: WorkspacePageContentProps): ReactElement {
                             : buttonAction('继续设置', props.onContinueSetup)}
                         id="courses-empty"
                         reason={historicalMode
-                            ? '曾达到最低设置条件，但现在没有可显示的历史课程。'
+                            ? '之前的学期没有留下课程；先设置新学期，再添加课程。'
                             : currentTermId
-                            ? '最低设置条件还缺少当前学期课程，所以这里还是空的。'
-                            : '尚无当前学期，无法确定要显示哪一组课程；历史课程不会冒充当前课程。'}
+                            ? '先添加一门课程，课节和任务都会挂在它下面。'
+                            : '先创建一个学期，课程都会挂在它下面。'}
                         title={historicalMode
                             ? '没有可显示的历史课程'
                             : currentTermId
                                 ? '当前学期还没有课程'
-                                : '尚无当前学期'}
+                                : '还没有当前学期'}
                     />
                 ) : (
                     <ul className="workspace-grid workspace-grid--courses">
@@ -247,8 +247,8 @@ export function CourseCard(props: Readonly<{
                     headingLevel="h4"
                     id={`course-${course.courseId}-meetings-empty`}
                     reason={props.historical
-                        ? '这门历史课程没有保存课节；不会为它补造日程。'
-                        : '这门课程已保存，但还没有每周课节。'}
+                        ? '这门课的学期已经结束；要排新课，先创建新学期。'
+                        : '添加每周课节，Today 和日历就会显示它的上课时间。'}
                     title="尚未添加课节"
                 />
             ) : (

@@ -78,7 +78,7 @@ export async function loadPlan(
     catch {
         return {
             plan: null,
-            planProblem: '无法读取统一计划投影；正式学期与课程数据没有改变。',
+            planProblem: '这次没能读到计划；已保存的学期和课程没有改变。',
         };
     }
 }

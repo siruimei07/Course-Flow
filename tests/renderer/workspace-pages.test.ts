@@ -548,12 +548,31 @@ test('the 现在 card reads one state at a time from the PLAN classifications', 
     assert.match(nowCard(done), /下一节 周二 09:00 CSC108/);
     assert.match(nowCard(done), /--ring-ratio:1"/);
 
-    // No class today inside the Term.
+    // No class today inside the Term, and none later either: the value counts down the Term.
     const free = renderWorkspacePage('today', planProjection({ meetings: [TUESDAY_MEETING] }));
     assert.match(nowCard(free), /data-now-state="free"/);
-    assert.match(nowCard(free), /class="now-value">今天没有课</);
+    assert.match(nowCard(free), /class="now-state">今天没有课</);
+    assert.match(nowCard(free), /class="now-value">学期还剩 10 天</);
     assert.match(nowCard(free), /本学期没有其他课节/);
     assert.match(nowCard(free), /data-empty="true"/);
+    // The empty track adds nothing to the state line, so it is decorative for assistive tech.
+    assert.match(nowCard(free), /<svg aria-hidden="true" class="now-ring"/);
+    assert.doesNotMatch(nowCard(free), /role="img"/);
+
+    // No class today, the next one tomorrow: the value says when, the meta says which.
+    const freeUntilFriday = renderWorkspacePage('today', planProjection({
+        meetings: [{
+            ...TUESDAY_MEETING,
+            occurrenceId: { ...TUESDAY_MEETING.occurrenceId, originalLogicalAnchor: '2026-09-11' },
+            date: '2026-09-11',
+            weekday: 'FRI',
+            startInstant: '2026-09-11T13:00:00.000Z',
+            endInstant: '2026-09-11T14:30:00.000Z',
+        }],
+    }));
+    assert.match(nowCard(freeUntilFriday), /data-now-state="free"/);
+    assert.match(nowCard(freeUntilFriday), /class="now-value">明天有课</);
+    assert.match(nowCard(freeUntilFriday), /下一节 周五 09:00 CSC108/);
 
     // Before the Term starts: days to go and the first class of the Term.
     const beforeTerm = renderWorkspacePage('today', planProjection({
@@ -689,6 +708,8 @@ test('the 学期任务 card renders the PLAN per-Course summary with one segment
     const empty = renderWorkspacePage('today', planProjection({ tasks: [] }));
     assert.match(empty, /class="term-tasks-percent">0%</);
     assert.match(empty, /id="today-term-tasks-empty"[^>]*>还没有任务</);
+    // The empty-state heading is the one place the card says so; the count line stays out.
+    assert.doesNotMatch(empty, /class="page-context">还没有任务/);
 });
 
 test('timed deadlines read as TermZone date-times wherever a Task row renders', () => {
@@ -871,8 +892,8 @@ test('UI-COURSE-01 a Course card carries identity, its weekly rules, and PLAN co
         plan: null,
         setupIncomplete: true,
     }));
-    assert.match(noCurrentTermHtml, /尚无当前学期/);
-    assert.match(noCurrentTermHtml, /无法确定要显示哪一组课程/);
+    assert.match(noCurrentTermHtml, /id="courses-empty"[^>]*>还没有当前学期</);
+    assert.match(noCurrentTermHtml, /先创建一个学期，课程都会挂在它下面。/);
     assert.doesNotMatch(noCurrentTermHtml, /Introduction to Computer Programming/);
 
     const archivedOnlyHtml = renderToStaticMarkup(createElement(CoursesPage, {
@@ -1153,7 +1174,8 @@ test('CalendarPage keeps seven day columns and separates the grid, the day detai
     const onlyTbaHtml = renderCalendarPage(
         planProjection({ tasks: [TBA_TASK], meetings: [], holidayRanges: [] }),
     );
-    assert.match(onlyTbaHtml, /当前范围没有已排期事项/);
+    assert.match(onlyTbaHtml, /id="calendar-day-empty"[^>]*>这一周没有已排期事项</);
+    assert.match(onlyTbaHtml, /1 项任务还没有日期，定好日期就会排进日历。/);
     assert.match(onlyTbaHtml, /Confirm research topic/);
     // No date-only Task and no visible Holiday: the all-day lane is not drawn at all.
     assert.doesNotMatch(onlyTbaHtml, /class="calendar-all-day-grid"/);
@@ -1205,7 +1227,7 @@ test('A-CALENDAR-001: Calendar week controls move the grid without moving today'
         calendarWeek: {
             offset: 0,
             busy: true,
-            problem: '无法读取该周的统一计划投影；正式数据没有改变。',
+            problem: '这次没能读到这一周的计划；正式数据没有改变。',
             plan: null,
             selectedDate: null,
             onSelectDate(): void {},
@@ -1215,7 +1237,7 @@ test('A-CALENDAR-001: Calendar week controls move the grid without moving today'
     }));
     assert.match(currentWeekHtml, /正在读取…/);
     assert.match(currentWeekHtml, /<button(?=[^>]*disabled)[^>]*>回到本周<\/button>/);
-    assert.match(currentWeekHtml, /无法读取该周的统一计划投影/);
+    assert.match(currentWeekHtml, /这次没能读到这一周的计划/);
     assert.match(currentWeekHtml, /class="calendar-current-label"/);
 });
 
@@ -1876,7 +1898,7 @@ test('a missing PLAN projection is unavailable rather than a fabricated empty li
         assert.match(html, /无法判断今天到底有没有事/);
         assert.doesNotMatch(
             html,
-            /今天没有课节|今天没有要交的任务|当前范围没有已排期事项|当前学期还没有任务/,
+            /今天没有课节|今天没有要交的任务|这一周没有已排期事项|当前学期还没有任务/,
         );
     }
 

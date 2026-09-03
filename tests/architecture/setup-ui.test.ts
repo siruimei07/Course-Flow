@@ -25,26 +25,21 @@ function readModuleFamily(entry: string, directory: string): string {
     return parts.join('\n');
 }
 
-/**
- * Every module under src/renderer, path and source, in a stable order. readModuleFamily above
- * reaches only the surfaces whose copy the tests assert on; a rule that owns the whole Renderer
- * has to read the whole Renderer, which is ten more files, SettingsDialog.tsx and
- * MigrationRollbackSurface.tsx among them.
- */
-function readRendererModules(directory: string): Array<{ path: string; source: string }> {
-    const modules: Array<{ path: string; source: string }> = [];
-    const entries = readdirSync(path.join(repositoryRoot, directory), { withFileTypes: true });
-    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
-        const child = `${directory}/${entry.name}`;
-        if (entry.isDirectory()) {
-            modules.push(...readRendererModules(child));
-        }
-        else if (/\.tsx?$/.test(entry.name)) {
-            const source = readFileSync(path.join(repositoryRoot, child), 'utf8');
-            modules.push({ path: child, source });
-        }
-    }
-    return modules;
+// Keep this scan separate because renderer is also the fixture for focused copy assertions below.
+function readRendererModules(directory: string): Array<{ file: string; source: string }> {
+    const rendererRoot = path.join(repositoryRoot, directory);
+    const modulePaths = readdirSync(rendererRoot, { encoding: 'utf8', recursive: true })
+        .filter(modulePath => /\.tsx?$/.test(modulePath))
+        .map(modulePath => modulePath.split(path.sep).join('/'))
+        .sort();
+
+    return modulePaths.map(modulePath => {
+        const file = `${directory}/${modulePath}`;
+        return {
+            file,
+            source: readFileSync(path.join(rendererRoot, modulePath), 'utf8'),
+        };
+    });
 }
 
 const main = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
@@ -392,11 +387,10 @@ test('UI-SETUP-01 no Renderer module ships an em-dash or an en-dash', () => {
     const modules = readRendererModules('src/renderer');
     // A reader that silently walked nothing would report this rule as kept without reading it.
     assert.ok(modules.length >= 30, `only ${modules.length} Renderer modules were read`);
-    for (const module of modules) {
-        assert.doesNotMatch(
-            module.source,
-            /\u2014|\u2013/,
-            `${module.path} ships a dash the product bans; the regular hyphen is the one to use`,
-        );
-    }
+    const hits = modules.flatMap(module => module.source.split(/\r?\n/).flatMap((line, index) => (
+        /\u2014|\u2013/.test(line)
+            ? [{ file: module.file, line: index + 1 }]
+            : []
+    )));
+    assert.deepEqual(hits, []);
 });

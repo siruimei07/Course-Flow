@@ -125,6 +125,10 @@ const PAGE_HEADING_IDS: Readonly<Record<WorkspaceNavigationId, string>> = {
     files: 'files-page-title',
 };
 
+// Shown when Workspace could not answer for one explicit Calendar week; the reader sees it, so
+// it names the page's own facts rather than the projection behind them.
+const CALENDAR_WEEK_UNAVAILABLE = '这次没能读到这一周的计划；正式数据没有改变。';
+
 
 
 
@@ -558,9 +562,7 @@ export function App(): ReactElement {
         void loadPlan(window.courseFlow, state.setup.projection, requestedWindow)
             .then(result => {
                 if (result.plan === null) {
-                    setCalendarWeekProblem(
-                        result.planProblem ?? '无法读取该周的统一计划投影；正式数据没有改变。',
-                    );
+                    setCalendarWeekProblem(result.planProblem ?? CALENDAR_WEEK_UNAVAILABLE);
                     return;
                 }
                 setCalendarWeekOffset(offset);
@@ -568,9 +570,7 @@ export function App(): ReactElement {
                 // Another week is another set of days; the detail falls back to today or that Monday.
                 setCalendarSelectedDate(null);
             })
-            .catch(() => setCalendarWeekProblem(
-                '无法读取该周的统一计划投影；正式数据没有改变。',
-            ))
+            .catch(() => setCalendarWeekProblem(CALENDAR_WEEK_UNAVAILABLE))
             .finally(() => setCalendarWeekBusy(false));
     };
 

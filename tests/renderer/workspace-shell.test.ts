@@ -500,7 +500,7 @@ test('a PLAN failure remains distinct from an empty Setup projection', async () 
         assert.equal(result.route, 'setup');
         assert.equal(result.setup.kind, 'complete');
         assert.equal(result.plan, null);
-        assert.match(result.planProblem ?? '', /无法读取统一计划投影/);
+        assert.match(result.planProblem ?? '', /这次没能读到计划；已保存的学期和课程没有改变。/);
     }
 });
 

@@ -11,6 +11,7 @@ import {
     conflictingMeetingIds,
     courseColorFor,
     courseWeekdaySummary,
+    daysAheadLabel,
     durationLabel,
     hoursLabel,
     localInstantLabel,
@@ -26,6 +27,7 @@ import {
     taskClassificationNames,
     taskItemId,
     taskSeverity,
+    termDaysLeftLabel,
     termWeekLabel,
     todayGreetingTitle,
     todayHeadlineMeeting,
@@ -499,7 +501,8 @@ export type NowCardFacts = Readonly<{
     clock: string;
     ratio: number | null;
     ringKind: 'course' | 'day';
-    ringLabel: string;
+    // null when the ring is an empty track: it then says nothing the state line does not.
+    ringLabel: string | null;
     courseId: string | null;
     live: boolean;
 }>;
@@ -600,22 +603,25 @@ export function nowCardFacts(plan: PlanProjection): NowCardFacts {
             clock,
             ratio: null,
             ringKind: 'day',
-            ringLabel: '学期尚未开始',
+            ringLabel: null,
             courseId: first?.courseId ?? null,
             live: false,
         };
     }
 
+    const next = nextTermMeeting(plan);
     return {
         state: 'free',
         label: '今天没有课',
-        value: '今天没有课',
+        value: next === undefined
+            ? termDaysLeftLabel(calendarDayDifference(applicableDate, plan.term.endDate))
+            : `${daysAheadLabel(calendarDayDifference(applicableDate, next.occurrence.date))}有课`,
         meta: laterInTerm(),
         clock,
         ratio: null,
         ringKind: 'day',
-        ringLabel: '今天没有课节',
-        courseId: nextTermMeeting(plan)?.courseId ?? null,
+        ringLabel: null,
+        courseId: next?.courseId ?? null,
         live: false,
     };
 }
@@ -653,9 +659,10 @@ export function NowCard(props: Readonly<{
                 data-ring={facts.ringKind}
             >
                 <svg
-                    aria-label={facts.ringLabel}
+                    aria-hidden={facts.ringLabel === null ? true : undefined}
+                    aria-label={facts.ringLabel ?? undefined}
                     className="now-ring"
-                    role="img"
+                    role={facts.ringLabel === null ? undefined : 'img'}
                     viewBox="0 0 96 96"
                 >
                     <circle
@@ -1254,9 +1261,9 @@ export function TermTasksCard(props: Readonly<{
                 <h2 id="today-term-tasks-title">学期任务</h2>
                 <p className="term-tasks-percent">{percent}%</p>
             </div>
-            <p className="page-context">{countable === 0
-                ? '还没有任务'
-                : `已完成 ${completed} / ${countable} 项 · 按课程`}</p>
+            {countable === 0 ? null : (
+                <p className="page-context">已完成 {completed} / {countable} 项 · 按课程</p>
+            )}
             {countable === 0 ? (
                 <EmptyState
                     action={buttonAction('添加任务', props.onCreateTask)}
