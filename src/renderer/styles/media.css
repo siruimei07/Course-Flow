@@ -440,14 +440,35 @@
         --card-inner: #fcfaf0;
     }
 
-    .workspace-frame,
+    /* These three draw a warm corner in their own rule, and it is the light the page header and
+       both dialogs sit in. Reduced transparency asks for an opaque surface, not a flat one, so
+       each halo stays and is written as the colours it composites to over the opaque fill:
+       same pixels, no alpha. */
+    .workspace-frame {
+        background:
+            radial-gradient(circle at 96% 0, #fbeeab, #f7f7f1 38rem),
+            #f7f7f1;
+    }
+
+    .setup-modal {
+        background:
+            radial-gradient(circle at 96% 3%, #fbe99b, #f7f7f1 26rem),
+            #f7f7f1;
+        backdrop-filter: none;
+    }
+
+    .settings-modal {
+        background:
+            radial-gradient(circle at 96% 3%, #fbeba3, #f7f7f1 26rem),
+            #f7f7f1;
+        backdrop-filter: none;
+    }
+
     .content-card,
     .status-banner,
     .status-card,
     .setup-step-panel,
     .setup-progress-card,
-    .setup-modal,
-    .settings-modal,
     .settings-panel,
     .settings-category-nav,
     .topbar,
@@ -564,6 +585,26 @@
     .segmented-action,
     .segmented-control {
         border-color: #2d291a;
+    }
+
+    /* The rule above is (0,1,0), so it never reached a chip that carries a severity or the
+       current marker: those sit at (0,2,0) in components.css and won every time. Each severity
+       raises to the ink it already draws its text with, at full strength instead of 28%, so the
+       state vocabulary survives the branch that exists to sharpen edges. */
+    [data-current="true"] > .status-label {
+        border-color: #2d291a;
+    }
+
+    .status-label[data-severity="critical"] {
+        border-color: var(--critical-ink);
+    }
+
+    .status-label[data-severity="warning"] {
+        border-color: var(--warning-ink);
+    }
+
+    .status-label[data-severity="success"] {
+        border-color: var(--success-ink);
     }
 
     /* 回到本周 is disabled in the view this page opens on, so raised contrast still has to read

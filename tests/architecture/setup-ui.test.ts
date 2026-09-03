@@ -25,6 +25,28 @@ function readModuleFamily(entry: string, directory: string): string {
     return parts.join('\n');
 }
 
+/**
+ * Every module under src/renderer, path and source, in a stable order. readModuleFamily above
+ * reaches only the surfaces whose copy the tests assert on; a rule that owns the whole Renderer
+ * has to read the whole Renderer, which is ten more files, SettingsDialog.tsx and
+ * MigrationRollbackSurface.tsx among them.
+ */
+function readRendererModules(directory: string): Array<{ path: string; source: string }> {
+    const modules: Array<{ path: string; source: string }> = [];
+    const entries = readdirSync(path.join(repositoryRoot, directory), { withFileTypes: true });
+    for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+        const child = `${directory}/${entry.name}`;
+        if (entry.isDirectory()) {
+            modules.push(...readRendererModules(child));
+        }
+        else if (/\.tsx?$/.test(entry.name)) {
+            const source = readFileSync(path.join(repositoryRoot, child), 'utf8');
+            modules.push({ path: child, source });
+        }
+    }
+    return modules;
+}
+
 const main = readFileSync(path.join(repositoryRoot, 'src/renderer/main.tsx'), 'utf8');
 const app = readModuleFamily('src/renderer/App.tsx', 'src/renderer/app');
 const setupDialog = readModuleFamily('src/renderer/SetupDialog.tsx', 'src/renderer/setup');
@@ -71,11 +93,11 @@ test('UI-SETUP-01 requires only a Current Term and moves every supplement to its
     assert.match(renderer, /颜色（可选）/);
     assert.match(renderer, /学分（可选）/);
     assert.match(renderer, /课节类型/);
-    // Slice 16: the three type options use the product's own separator; the em-dash is banned.
+    // Slice 16: the three type options use the product's own separator. The dash ban is a
+    // whole-Renderer rule and has its own test at the end of this file.
     assert.match(renderer, /LEC · Lecture/);
     assert.match(renderer, /TUT · Tutorial/);
     assert.match(renderer, /PRA · Practical/);
-    assert.doesNotMatch(renderer, /—|–/);
     assert.match(renderer, /星期/);
     assert.match(renderer, /开始时间/);
     assert.match(renderer, /结束时间/);
@@ -364,4 +386,17 @@ test('UI-SETUP-01 reports formal minimum completion independently of writable mo
 
     assert.equal(setupStateFrom(outcome('ready')).kind, 'complete');
     assert.equal(setupStateFrom(outcome('read-only')).kind, 'complete');
+});
+
+test('UI-SETUP-01 no Renderer module ships an em-dash or an en-dash', () => {
+    const modules = readRendererModules('src/renderer');
+    // A reader that silently walked nothing would report this rule as kept without reading it.
+    assert.ok(modules.length >= 30, `only ${modules.length} Renderer modules were read`);
+    for (const module of modules) {
+        assert.doesNotMatch(
+            module.source,
+            /\u2014|\u2013/,
+            `${module.path} ships a dash the product bans; the regular hyphen is the one to use`,
+        );
+    }
 });
