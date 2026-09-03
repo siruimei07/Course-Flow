@@ -194,7 +194,7 @@ test('the title region exposes three independent window controls outside its dra
     const forcedColors = styles.slice(styles.indexOf('@media (forced-colors: active)'));
     assert.match(
         forcedColors,
-        /\.window-control-button:hover\s*\{[^}]*color:\s*HighlightText;[^}]*background:\s*Highlight;/s,
+        /\.window-control-button:hover:not\(:active\)\s*\{[^}]*color:\s*HighlightText;[^}]*background:\s*Highlight;/s,
     );
 });
 

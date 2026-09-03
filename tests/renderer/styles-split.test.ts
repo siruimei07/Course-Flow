@@ -38,7 +38,7 @@ const BASELINE = 'tests/fixtures/styles-baseline.css';
  */
 const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/tokens.css', 155],
-    ['./styles/shell.css', 401],
+    ['./styles/shell.css', 381],
     ['./styles/today.css', 1056],
     ['./styles/tasks.css', 275],
     ['./styles/term-ended.css', 17],
@@ -55,8 +55,8 @@ const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/settings-lists.css', 10],
     ['./styles/focus.css', 33],
     ['./styles/motion.css', 66],
-    ['./styles/migration.css', 295],
-    ['./styles/media.css', 775],
+    ['./styles/migration.css', 291],
+    ['./styles/media.css', 830],
 ];
 
 test('WP-RF-02 styles.css is nothing but the ordered import list', () => {

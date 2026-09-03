@@ -116,11 +116,6 @@
     transform: scale(0.97);
 }
 
-.navigation-button:hover,
-.settings-button:hover {
-    background: rgba(255, 225, 92, 0.34);
-}
-
 .navigation-button[aria-current="page"] {
     color: #ffffff;
     background: var(--dark);
@@ -162,21 +157,6 @@
 .window-control-button--close {
     color: #fff;
     background: var(--dark);
-}
-
-.window-control-button:hover {
-    background: #fdf6de;
-    box-shadow: 0 .4rem .9rem rgba(70, 62, 38, .17);
-    transform: translateY(-1px);
-}
-
-.window-control-button--minimize:hover {
-    background: var(--morning-deep);
-}
-
-.window-control-button--close:hover {
-    color: #fff;
-    background: #45443d;
 }
 
 .window-control-button:active {

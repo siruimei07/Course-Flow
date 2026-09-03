@@ -171,10 +171,6 @@
     background: #744439;
 }
 
-.migration-destructive-action:hover:not(:disabled) {
-    background: #5d332a;
-}
-
 .migration-status {
     min-height: 1.5rem;
     margin-top: .75rem;
