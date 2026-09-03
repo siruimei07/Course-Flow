@@ -4022,16 +4022,27 @@ h2:focus-visible {
         padding: .8rem;
     }
 
+    /* The wrapped bar reads top to bottom in the order it is written: brand, navigation and
+       the window controls on the first row, the actions on the second. Before this, the nav
+       took the second row while still coming first in the markup, so Tab started below the
+       settings button and ran back up. The window controls stay in the top right corner
+       because that is where the platform puts them, which leaves them reading before the
+       actions; that pair is the one inversion this shape accepts. */
+    .brand-pill {
+        grid-column: 1;
+        grid-row: 1;
+    }
+
     .primary-nav {
-        grid-column: 1 / -1;
-        grid-row: 2;
+        grid-column: 2;
+        grid-row: 1;
         justify-self: stretch;
         justify-content: flex-start;
     }
 
     .topbar-actions {
-        grid-column: 2;
-        grid-row: 1;
+        grid-column: 1 / -1;
+        grid-row: 2;
         justify-self: end;
     }
 
@@ -4111,8 +4122,9 @@ h2:focus-visible {
 }
 
 @media (max-width: 620px) {
+    /* Same two rows as the 820 branch; only the brand loses its wordmark below. */
     .topbar {
-        grid-template-columns: 1fr max-content;
+        grid-template-columns: max-content minmax(0, 1fr) max-content;
     }
 
     .topbar-actions {
@@ -4121,12 +4133,8 @@ h2:focus-visible {
     }
 
     .window-controls {
-        grid-column: 2;
+        grid-column: 3;
         grid-row: 1;
-    }
-
-    .primary-nav {
-        grid-row: 3;
     }
 
     .brand-pill > span:last-child {
