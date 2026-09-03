@@ -1,0 +1,132 @@
+/* The settings dialog: its modal chrome, the category navigation and the scrolling panel. */
+
+.settings-dialog {
+    width: min(940px, calc(100vw - 2rem));
+    max-width: none;
+    height: min(620px, calc(100vh - 2rem));
+    max-height: none;
+    padding: 0;
+    overflow: visible;
+    border: 0;
+    color: var(--ink);
+    background: transparent;
+}
+
+.settings-dialog::backdrop {
+    background: rgba(43, 43, 38, 0.38);
+    backdrop-filter: blur(7px);
+}
+
+.settings-modal {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    border: 1px solid rgba(120, 108, 74, 0.16);
+    border-radius: var(--radius-container);
+    background:
+        radial-gradient(circle at 96% 3%, rgba(255, 222, 84, 0.5), transparent 26rem),
+        rgba(250, 248, 241, 0.98);
+    box-shadow: 0 2rem 6rem rgba(18, 18, 16, 0.3);
+    backdrop-filter: blur(20px) saturate(115%);
+}
+
+.settings-modal-header {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid var(--line);
+    -webkit-app-region: drag;
+    app-region: drag;
+    user-select: none;
+}
+
+.settings-modal-header h1 {
+    font-size: var(--text-lg);
+    letter-spacing: -0.035em;
+}
+
+.settings-modal-actions,
+.settings-modal-actions button,
+.settings-category-nav,
+.settings-category-button {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+}
+
+.settings-modal-actions button,
+.setup-modal-actions button {
+    min-height: 2.5rem;
+    padding: 0.52rem 1.05rem;
+    border: 1px solid rgba(45, 44, 39, 0.22);
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.58);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: color 140ms var(--ease-out), background-color 140ms var(--ease-out),
+        transform 140ms var(--ease-out);
+}
+
+.settings-modal-actions button:active:not(:disabled),
+.setup-modal-actions button:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.settings-modal-body {
+    display: grid;
+    grid-template-columns: 13rem minmax(0, 1fr);
+    gap: 0.85rem;
+    min-height: 0;
+    padding: 0.85rem;
+}
+
+.settings-category-nav {
+    display: grid;
+    gap: 0.25rem;
+    align-content: start;
+    padding: 0.6rem;
+    border-radius: var(--radius-container);
+    background: var(--card);
+}
+
+.settings-category-button {
+    min-height: 2.4rem;
+    padding: 0.55rem 0.85rem;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    text-align: left;
+    transition: color 140ms var(--ease-out), background-color 140ms var(--ease-out),
+        transform 140ms var(--ease-out);
+}
+
+.settings-category-button:active {
+    transform: scale(0.98);
+}
+
+.settings-category-button[aria-current="true"] {
+    color: #ffffff;
+    background: var(--dark);
+}
+
+.settings-panel {
+    min-width: 0;
+    min-height: 0;
+    padding: clamp(1rem, 2.6vw, 1.8rem);
+    overflow-y: auto;
+    border: 1px solid rgba(255, 255, 255, 0.85);
+    border-radius: var(--radius-container);
+    background: var(--card);
+    box-shadow: var(--shadow-card);
+    scrollbar-width: none;
+}
+
+.settings-panel::-webkit-scrollbar {
+    display: none;
+}

@@ -1,0 +1,12 @@
+/* The Files page: its one statement card. The heading size comes from the shared rule in shell.css. */
+
+/* One statement, so the card is bounded to reading width: the heading and its state chip
+   stay one group instead of sitting at opposite ends of the page. */
+.files-state-card {
+    max-width: 52rem;
+}
+
+.files-state-card .empty-state,
+.unavailable-card .empty-state {
+    max-width: 44rem;
+}

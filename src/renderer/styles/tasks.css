@@ -1,0 +1,272 @@
+/* The Tasks page: the filter chips, the PLAN classification groups, the hairline register, the archive
+   fold that the Courses roster also reuses, and the by-Course shares built on the Today term bar. */
+
+/* ---- 任务页 ---------------------------------------------------------------- */
+
+/* The right column stacks two cards; the left card is the page's one long register. */
+.tasks-side {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+}
+
+.task-groups-card,
+.by-course-card,
+.tba-tasks-card {
+    display: grid;
+    gap: 0.55rem;
+    align-content: start;
+}
+
+.by-course-card > .page-context,
+.tba-tasks-card > .section-intro {
+    margin-top: 0;
+}
+
+/* Card titles keep the size every other page's cards use. */
+.workspace-grid--tasks .card-heading > h2 {
+    font-size: 1.04rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.task-filter-summary {
+    font-variant-numeric: tabular-nums;
+}
+
+/* One radio group on its own row, so the card keeps its shape at every width. The checked
+   chip wears the accent (yellow means selected); a dark 1px ring and weight carry the state. */
+.task-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+}
+
+.task-filter-chip {
+    display: inline-flex;
+    gap: 0.4rem;
+    align-items: center;
+    min-height: 2rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid rgba(35, 34, 30, 0.25);
+    border-radius: var(--radius-pill);
+    color: var(--ink-soft);
+    background: rgba(255, 255, 255, 0.72);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: color 120ms var(--ease-out), background-color 120ms var(--ease-out),
+        border-color 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+
+/* The first Course chip stands off from the size chips without drawing a divider. */
+.task-filter-chip:not(.task-filter-chip--course) + .task-filter-chip--course {
+    margin-left: 0.4rem;
+}
+
+.task-filter-chip:active:not([aria-checked="true"]) {
+    transform: scale(0.98);
+}
+
+.task-filter-chip[aria-checked="true"] {
+    border-color: var(--dark);
+    color: var(--ink);
+    background: var(--morning-pale);
+    font-weight: 700;
+}
+
+.task-group {
+    display: grid;
+    gap: 0.1rem;
+}
+
+/* The heading names the state for every row beneath it; severity only recolours the words. */
+.task-group-title {
+    display: flex;
+    gap: 0.45rem;
+    align-items: baseline;
+    padding: 0.45rem 0.2rem 0.15rem;
+    font-size: var(--text-sm);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+}
+
+/* More room above a heading than below it: the gap between groups carries the rhythm. */
+.task-group + .task-group > .task-group-title {
+    padding-top: 0.85rem;
+}
+
+.task-group-title[data-severity="critical"] {
+    color: var(--critical-ink);
+}
+
+.task-group-title[data-severity="warning"] {
+    color: var(--warning-ink);
+}
+
+.task-group-count {
+    color: var(--ink-soft);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.task-rows {
+    list-style: none;
+}
+
+/* Hairline rows, like the Course roster: a register of twenty rows must not be twenty cards. */
+.task-rows > li {
+    position: relative;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+    gap: 0.15rem 0.75rem;
+    align-items: center;
+    padding: 0.5rem 0.35rem 0.5rem 0.2rem;
+    border-radius: var(--radius-piece);
+    transition: background-color 150ms var(--ease-out);
+}
+
+/* The hairline is a pseudo-element, so the rounded hover wash never tapers it at the ends. */
+.task-rows > li + li::before {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    height: 1px;
+    background: var(--line);
+    content: "";
+}
+
+/* Programmatic focus after an action lands on the row: an inset outline, no outer halo. */
+.task-rows > li:focus-visible {
+    outline-offset: -3px;
+    box-shadow: none;
+}
+
+.task-row-text {
+    display: grid;
+    gap: 0.1rem;
+    min-width: 0;
+}
+
+.task-row-text > strong {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+.task-row-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 0.65rem;
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.task-row-deadline {
+    display: grid;
+    justify-items: end;
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.task-group[data-classification="overdue"] .task-row-deadline,
+.task-row-overdue {
+    color: var(--critical-ink);
+}
+
+/* The actions always own the last column, with or without a deadline cell. */
+.task-rows .task-direct-actions {
+    grid-column: -2;
+    padding-top: 0;
+    border-top: 0;
+}
+
+.task-rows .task-direct-actions button {
+    padding: 0.25rem 0.6rem;
+}
+
+.task-filter-empty {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+    padding: 0.5rem 0.2rem;
+    color: var(--ink-soft);
+    font-size: var(--text-sm);
+}
+
+.task-rows-empty {
+    padding: 0.2rem 0;
+    color: var(--ink-soft);
+    font-size: var(--text-sm);
+}
+
+/* Completed and skipped fold under the pending groups; the browser keeps the open state. */
+.task-archive,
+.course-archive {
+    margin-top: 0.3rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--line);
+}
+
+.task-archive > summary,
+.course-archive > summary {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 2rem;
+    padding: 0.4rem 0.35rem 0.4rem 0.2rem;
+    border-radius: var(--radius-piece);
+    color: var(--ink-soft);
+    font-size: var(--text-sm);
+    font-weight: 700;
+    cursor: pointer;
+    list-style: none;
+    transition: background-color 150ms var(--ease-out);
+}
+
+/* A full-width row answers a press with a background step, not a sub-percent scale. */
+.task-archive > summary:active,
+.course-archive > summary:active {
+    background: rgba(255, 255, 255, 0.6);
+}
+
+/* The checked Course chip echoes on the shares: the same dark ring, plus hidden words. */
+.by-course-card .term-tasks-legend {
+    margin-inline: -0.45rem;
+}
+
+.by-course-card .term-tasks-legend > li {
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-pill);
+}
+
+.by-course-card .term-tasks-legend > li[data-selected="true"] {
+    background: var(--morning-pale);
+    box-shadow: inset 0 0 0 1px var(--dark);
+}
+
+/* The code span sets its own weight, so the selected row names it again. */
+.by-course-card .term-tasks-legend > li[data-selected="true"] > span:nth-child(2) {
+    font-weight: 700;
+}
+
+.term-tasks-bar > span[data-selected="true"]::after {
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 0 2px var(--dark);
+    content: "";
+}
+
+.tba-tasks-card .task-rows > li {
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+}

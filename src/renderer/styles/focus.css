@@ -1,0 +1,35 @@
+/* The focus ring: the base :focus-visible outline, the white ring the dark surfaces take, the radius
+   on a focused heading, and the inset ring for surfaces that receive focus programmatically. */
+
+:focus-visible {
+    outline: 3px solid #111111;
+    outline-offset: 3px;
+    box-shadow: 0 0 0 6px #ffe36e;
+}
+
+.navigation-button[aria-current="page"]:focus-visible,
+.settings-category-button[aria-current="true"]:focus-visible,
+.task-undo-toast :focus-visible,
+.next-step-card :focus-visible,
+.dark-card :focus-visible,
+.setup-current-layer :focus-visible {
+    outline-color: #ffffff;
+    box-shadow: 0 0 0 6px #f4d44f;
+}
+
+h1:focus-visible,
+h2:focus-visible {
+    border-radius: var(--radius-piece);
+}
+
+/* Programmatic focus lands on these after an action, so they take the inset outline the
+   Task rows take rather than a page-wide halo. */
+.settings-panel:focus-visible,
+.setup-workspace:focus-visible,
+.checkpoint-message:focus-visible,
+.form-status:focus-visible,
+.form-footer p:focus-visible,
+.field-error:focus-visible {
+    outline-offset: -3px;
+    box-shadow: none;
+}

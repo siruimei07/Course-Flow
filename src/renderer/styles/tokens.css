@@ -1,0 +1,157 @@
+/* The :root design tokens, the document reset and element defaults, the painted page canvas on body,
+   and the .visually-hidden and .skip-link utilities. Course accent tokens live in today.css. */
+:root {
+    color: #201e18;
+    background: #eae7de;
+    color-scheme: light;
+    font-family: Inter, "Segoe UI Variable", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    --ink: #201e18;
+    --ink-soft: #5c584a;
+    --line: rgba(74, 66, 41, 0.12);
+    --card: rgba(255, 253, 246, 0.72);
+    --card-strong: rgba(255, 254, 250, 0.88);
+    --card-inner: rgba(255, 251, 240, 0.66);
+    --morning: #f5d457;
+    --morning-deep: #eec53d;
+    --morning-pale: #fbeeb5;
+    --dark: #303030;
+    --elevated: #323232;
+    /* Three corner-radius tiers and nothing else for surfaces: container, small piece, pill.
+       0, 50% and inherit stay available because they are shapes, not corner radii.
+       Chart marks are not surfaces: a bar's data end takes the separate 4px mark radius
+       (square at the baseline), so it never borrows a surface tier. */
+    --radius-container: 1.25rem;
+    --radius-piece: 0.75rem;
+    --radius-pill: 999px;
+    --radius-mark: 4px;
+    /* Fixed rem steps: product UI is read at a stable DPI, so type never goes fluid. */
+    --text-xs: 0.75rem;
+    --text-sm: 0.86rem;
+    --text-base: 1rem;
+    --text-md: 1.05rem;
+    --text-lg: 1.35rem;
+    --text-h1: 2.25rem;
+    --text-stat: 2rem;
+    /* State colours are their own vocabulary; --morning stays the accent for
+       "selected" and "current" and never means overdue. */
+    --critical-ink: #8c2f17;
+    --critical-surface: #f8ddd4;
+    --warning-ink: #6f4a06;
+    --warning-surface: #fbe9c4;
+    --success-ink: #1f5b39;
+    --success-surface: #d7ecdf;
+    --neutral-ink: #46422f;
+    --neutral-surface: #ece8da;
+    --shadow: 0 1.6rem 3.6rem rgba(94, 83, 52, 0.16);
+    --shadow-card: 0 1rem 2.4rem rgba(96, 86, 58, 0.08), 0 0.15rem 0.5rem rgba(96, 86, 58, 0.05);
+    --ease-out: cubic-bezier(0.22, 0.7, 0.3, 1);
+    --titlebar-height: 4.5rem;
+    --titlebar-surface: rgba(250, 248, 240, .86);
+    --titlebar-border: rgba(74, 66, 41, .1);
+    --titlebar-safe-inset: clamp(.75rem, 2.4vw, 2.25rem);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+::selection {
+    color: #201e18;
+    background: var(--morning-pale);
+}
+
+:root {
+    caret-color: var(--ink);
+}
+
+html {
+    min-width: 320px;
+    height: 100%;
+}
+
+body {
+    min-width: 320px;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    color: var(--ink);
+    background:
+        radial-gradient(circle at 91% 7%, rgba(255, 221, 82, 0.78) 0, rgba(255, 231, 132, 0.4) 22rem,
+            transparent 46rem),
+        radial-gradient(circle at 4% 96%, rgba(255, 255, 255, 0.55) 0, transparent 30rem),
+        linear-gradient(132deg, #e8e5dc 0%, #f4efe0 55%, #ffeda6 100%);
+}
+
+button,
+input,
+select {
+    color: inherit;
+    font: inherit;
+}
+
+button,
+a {
+    -webkit-tap-highlight-color: transparent;
+}
+
+button {
+    cursor: pointer;
+}
+
+button:disabled {
+    cursor: not-allowed;
+}
+
+h1,
+h2,
+h3,
+h4,
+p,
+ol,
+ul,
+dl,
+dd {
+    margin: 0;
+}
+
+ol,
+ul {
+    padding: 0;
+}
+
+#root {
+    height: 100%;
+    min-height: 0;
+}
+
+.visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    margin: -1px;
+    padding: 0;
+    border: 0;
+    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
+    white-space: nowrap;
+}
+
+.skip-link {
+    position: fixed;
+    z-index: 100;
+    top: 0.75rem;
+    left: 0.75rem;
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-pill);
+    color: #ffffff;
+    background: var(--dark);
+    transform: translateY(-180%);
+}
+
+.skip-link:focus {
+    transform: translateY(0);
+}

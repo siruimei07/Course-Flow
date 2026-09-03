@@ -1,0 +1,90 @@
+/* The Calendar week header: the segmented control that moves the week, and the facts beside it. */
+
+.calendar-week-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    align-items: center;
+}
+
+/* One control, three commands: the group carries the pill and the segments stay square
+   inside it, so no segment background can spill past a rounded end. */
+.segmented-control {
+    display: inline-flex;
+    border: 1px solid rgba(35, 34, 30, 0.25);
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.segmented-action {
+    min-height: 2rem;
+    padding: 0.3rem 0.85rem;
+    border: 0;
+    border-left: 1px solid rgba(35, 34, 30, 0.18);
+    border-radius: 0;
+    color: var(--ink-soft);
+    background: transparent;
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    transition: color 120ms var(--ease-out), transform 120ms var(--ease-out);
+}
+
+.segmented-action:first-child {
+    padding-left: 1rem;
+    border-left: 0;
+}
+
+.segmented-action:last-child {
+    padding-right: 1rem;
+}
+
+.segmented-action:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.segmented-action:disabled {
+    color: rgba(92, 88, 74, 0.5);
+}
+
+/* Week facts sit straight on the canvas beside the control, numbers first. */
+.calendar-week-facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 0.75rem;
+    align-items: center;
+    justify-content: flex-end;
+}
+
+.calendar-week-range {
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+    font-variant-numeric: tabular-nums;
+}
+
+.calendar-week-load {
+    font-size: var(--text-sm);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.calendar-conflict-chip {
+    cursor: pointer;
+    transition: transform 120ms var(--ease-out);
+}
+
+.calendar-conflict-chip:active {
+    transform: scale(0.98);
+}
+
+.calendar-week-offset {
+    min-width: 4.5rem;
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-align: center;
+}
+
+.calendar-week-problem {
+    margin-top: 0.4rem;
+}

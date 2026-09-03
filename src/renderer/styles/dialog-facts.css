@@ -1,0 +1,35 @@
+/* The two-column fact grid the setup progress panel and the settings and management panels share.
+   It is not .fact-list, which is a different component and lives in components.css. */
+
+.setup-fact-list,
+.settings-fact-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-top: 1rem;
+}
+
+.setup-fact-list > div,
+.settings-fact-list > div {
+    min-width: 0;
+    padding: 0.6rem;
+    border-radius: var(--radius-piece);
+    background: var(--card-inner);
+}
+
+/* The label names the fact and the value carries it, so the value is the larger step and
+   its digits are tabular like every other number in the product. */
+.setup-fact-list dt,
+.settings-fact-list dt {
+    color: var(--ink-soft);
+    font-size: var(--text-xs);
+}
+
+.setup-fact-list dd,
+.settings-fact-list dd {
+    margin-top: 0.2rem;
+    overflow-wrap: anywhere;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}

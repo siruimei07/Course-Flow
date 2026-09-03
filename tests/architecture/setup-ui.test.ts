@@ -10,6 +10,7 @@ import test from 'node:test';
 import { setupStateFrom } from '../../src/renderer/setup-state';
 import { BOOTSTRAP_PROTOCOL_VERSION } from '../../src/shared/bootstrap-contract';
 import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-contract';
+import { readRendererStyles } from '../renderer/renderer-styles.fixture';
 
 const repositoryRoot = process.cwd();
 
@@ -33,7 +34,7 @@ const managementDialog = readFileSync(
 );
 const pages = readModuleFamily('src/renderer/workspace-pages.tsx', 'src/renderer/pages');
 const renderer = [main, app, setupDialog, managementDialog, pages].join('\n');
-const styles = readFileSync(path.join(repositoryRoot, 'src/renderer/styles.css'), 'utf8');
+const styles = readRendererStyles();
 const compactStyles = styles.slice(
     styles.indexOf('@media (max-width: 620px)'),
     styles.indexOf('@media (prefers-reduced-motion: reduce)'),

@@ -3,8 +3,6 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import test from 'node:test';
 
 import { createElement } from 'react';
@@ -16,6 +14,7 @@ import { BOOTSTRAP_PROTOCOL_VERSION } from '../../src/shared/bootstrap-contract'
 import type { WorkspaceSetupOutcome } from '../../src/shared/workspace-setup-contract';
 import type { SetupProjection } from '../../src/shared/workspace-term-contract';
 import {readyLifecycle} from '../shared/workspace-lifecycle-fixture';
+import { readRendererStyles } from './renderer-styles.fixture';
 
 const setup: SetupProjection = {
     workspaceRevision: '0',
@@ -38,7 +37,7 @@ const setup: SetupProjection = {
 };
 
 const noop = (): void => {};
-const styles = readFileSync(path.join(process.cwd(), 'src/renderer/styles.css'), 'utf8');
+const styles = readRendererStyles();
 
 const taskActions: TaskActionPresentation = {
     writable: true,

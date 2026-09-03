@@ -1,0 +1,12 @@
+/* Two settings rules the cascade keeps after the Calendar week header: the section button spacing
+   and the monospace code inside a fact grid. */
+
+.settings-section > button {
+    margin-top: 1.1rem;
+}
+
+.settings-fact-list code {
+    font-family: "Cascadia Mono", Consolas, "SFMono-Regular", ui-monospace, monospace;
+    font-size: var(--text-xs);
+    overflow-wrap: anywhere;
+}

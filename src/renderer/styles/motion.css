@@ -1,0 +1,67 @@
+/* The four keyframes and the surfaces that run them. media.css turns them off for reduced motion. */
+
+@keyframes courseflow-page-enter {
+    from {
+        opacity: 0;
+        transform: translateY(0.55rem);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes courseflow-rise {
+    from {
+        opacity: 0;
+        transform: translateY(0.7rem);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes courseflow-dialog-pop {
+    from {
+        opacity: 0;
+        transform: translateY(0.5rem) scale(0.975);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+@keyframes courseflow-backdrop-fade {
+    from {
+        opacity: 0;
+    }
+
+    to {
+        opacity: 1;
+    }
+}
+
+.workspace-page {
+    animation: courseflow-page-enter 260ms var(--ease-out) both;
+}
+
+.startup-surface .status-card {
+    animation: courseflow-rise 300ms var(--ease-out) both;
+}
+
+.setup-dialog[open] .setup-modal,
+.settings-dialog[open] .settings-modal,
+.migration-dialog[open] .migration-dialog-surface {
+    animation: courseflow-dialog-pop 240ms var(--ease-out) both;
+}
+
+.setup-dialog[open]::backdrop,
+.settings-dialog[open]::backdrop,
+.migration-dialog[open]::backdrop {
+    animation: courseflow-backdrop-fade 200ms ease-out both;
+}

@@ -1,0 +1,19 @@
+/* The ended-Term card. Only the Today page renders it, but the cascade keeps it here, between the
+   Tasks page and the shared components. */
+
+.term-ended-card {
+    max-width: 48rem;
+}
+
+.term-ended-card > p[role="status"] {
+    max-width: 44rem;
+    margin-top: 0.5rem;
+    color: #d4d5d0;
+}
+
+.term-ended-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 0.9rem;
+}
