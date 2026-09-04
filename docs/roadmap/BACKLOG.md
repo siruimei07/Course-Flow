@@ -553,6 +553,25 @@ body {
 - 本行关闭 `BUG-P1-01`，不关闭整个 `WP-UI-01` 或 `WP-GA-01`；
   `BUG-P1-03` 仍缺稳定修复，本轮偶然全绿不能替代该项根因处理。macOS 与人工矩阵未重跑。
 
+`WP-UI-01` Windows 验证阻断 / `BUG-P1-03` 修复证据（2026-09-04，本提交）：
+
+- 首轮 `taskkill` 原先可耗尽整个清理预算，后续进程发现因此立即超时；旧 Windows 1 秒预算
+  也不足以容纳已复现的慢 helper。默认清理预算调整为 Windows 5 秒，其他平台仍为 1 秒。
+- 首轮 live-root `taskkill` 最多使用剩余预算一半，为精确后代发现与回退留出时间；
+  所有清理步骤仍共用一个绝对 deadline，20 秒产品执行 timeout 保持不变。
+- 实际进程树集成用例复用生产默认清理预算；新增 1.5 秒 slow helper 与显式 1.2 秒 hung helper。
+- 旧 1 秒预算 slow 用例 RED：`taskkill timed out; descendant fallback failed: process discovery timed out`。
+- 修复后定向 7/7 PASS；成功用例在返回时检查根/后代 PID 已退出，且要求明确的成功清理诊断。
+- hung helper 到期失败且 helper 自身退出，不虚报清理成功；原 constrained/race/假成功断言保留。
+- Windows / Node `v24.19.0` / pnpm `11.19.0`：`pnpm typecheck` PASS；
+  `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 744 = 743 通过 / 0 失败 / 1 跳过，54813.8187 ms。
+- 当前 runner 对 clean `a24aaed` 制品的 `pnpm smoke:packaged` PASS；该源码的 package/smoke
+  已在第一项修复提交后通过，并已推送 `origin/main`。本提交的 clean package/smoke 在提交后执行。
+- 红绿日志：仓库 `_scratch/bug-p1-03-red-budget.log`、`_scratch/bug-p1-03-green-targeted.log`；
+  全量日志：工作区 `_scratch/bug-p1-03-full-test.log`。`git diff --check` 和新增行格式检查 PASS。
+- 本行关闭 `BUG-P1-03`；`BUG-P1-02`、`BUG-DOC-01` 与 macOS/G1-G7 证据缺口仍开放，
+  不据此关闭 `WP-UI-01`、两个 RF 验证包或 `WP-GA-01`。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

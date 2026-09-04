@@ -1,3 +1,7 @@
+/**
+ * @file Verifies packaged smoke deadlines and exact process-tree cleanup.
+ */
+
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -64,15 +68,41 @@ async function cleanExactFixtureProcesses(pids: number[]): Promise<void> {
   assert.deepEqual(await waitForResidue(pids, 1_000), [], 'fixture cleanup must remove only its recorded processes');
 }
 
-for (const parentMode of ['live', 'exit'] as const) {
-  const scenario = parentMode === 'live' ? 'while the parent is live' : 'after the parent exits';
+for (const parentMode of ['live', 'exit', 'slow-taskkill', 'hung-taskkill'] as const) {
+  const fakeTaskkill = parentMode === 'slow-taskkill' || parentMode === 'hung-taskkill';
+  const scenario = parentMode === 'live'
+      ? 'while the parent is live'
+      : parentMode === 'exit' ? 'after the parent exits' : `with ${parentMode}`;
 
-  test(`packaged smoke timeout is bounded and removes an inherited-stderr descendant ${scenario}`, async () => {
+  test(`packaged smoke timeout is bounded and verifies inherited-stderr cleanup ${scenario}`, {
+      skip: fakeTaskkill && process.platform !== 'win32',
+  }, async () => {
     const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'courseflow-smoke-timeout-'));
     const descendantPath = path.join(fixtureRoot, 'descendant.mjs');
     const parentPath = path.join(fixtureRoot, 'parent.mjs');
     const harnessPath = path.join(fixtureRoot, 'harness.mjs');
     const pidPath = path.join(fixtureRoot, 'pids.json');
+    const helperPidPath = path.join(fixtureRoot, 'helper-pids.txt');
+    const fakeTaskkillPreloadPath = path.join(fixtureRoot, 'fake-taskkill.cjs');
+
+    if (fakeTaskkill) {
+        const helperDelay = parentMode === 'hung-taskkill' ? 'Infinity' : '1_500';
+        writeFileSync(fakeTaskkillPreloadPath, [
+            'const fs = require(\'node:fs\');',
+            'const path = require(\'node:path\');',
+            'if (path.basename(process.execPath).toLowerCase() === \'taskkill.exe\') {',
+            `    fs.appendFileSync(${JSON.stringify(helperPidPath)}, process.pid + '\\n');`,
+            `    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${helperDelay});`,
+            `    const pids = JSON.parse(fs.readFileSync(${JSON.stringify(pidPath)}, 'utf8'));`,
+            '    for (const pid of pids.reverse()) {',
+            '        process.kill(pid, \'SIGKILL\');',
+            '    }',
+            '    process.exit(0);',
+            '}',
+            '',
+        ].join('\n'));
+        linkSync(process.execPath, path.join(fixtureRoot, 'taskkill.exe'));
+    }
 
     writeFileSync(descendantPath, "setInterval(() => {}, 1_000);\n");
     writeFileSync(
@@ -97,6 +127,14 @@ for (const parentMode of ['live', 'exit'] as const) {
       harnessPath,
       [
         `import { runBoundedProcess } from ${JSON.stringify(runnerUrl)};`,
+        'import { readFileSync } from \'node:fs\';',
+        `const isRunning = ${isRunning.toString()};`,
+        ...(fakeTaskkill ? [
+            `process.env.PATH = ${JSON.stringify(`${fixtureRoot}${path.delimiter}`)} + process.env.PATH;`,
+            `process.env.NODE_OPTIONS = ${JSON.stringify(
+                `--require=${fakeTaskkillPreloadPath.split(path.sep).join('/')}`,
+            )};`,
+        ] : []),
         'const started = performance.now();',
         'let message;',
         'try {',
@@ -108,13 +146,16 @@ for (const parentMode of ['live', 'exit'] as const) {
         `      ${JSON.stringify(pidPath)},`,
         `      ${JSON.stringify(parentMode)},`,
         '    ],',
-        '    { timeoutMilliseconds: 100, terminationGraceMilliseconds: 1_200 },',
+        parentMode === 'hung-taskkill'
+            ? '    { timeoutMilliseconds: 100, terminationGraceMilliseconds: 1_200 },'
+            : '    { timeoutMilliseconds: 100 },',
         '  );',
         "  message = 'process unexpectedly completed';",
         '} catch (error) {',
         '  message = error instanceof Error ? error.message : String(error);',
         '}',
-        'process.stdout.write(JSON.stringify({ elapsedMilliseconds: performance.now() - started, message }));',
+        `const residue = JSON.parse(readFileSync(${JSON.stringify(pidPath)}, 'utf8')).filter(isRunning);`,
+        'process.stdout.write(JSON.stringify({ elapsedMilliseconds: performance.now() - started, message, residue }));',
         '',
       ].join('\n'),
     );
@@ -122,22 +163,34 @@ for (const parentMode of ['live', 'exit'] as const) {
     try {
       const execution = spawnSync(process.execPath, [harnessPath], {
         encoding: 'utf8',
-        timeout: 3_000,
+        timeout: process.platform === 'win32' ? 7_500 : 3_000,
         windowsHide: true,
       });
 
       assert.equal(execution.status, 0, execution.stderr || execution.error?.message);
-      const evidence = JSON.parse(execution.stdout) as { elapsedMilliseconds: number; message: string };
-      assert.match(evidence.message, /timed out after 100ms/);
-      assert.ok(evidence.elapsedMilliseconds < 2_000, `timeout settled after ${evidence.elapsedMilliseconds}ms`);
+      const evidence = JSON.parse(execution.stdout) as {
+          elapsedMilliseconds: number;
+          message: string;
+          residue: number[];
+      };
+      const elapsedLimit = process.platform === 'win32' && parentMode !== 'hung-taskkill' ? 6_000 : 2_000;
+      assert.ok(evidence.elapsedMilliseconds < elapsedLimit, `timeout settled after ${evidence.elapsedMilliseconds}ms`);
 
       const pids = fixturePids(pidPath);
       assert.equal(pids.length, 2, 'fixture must record its parent and inherited-stderr descendant');
-      assert.deepEqual(
-        await waitForResidue(pids, 500),
-        [],
-        `${evidence.message}; root PID ${pids[0]}, descendant PID ${pids[1]}`,
-      );
+      if (parentMode === 'hung-taskkill') {
+          assert.match(evidence.message, /timed out after 100ms; process tree termination failed: taskkill timed out/);
+          assert.deepEqual(evidence.residue, pids, 'hung helpers must not manufacture successful cleanup');
+          const helperPids = readFileSync(helperPidPath, 'utf8').trim().split(/\r?\n/).map(Number);
+          assert.deepEqual(await waitForResidue(helperPids, 500), [], 'timed-out helper commands must also exit');
+      } else {
+          assert.match(evidence.message, /timed out after 100ms; process tree was terminated/);
+          assert.deepEqual(evidence.residue, [], `${evidence.message}; PIDs ${pids.join(', ')}`);
+          assert.deepEqual(pids.filter(isRunning), [], 'all recorded processes must have exited before return');
+          if (parentMode === 'slow-taskkill') {
+              assert.ok(evidence.elapsedMilliseconds >= 1_600, 'the slow helper must execute its full delay');
+          }
+      }
     } finally {
       const pids = fixturePids(pidPath);
       await cleanExactFixtureProcesses(pids);

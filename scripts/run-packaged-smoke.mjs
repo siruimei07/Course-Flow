@@ -10,7 +10,8 @@ import { pathToFileURL } from 'node:url';
 
 const outRoot = path.resolve('out');
 const timeoutMilliseconds = 20_000;
-const terminationGraceMilliseconds = 1_000;
+// Windows helper startup and process discovery can exceed one second under test-suite load.
+const terminationGraceMilliseconds = process.platform === 'win32' ? 5_000 : 1_000;
 
 function expectedWrapper(relativePath) {
   if (process.platform === 'win32' && process.arch === 'x64') {
@@ -304,7 +305,9 @@ async function terminateProcessTree(child, graceDeadline, rootStartedAt, observe
       return terminateExitedRoot(exitEvidence.discovery, graceDeadline);
     }
 
-    const initialFailure = await killWindowsProcessTrees([child.pid], graceDeadline);
+    // Preserve cleanup time for exact descendant discovery if the root-tree command stalls.
+    const initialDeadline = Date.now() + Math.floor(remainingGrace(graceDeadline) / 2);
+    const initialFailure = await killWindowsProcessTrees([child.pid], initialDeadline);
     if (!initialFailure) {
       return undefined;
     }
@@ -349,7 +352,11 @@ async function terminateProcessTree(child, graceDeadline, rootStartedAt, observe
 export function runBoundedProcess(
   command,
   args,
-  { timeoutMilliseconds: processTimeout, terminationGraceMilliseconds: terminationGrace, description = 'process' },
+  {
+      timeoutMilliseconds: processTimeout,
+      terminationGraceMilliseconds: terminationGrace = terminationGraceMilliseconds,
+      description = 'process',
+  },
 ) {
   return new Promise((resolve, reject) => {
     const rootStartedAt = Date.now();
