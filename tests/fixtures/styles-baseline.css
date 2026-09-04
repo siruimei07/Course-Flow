@@ -1294,11 +1294,11 @@ ul {
     visibility: hidden;
 }
 
-/* 0.05rem a side keeps a whole-hour label inside the 37px column at the 1280 tier:
-   35.81px against 37px, while preserving the --text-xs label and its pill. */
+/* Whole-hour labels need the full 37px column at the 1280 tier with macOS fonts.
+   Keep vertical padding and the --text-xs label without adding horizontal width. */
 .week-load-peak {
     align-self: end;
-    padding: 0.1rem 0.05rem;
+    padding: 0.1rem 0;
     border-radius: var(--radius-pill);
     color: #ffffff;
     background: var(--dark);

@@ -597,6 +597,32 @@ body {
 - 本行关闭 `BUG-P1-02`，已登记四项缺陷均有独立修复记录；macOS/G1-G7 证据仍待补齐，
   不据此关闭 `WP-UI-01`、两个 RF 验证包或 `WP-GA-01`。
 
+macOS 自动回归修复证据（2026-09-04，本提交）：
+
+- 基线为 clean `1350ec22865c3bf2093ef4bc59e4b1bccfcac458`；macOS arm64 `26.5.2` / build `25F84`，
+  Node `v24.19.0` / pnpm `11.19.0`。使用 workspace runtime 临时补齐 PATH，未更改依赖或 lockfile。
+- 首轮 `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 744 = 732 通过 / 6 失败 / 6 跳过。
+  六项失败均有定向 RED，未沿用 Windows 的通过结论。
+- 恢复夹具原先把 `/var` 临时目录直接当作 canonicalPath，重启后与 `/private/var` 不同；
+  改为复用正式 `resolveDirectoryCapability` 构造 accepted destination，生产恢复比较保持不变。
+  `restore-session` 全文件复验为 88/88，通过重启 preview/receipt 与连续恢复的原失败用例。
+- CSS 分区测试改为同时识别 LF/CRLF，固定分区和基线逐字节相等断言保持不变。
+  周负载标签在 macOS 字体下为 38.015625px，超过 1280 档的 37.015625px 列宽；
+  只移除原有水平 padding，保留字号、标签与三档无溢出断言，同步冻结样式基线。
+  两份 renderer 定向测试共 6/6 通过，浏览器实际执行 1540 / 1280 / 960 三档。
+- POSIX runner 原先在 SIGKILL 投递后立即报告清理成功；现在复用既有退出等待函数，
+  在原绝对 deadline 内以负 PID 确认整个进程组消失。Windows 分支与所有成功断言保持不变。
+  live/parent-exited 定向测试为 2/2 通过，另有 5 项 Windows 专属跳过。
+- 最终 `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 744 = 738 通过 / 0 失败 / 6 跳过，
+  耗时 16968.657167 ms；跳过集合只有 Windows 路径语法 1 项和 Windows 清理 5 项。
+  `pnpm typecheck`、`git diff --check` 通过；独立窄审查未发现阻断问题。
+- 原始日志保存在本机本任务 `macos-verification/` 取证目录：`test.log`、`test-final.log`、
+  `renderer-red.log`、`renderer-green.log`、`restore-tests-fixed.log`、`typecheck-final.log`。
+- 本机未能定位仓库外 Stop Guard、FECS 与前端三件套 skill 原文；按 AGENTS.md 已给出的边界执行，
+  不声称已读取原文或完成原文逐条合规审查。改动仅涉及已复现故障的 JS/TS/CSS 与本台账。
+- 本行仅登记自动回归修复；最终 clean source 的 package/smoke 与真实 packaged 交互另行记录。
+  `WP-UI-01`、两个 RF 验证包与 `WP-GA-01` 状态不变，macOS 人工矩阵和 G1–G7 不据此关闭。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

@@ -23,6 +23,7 @@ import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 
 import {CURRENT_SCHEMA_LEVEL} from '../../src/data/schema';
+import {resolveDirectoryCapability} from '../../src/platform/backup-destination';
 import {canonicalJson} from '../../src/shared/canonical-json';
 import {
     initializeWorkspaceData,
@@ -165,7 +166,9 @@ function createDirectory(prefix: string): string {
 
 async function createFixture(t: test.TestContext): Promise<RestoreFixture> {
     const dataSlotsRoot = createDirectory('courseflow-restore-data-');
-    const destination = createDirectory('courseflow-restore-backup-');
+    const destination = resolveDirectoryCapability(
+        createDirectory('courseflow-restore-backup-'),
+    ).canonicalPath;
     const activityControlRoot = createDirectory('courseflow-restore-control-');
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const stores = [store];

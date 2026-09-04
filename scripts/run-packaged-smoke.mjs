@@ -335,7 +335,8 @@ async function terminateProcessTree(child, graceDeadline, rootStartedAt, observe
 
   try {
     process.kill(-child.pid, 'SIGKILL');
-    return undefined;
+    const remainingProcessGroup = await waitForProcessExit([-child.pid], graceDeadline);
+    return remainingProcessGroup.length === 0 ? undefined : 'process group remains after SIGKILL';
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

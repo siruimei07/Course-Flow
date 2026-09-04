@@ -25,8 +25,8 @@ import {
  * the stylesheet diff showing up in this fixture for a reviewer to read.
  *
  * It stays a committed copy rather than `git show <commit>:src/renderer/styles.css`. The repository
- * is checked out with core.autocrlf, so the blob is LF while both this fixture and the split files
- * arrive CRLF, and a blob read would compare two different encodings of the same text. A committed
+ * may be checked out with core.autocrlf, so this fixture and the split files use the same checkout
+ * line endings, while a blob read could compare two different encodings of the same text. A committed
  * file also keeps the suite hermetic: no child process, no git binary, no pinned hash that a later
  * rebase invalidates.
  */
@@ -88,7 +88,7 @@ test('WP-RF-02 every split file opens with a comment naming its scope', () => {
 
 test('WP-RF-02 the split keeps the boundaries it was cut on', () => {
     const measured = readRendererStyleFiles().map((file) => {
-        const lines = file.payload.split('\r\n');
+        const lines = file.payload.split(/\r?\n/);
         assert.equal(lines.pop(), '', `${file.importPath} does not end with a line break`);
         return [file.importPath, lines.length] as const;
     });
