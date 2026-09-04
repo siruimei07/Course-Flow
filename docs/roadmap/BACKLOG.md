@@ -651,6 +651,28 @@ macOS clean package 验证与剩余验收项（2026-09-04，本提交）：
 - `WP-UI-01` 仍为 `In Progress`，`WP-RF-01` / `WP-RF-02` 仍为 `Verification`，
   `WP-GA-01` 仍为 `—`；新源码的 Windows 复验与同源双平台人工矩阵也未由本轮覆盖。
 
+macOS 原生交互复验与设置悬停修复（2026-09-04，本提交）：
+
+- 屏幕录制权限生效后，以原生 Computer Use 操作上行 clean `c2e56a0` 的 packaged app；
+  延续独立 appData，创建 `macOS 验收学期`（2026-09-01 至 2026-12-18、America/Toronto）、
+  `MAC101`、周五 09:00–12:00 的 TBA 地点课节，以及一个 date-only 今日任务和一个 TBA 任务。
+  创建学期后立即只填课程代码/名称即可保存，教学范围继承正确；未向生产数据根写测试数据。
+- Today、Courses、Calendar、Tasks、Files 和设置/管理均实际打开；完成今日任务后及时撤销，
+  pending/completed 计数与课程进度随正式结果同步。大任务筛选显示真实无匹配状态，清除后恢复；
+  Files 显式说明当前资料库不可用，没有伪造内容。
+- 原生窗口从默认 1280×800 缩至最小 960×640；Calendar 末项完整可达，外壳与导航保持固定。
+  方向键导航、skip link、PageDown/Home/End、滚轮事件、管理表单 Tab 到底部保存按钮和焦点循环、
+  Escape 退出并返回入口均已操作；自绘最大化/还原、最小化后经全局 Window 菜单恢复及关闭已操作。
+  这些是 agent 原生交互观察，不替代本包要求的真人视觉、物理鼠标/触控板或双平台验收声明。
+- 真实设置页面复现：选中“数据与备份”或“关于”后，指针停留时 hover 规则覆盖深色背景，
+  白字落在浅黄色背景上。只将浅色 hover 限定为非当前分类，同步既有冻结 CSS 基线；
+  当前分类继续使用既有深色背景与白字，非当前分类保持原反馈，未改变布局、行为或依赖。
+- 最终 `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 744 = 738 通过 / 0 失败 / 6 Windows 专属跳过，
+  耗时 17112.301542 ms；`pnpm typecheck`、`git diff --check` 通过。日志为本任务取证目录的
+  `test-native-fix-final.log` 与 `typecheck-hover-final.log`；CSS 分区与冻结基线逐字节相等检查仍通过。
+- 新修复的 clean package/smoke、原生悬停复验与同根重启结果在后续行登记；不将旧制品的观察
+  写成新制品已通过。系统辅助设置尚待获准临时切换，G1–G7 和现有工作包生命周期保持不变。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

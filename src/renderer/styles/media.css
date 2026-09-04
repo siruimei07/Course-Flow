@@ -331,7 +331,7 @@
 @media (hover: hover) and (pointer: fine) {
     .settings-modal-actions button:hover:not(:disabled),
     .setup-modal-actions button:hover:not(:disabled),
-    .settings-category-button:hover {
+    .settings-category-button:hover:not([aria-current="true"]) {
         background: rgba(255, 225, 92, 0.34);
     }
 
