@@ -140,6 +140,9 @@ ul {
     white-space: nowrap;
 }
 
+/* No :active on purpose. Activating the link moves focus to #workspace-content, which drops :focus
+   and lifts the link back out of view in the same frame, so a press step would paint on a control
+   that is already leaving; :focus, "it appeared", is the only state a reader can perceive here. */
 .skip-link {
     position: fixed;
     z-index: 100;

@@ -30,10 +30,9 @@
     letter-spacing: -0.02em;
 }
 
-/* Every count in the grid restates a filtered number; the digits must not jitter. */
-.task-filter-summary,
-.by-course-card > .page-context,
-.tba-tasks-card .page-context {
+/* The live filter count is a .page-context, so shell.css already keeps its digits one width; the
+   rule stays beside the chips it counts, where the number changes. */
+.task-filter-summary {
     font-variant-numeric: tabular-nums;
 }
 

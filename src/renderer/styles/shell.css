@@ -305,6 +305,12 @@
     line-height: 1.55;
 }
 
+/* Every page's context line carries a date range or a count, so its digits keep one width. The
+   intro and the empty-state reason are prose and keep proportional figures. */
+.page-context {
+    font-variant-numeric: tabular-nums;
+}
+
 .eyebrow {
     color: #575036;
     font-size: 0.75rem;

@@ -751,9 +751,11 @@
     visibility: hidden;
 }
 
+/* 0.3rem a side is what fits a whole-hour label at --text-xs inside the 44.58px column of the
+   1540 tier: 43.81px against 44.58px, where 0.4rem made the chip 47px. */
 .week-load-peak {
     align-self: end;
-    padding: 0.1rem 0.4rem;
+    padding: 0.1rem 0.3rem;
     border-radius: var(--radius-pill);
     color: #ffffff;
     background: var(--dark);

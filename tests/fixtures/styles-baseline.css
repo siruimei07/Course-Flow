@@ -138,6 +138,9 @@ ul {
     white-space: nowrap;
 }
 
+/* No :active on purpose. Activating the link moves focus to #workspace-content, which drops :focus
+   and lifts the link back out of view in the same frame, so a press step would paint on a control
+   that is already leaving; :focus, "it appeared", is the only state a reader can perceive here. */
 .skip-link {
     position: fixed;
     z-index: 100;
@@ -455,6 +458,12 @@ ul {
     color: var(--ink-soft);
     font-size: var(--text-sm);
     line-height: 1.55;
+}
+
+/* Every page's context line carries a date range or a count, so its digits keep one width. The
+   intro and the empty-state reason are prose and keep proportional figures. */
+.page-context {
+    font-variant-numeric: tabular-nums;
 }
 
 .eyebrow {
@@ -1285,9 +1294,11 @@ ul {
     visibility: hidden;
 }
 
+/* 0.3rem a side is what fits a whole-hour label at --text-xs inside the 44.58px column of the
+   1540 tier: 43.81px against 44.58px, where 0.4rem made the chip 47px. */
 .week-load-peak {
     align-self: end;
-    padding: 0.1rem 0.4rem;
+    padding: 0.1rem 0.3rem;
     border-radius: var(--radius-pill);
     color: #ffffff;
     background: var(--dark);
@@ -1620,10 +1631,9 @@ ul {
     letter-spacing: -0.02em;
 }
 
-/* Every count in the grid restates a filtered number; the digits must not jitter. */
-.task-filter-summary,
-.by-course-card > .page-context,
-.tba-tasks-card .page-context {
+/* The live filter count is a .page-context, so shell.css already keeps its digits one width; the
+   rule stays beside the chips it counts, where the number changes. */
+.task-filter-summary {
     font-variant-numeric: tabular-nums;
 }
 
@@ -3574,18 +3584,6 @@ h2:focus-visible {
     box-shadow: none;
 }
 
-@keyframes courseflow-page-enter {
-    from {
-        opacity: 0;
-        transform: translateY(0.55rem);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
 @keyframes courseflow-rise {
     from {
         opacity: 0;
@@ -3620,8 +3618,11 @@ h2:focus-visible {
     }
 }
 
+/* Navigation lands here tens of times a day, from the arrow keys as often as from a click, so the
+   page only fades. The rise it used to make was 8.8px over 260ms with 61% of it inside the first
+   three frames: too small to read as travel at speed, so it explained nothing the fade does not. */
 .workspace-page {
-    animation: courseflow-page-enter 260ms var(--ease-out) both;
+    animation: courseflow-fade 260ms var(--ease-out) both;
 }
 
 .startup-surface .status-card {
@@ -4407,9 +4408,8 @@ h2:focus-visible {
         box-shadow: inset 0 0 0 100vmax rgba(0, 0, 0, 0.12);
     }
 
-    /* The three keyframes that travel are swapped for the opacity-only one the dialog backdrops
-       already run, so an arriving surface still explains itself without moving. */
-    .workspace-page,
+    /* The two keyframes that travel are swapped for the opacity-only one the page and the dialog
+       backdrops already run, so an arriving surface still explains itself without moving. */
     .startup-surface .status-card,
     .task-action-feedback,
     .setup-dialog[open] .setup-modal,

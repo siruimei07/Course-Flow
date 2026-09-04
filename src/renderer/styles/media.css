@@ -477,9 +477,8 @@
         box-shadow: inset 0 0 0 100vmax rgba(0, 0, 0, 0.12);
     }
 
-    /* The three keyframes that travel are swapped for the opacity-only one the dialog backdrops
-       already run, so an arriving surface still explains itself without moving. */
-    .workspace-page,
+    /* The two keyframes that travel are swapped for the opacity-only one the page and the dialog
+       backdrops already run, so an arriving surface still explains itself without moving. */
     .startup-surface .status-card,
     .task-action-feedback,
     .setup-dialog[open] .setup-modal,

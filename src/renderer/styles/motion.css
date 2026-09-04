@@ -1,17 +1,5 @@
-/* The four keyframes and the surfaces that run them. Three of them travel as well as fade, so under
-   prefers-reduced-motion media.css swaps those three onto courseflow-fade instead of stopping them. */
-
-@keyframes courseflow-page-enter {
-    from {
-        opacity: 0;
-        transform: translateY(0.55rem);
-    }
-
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
+/* The three keyframes and the surfaces that run them. Two of them travel as well as fade, so under
+   prefers-reduced-motion media.css swaps those two onto courseflow-fade instead of stopping them. */
 
 @keyframes courseflow-rise {
     from {
@@ -47,8 +35,11 @@
     }
 }
 
+/* Navigation lands here tens of times a day, from the arrow keys as often as from a click, so the
+   page only fades. The rise it used to make was 8.8px over 260ms with 61% of it inside the first
+   three frames: too small to read as travel at speed, so it explained nothing the fade does not. */
 .workspace-page {
-    animation: courseflow-page-enter 260ms var(--ease-out) both;
+    animation: courseflow-fade 260ms var(--ease-out) both;
 }
 
 .startup-surface .status-card {

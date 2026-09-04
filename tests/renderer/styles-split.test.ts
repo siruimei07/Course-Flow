@@ -37,10 +37,10 @@ const BASELINE = 'tests/fixtures/styles-baseline.css';
  * from the tail of one file into the head of the next, which is the drift the split exists to stop.
  */
 const PARTITION: ReadonlyArray<readonly [string, number]> = [
-    ['./styles/tokens.css', 155],
-    ['./styles/shell.css', 381],
-    ['./styles/today.css', 1056],
-    ['./styles/tasks.css', 275],
+    ['./styles/tokens.css', 158],
+    ['./styles/shell.css', 387],
+    ['./styles/today.css', 1058],
+    ['./styles/tasks.css', 274],
     ['./styles/term-ended.css', 17],
     ['./styles/components.css', 248],
     ['./styles/courses.css', 191],
@@ -54,9 +54,9 @@ const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/calendar-controls.css', 89],
     ['./styles/settings-lists.css', 10],
     ['./styles/focus.css', 33],
-    ['./styles/motion.css', 66],
+    ['./styles/motion.css', 57],
     ['./styles/migration.css', 291],
-    ['./styles/media.css', 903],
+    ['./styles/media.css', 902],
 ];
 
 test('WP-RF-02 styles.css is nothing but the ordered import list', () => {
