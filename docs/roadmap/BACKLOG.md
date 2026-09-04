@@ -700,6 +700,27 @@ macOS 解锁后的原生复验（2026-09-04，本提交）：
 - 系统设置只读核对：VoiceOver、增强对比度、降低透明度、减弱动态效果原值均为关闭；
   临时切换授权问题尚未回答，未操作这些开关，也未把默认状态下的截图计作辅助状态通过。
 
+macOS skip link 文档滚动修复（2026-09-04，本提交）：
+
+- 原生操作进一步缩小复现：有真实 Today 数据的 clean `c3522d1` 制品从 1280×800 缩到
+  960×640，Tab 后只按 Return 激活 skip link 即触发；设置与 End 均不是必要前置。
+  默认窗口正常，空 WorkspaceShell 的原生 Electron/Chrome 夹具也正常，未以错误夹具替代故障证据。
+- 仓库外仪器化制品副本只增加可见只读测量面板，原制品与仓库未被该探针修改。
+  原生实测：最小窗口激活前 html 的 clientHeight 为 640、scrollHeight 为 1003，
+  body/root/frame 都为 640；激活后 window.scrollY 与 html.scrollTop 变为 72，
+  body/root/frame 的 scrollTop 仍为 0，但矩形移到 -72 至 568。实际卷动的是整个文档。
+- 根因是页面内绝对定位的隐藏辅助文本缺少页面内包含块，在 Today 紧凑布局下扩大文档滚动范围。
+  只为共同页面所有者 `.workspace-page` 添加 `position: relative`，保留辅助文本和现有滚动规则。
+  CSS 冻结基线与 shell 分区行数同步；没有更改业务数据、依赖、JS 键盘处理或 overflow 策略。
+- 复用真实 Today PLAN 的浏览器夹具，在 960×640 下激活真实锚点，改前 documentHeight 为 1005，
+  改后为 640、documentScrollTop 为 0、topbarTop 为 0；main 内容仍超过自身可视高度。
+  未添加外层假内容或强制祖先滚动来制造 RED；既有课时标签三档布局与 CSS 分区也通过。
+- 最终 `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 745 = 739 通过 / 0 失败 / 6 Windows 专属跳过，
+  耗时 16966.049708 ms；`pnpm typecheck` 与 `git diff --check` 通过。最终日志为本任务取证目录的
+  `test-scroll-final.log`、`typecheck-scroll-final.log`；新 clean 制品的原生复验在后续行登记。
+- 仪器化副本仅用于定位原因，不是正式验收制品，也不替代真人或同源 Windows 的证据。
+  系统辅助状态的未验证边界、G1–G7 与既有工作包状态保持不变。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

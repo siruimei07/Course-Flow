@@ -38,7 +38,7 @@ const BASELINE = 'tests/fixtures/styles-baseline.css';
  */
 const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/tokens.css', 158],
-    ['./styles/shell.css', 387],
+    ['./styles/shell.css', 389],
     ['./styles/today.css', 1058],
     ['./styles/tasks.css', 268],
     ['./styles/term-ended.css', 17],

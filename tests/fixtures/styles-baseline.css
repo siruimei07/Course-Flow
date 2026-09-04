@@ -388,6 +388,8 @@ ul {
 }
 
 .workspace-page {
+    /* Keep absolute accessibility text within the page's scrollable bounds. */
+    position: relative;
     display: grid;
     gap: 0.75rem;
     max-width: 1420px;

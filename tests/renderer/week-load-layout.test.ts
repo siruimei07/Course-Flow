@@ -213,6 +213,13 @@ interface WeekLoadLayout {
     readonly peaks: ReadonlyArray<{ readonly text: string; readonly column: number; readonly chip: number }>;
 }
 
+interface SkipLinkLayout {
+    readonly documentHeight: number;
+    readonly documentScrollTop: number;
+    readonly mainScrollHeight: number;
+    readonly topbarTop: number;
+}
+
 const MEASURE = `(() => {
     const items = [...document.querySelectorAll('.week-load > li')];
     const peaks = items.flatMap(li => {
@@ -224,6 +231,17 @@ const MEASURE = `(() => {
         }];
     });
     return { columns: items.length, peaks };
+})()`;
+
+const MEASURE_SKIP_LINK = `(async () => {
+    document.querySelector('.skip-link').click();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+        documentHeight: document.documentElement.scrollHeight,
+        documentScrollTop: document.documentElement.scrollTop,
+        mainScrollHeight: document.querySelector('#workspace-content').scrollHeight,
+        topbarTop: document.querySelector('.topbar').getBoundingClientRect().top,
+    };
 })()`;
 
 test(
@@ -244,5 +262,19 @@ test(
                 `${width}px: "${peak.text}" paints ${peak.chip}px wide in a ${peak.column}px column`,
             );
         }
+    },
+);
+
+test(
+    'the Today skip link does not scroll the document outside the main region',
+    { skip: skipWithoutBrowser },
+    async () => {
+        const measured = await evaluateAtWidths<SkipLinkLayout>(todayPage(), [960], MEASURE_SKIP_LINK, 640);
+        const layout = measured.get(960);
+        assert.ok(layout !== undefined);
+        assert.equal(layout.documentHeight, 640);
+        assert.equal(layout.documentScrollTop, 0);
+        assert.equal(layout.topbarTop, 0);
+        assert.ok(layout.mainScrollHeight > 568, 'the real Today content must remain scrollable inside main');
     },
 );

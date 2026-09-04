@@ -51,6 +51,7 @@ export async function evaluateAtWidths<T>(
     html: string,
     widths: readonly number[],
     expression: string,
+    height = 900,
 ): Promise<Map<number, T>> {
     const workspace = mkdtempSync(path.join(os.tmpdir(), 'courseflow-layout-'));
     const pagePath = path.join(workspace, 'page.html');
@@ -118,7 +119,7 @@ export async function evaluateAtWidths<T>(
         await send('Runtime.enable');
         for (const width of widths) {
             await send('Emulation.setDeviceMetricsOverride', {
-                width, height: 900, deviceScaleFactor: 1, mobile: false,
+                width, height, deviceScaleFactor: 1, mobile: false,
             });
             await send('Page.navigate', { url: pathToFileURL(pagePath).href });
             await new Promise(resolve => setTimeout(resolve, 400));
