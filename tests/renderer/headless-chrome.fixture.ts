@@ -24,6 +24,10 @@ const BROWSERS: ReadonlyArray<string | undefined> = [
 
 export const browser = BROWSERS.find(candidate => candidate !== undefined && existsSync(candidate)) ?? null;
 
+if (browser === null && process.env.COURSEFLOW_REQUIRE_BROWSER === '1') {
+    throw new Error('COURSEFLOW_REQUIRE_BROWSER=1 but Chrome was not found');
+}
+
 /** The `skip` option for a test that needs the browser: the reason on a host without one, else false. */
 export const skipWithoutBrowser: string | false = browser === null
     ? 'no Chrome or Chromium on this host; set CHROME_PATH to run this test'

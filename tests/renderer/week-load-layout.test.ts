@@ -226,26 +226,23 @@ const MEASURE = `(() => {
     return { columns: items.length, peaks };
 })()`;
 
-/*
- * ponytail: 1540px and a whole-hour label are the one case the padding was sized for, with less
- * than a pixel to spare. At 1280px the track is 37px and every label is wider than it, and a
- * decimal label (2.5 小时) is wider than the 1540px track too; both are open. Widen this test
- * when the chip's width stops being decided by the track, not before.
- */
 test(
-    'the week-load peak chip paints inside its column at 1540px',
+    'the week-load peak chip paints inside its column at every supported width',
     { skip: skipWithoutBrowser },
     async () => {
-        const measured = await evaluateAtWidths<WeekLoadLayout>(todayPage(), [1540], MEASURE);
-        const layout = measured.get(1540);
-        assert.ok(layout !== undefined);
-        assert.equal(layout.columns, 7, 'one column per day of the week');
-        assert.equal(layout.peaks.length, 1, 'exactly one day carries the value chip');
-        const [peak] = layout.peaks;
-        assert.equal(peak.text, '3 小时');
-        assert.ok(
-            peak.chip <= peak.column,
-            `"${peak.text}" paints ${peak.chip}px wide in a ${peak.column}px column`,
-        );
+        const widths = [1540, 1280, 960];
+        const measured = await evaluateAtWidths<WeekLoadLayout>(todayPage(), widths, MEASURE);
+        for (const width of widths) {
+            const layout = measured.get(width);
+            assert.ok(layout !== undefined);
+            assert.equal(layout.columns, 7, `${width}px: one column per day of the week`);
+            assert.equal(layout.peaks.length, 1, `${width}px: exactly one day carries the value chip`);
+            const [peak] = layout.peaks;
+            assert.equal(peak.text, '3 小时');
+            assert.ok(
+                peak.chip <= peak.column,
+                `${width}px: "${peak.text}" paints ${peak.chip}px wide in a ${peak.column}px column`,
+            );
+        }
     },
 );

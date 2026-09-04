@@ -30,12 +30,6 @@
     letter-spacing: -0.02em;
 }
 
-/* The live filter count is a .page-context, so shell.css already keeps its digits one width; the
-   rule stays beside the chips it counts, where the number changes. */
-.task-filter-summary {
-    font-variant-numeric: tabular-nums;
-}
-
 /* One radio group on its own row, so the card keeps its shape at every width. The checked
    chip wears the accent (yellow means selected); a dark 1px ring and weight carry the state. */
 .task-filter {

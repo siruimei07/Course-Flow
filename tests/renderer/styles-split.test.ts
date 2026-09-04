@@ -40,7 +40,7 @@ const PARTITION: ReadonlyArray<readonly [string, number]> = [
     ['./styles/tokens.css', 158],
     ['./styles/shell.css', 387],
     ['./styles/today.css', 1058],
-    ['./styles/tasks.css', 274],
+    ['./styles/tasks.css', 268],
     ['./styles/term-ended.css', 17],
     ['./styles/components.css', 248],
     ['./styles/courses.css', 191],

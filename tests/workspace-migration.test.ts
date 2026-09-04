@@ -330,7 +330,8 @@ test('TEST-WORKSPACE-007/PROTECT-007: Workspace owns preview, maintenance, and e
     }
     const previewSession = preview.value.session;
     assert.deepEqual(previewSession.binding?.currentLibrary, {kind: 'absent'});
-    assert.equal(previewSession.binding?.currentData.schemaLevel, '16');
+    // The live preview follows the application schema, so a level literal would go stale on the next migration.
+    assert.equal(previewSession.binding?.currentData.schemaLevel, String(CURRENT_SCHEMA_LEVEL));
     assert.equal(previewSession.binding?.safetyCopy.migrationSafetyCopyId,
         safety.value.safetyCopy.migrationSafetyCopyId);
 

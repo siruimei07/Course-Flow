@@ -1294,11 +1294,11 @@ ul {
     visibility: hidden;
 }
 
-/* 0.3rem a side is what fits a whole-hour label at --text-xs inside the 44.58px column of the
-   1540 tier: 43.81px against 44.58px, where 0.4rem made the chip 47px. */
+/* 0.05rem a side keeps a whole-hour label inside the 37px column at the 1280 tier:
+   35.81px against 37px, while preserving the --text-xs label and its pill. */
 .week-load-peak {
     align-self: end;
-    padding: 0.1rem 0.3rem;
+    padding: 0.1rem 0.05rem;
     border-radius: var(--radius-pill);
     color: #ffffff;
     background: var(--dark);
@@ -1629,12 +1629,6 @@ ul {
     font-size: 1.04rem;
     font-weight: 700;
     letter-spacing: -0.02em;
-}
-
-/* The live filter count is a .page-context, so shell.css already keeps its digits one width; the
-   rule stays beside the chips it counts, where the number changes. */
-.task-filter-summary {
-    font-variant-numeric: tabular-nums;
 }
 
 /* One radio group on its own row, so the card keeps its shape at every width. The checked
