@@ -444,7 +444,7 @@ test('main rejects permission checks and permission requests for the real Browse
   );
 });
 
-test('renderer HTML has a restrictive Content Security Policy', () => {
+test('renderer HTML has a restrictive Content Security Policy supported by meta delivery', () => {
   const html = readFileSync(rendererHtmlPath, 'utf8');
   const csp = /<meta\b[^>]*http-equiv="Content-Security-Policy"[^>]*content="([^"]*)"[^>]*>/i.exec(html)?.[1];
 
@@ -465,5 +465,6 @@ test('renderer HTML has a restrictive Content Security Policy', () => {
   assert.equal(directives.get('object-src'), "'none'");
   assert.equal(directives.get('base-uri'), "'none'");
   assert.equal(directives.get('form-action'), "'none'");
-  assert.equal(directives.get('frame-ancestors'), "'none'");
+  assert.equal(directives.get('frame-src'), "'none'");
+  assert.equal(directives.has('frame-ancestors'), false, 'frame-ancestors is ignored in a meta CSP');
 });

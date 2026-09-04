@@ -582,6 +582,21 @@ body {
 - 本行关闭 `BUG-DOC-01`；`BUG-P1-02` 仍待处理，macOS/G1-G7 证据缺口仍开放；
   `WP-GA-01` 保持 `—`，`WP-UI-01` 和两个 RF 验证包的状态不变。
 
+`BUG-P1-02` CSP 修复证据（2026-09-04，本提交）：
+
+- meta CSP 中无效的 `frame-ancestors` 改为 `frame-src 'none'`；ADR-01 明确 meta 交付与
+  顶层窗口边界，子 frame 禁用继续落实 ADR-06，不把它宣称为入站防嵌入策略。
+- 架构回归同时锁定有效的 `frame-src` 和 meta 中不得出现 `frame-ancestors`，
+  既有隔离、导航、新窗口、权限拒绝检查保留。改前定向 RED，改后 6/6 PASS。
+- Windows / Node `v24.19.0` / pnpm `11.19.0`：`pnpm typecheck` PASS；
+  `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 744 = 743 通过 / 0 失败 / 1 文件链接权限跳过。
+- `pnpm package` PASS；隔离 packaged 会话通过 CDP 捕获启动日志：改前有原 security/error，
+  改后 Console error 为 0、欢迎页正常加载，主动加载本地子 frame 被 `frame-src` 拒绝。
+- 工作区证据：`_scratch/bug-p1-02-{red,green}/`、`_scratch/bug-p1-02-full-test.log`；
+  本提交的 clean package/smoke 在提交后执行。
+- 本行关闭 `BUG-P1-02`，已登记四项缺陷均有独立修复记录；macOS/G1-G7 证据仍待补齐，
+  不据此关闭 `WP-UI-01`、两个 RF 验证包或 `WP-GA-01`。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

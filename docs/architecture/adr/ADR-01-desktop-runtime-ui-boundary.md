@@ -53,6 +53,13 @@ window.courseFlow.accessResource(...)
 - 限制导航、新窗口、权限请求与外部 URL；
 - 使用限制性 Content Security Policy。
 
+packaged Renderer 由 Main 在顶层 `BrowserWindow` 中加载固定的应用包 HTML。`file://` 页面通过
+meta 交付受支持的 CSP 指令，不在其中声明会被浏览器忽略的 `frame-ancestors`；禁止子 frame
+加载由 `frame-src 'none'` 执行，与 ADR-06 的预览内容边界一致。导航、新窗口、权限拒绝与
+Renderer 隔离各自保持上述职责，不视为阻止页面被嵌入的 `frame-ancestors` 策略。
+参见 [CSP frame-ancestors](https://www.w3.org/TR/CSP3/#directive-frame-ancestors) 与
+[Electron CSP meta](https://www.electronjs.org/docs/latest/tutorial/security#csp-meta-tag)。
+
 Electron privileged side 承担应用生命周期、`IF-WORKSPACE` 宿主和平台适配器。领域模块、SQLite 所有者及长操作具体部署到 main、worker thread 或 utility process 的方式由 `ADR-TOPIC-02` 决定；本 ADR 不因物理合并而放宽任何逻辑依赖。
 
 ### 2.3 玻璃视觉与平台增强
