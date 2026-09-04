@@ -124,6 +124,7 @@ export async function evaluateAtWidths<T>(
             await new Promise(resolve => setTimeout(resolve, 400));
             const evaluated = await send('Runtime.evaluate', {
                 expression,
+                awaitPromise: true,
                 returnByValue: true,
             }) as { result: { value: T }; exceptionDetails?: { text: string } };
             if (evaluated.exceptionDetails !== undefined) {

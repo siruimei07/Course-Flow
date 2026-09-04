@@ -58,6 +58,7 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
     const dialogRef = useRef<HTMLDialogElement>(null);
     const statusRef = useRef<HTMLParagraphElement>(null);
     const surfaceRefs = useRef(new Map<ManagementSurfaceId, HTMLButtonElement>());
+    const isDirty = useRef(false);
     const readOnly = props.state.dataMode === 'read-only';
     const [draft, setDraft] = useState<SetupDraft>(() => emptyDraftFrom(props.state));
     const [message, setMessage] = useState(readOnly
@@ -83,6 +84,12 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
             dialog.close();
         }
     }, [props.open]);
+
+    useEffect(() => {
+        if (!isDirty.current) {
+            setDraft(emptyDraftFrom(props.state));
+        }
+    }, [props.open, props.state.projection.workspaceRevision]);
 
     /**
      * Closes the native modal before the Shell restores the prior focus target.
@@ -165,6 +172,7 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
             return;
         }
 
+        isDirty.current = false;
         setDraft(emptyDraftFrom(nextState));
         setMessage('正式数据已保存；下面的列表已刷新。');
         props.onProjection(nextState);
@@ -230,6 +238,7 @@ export function ManagementDialog(props: ManagementDialogProps): ReactElement {
         branch: Branch,
         value: SetupDraft[Branch],
     ): void => {
+        isDirty.current = true;
         setDraft(current => ({ ...current, [branch]: value }));
         setMessage('有未提交输入；正式数据尚未改变。');
     };

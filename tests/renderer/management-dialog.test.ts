@@ -4,6 +4,7 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import path from 'node:path';
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -16,6 +17,7 @@ import {
 } from '../../src/renderer/ManagementDialog';
 import type { ResolvedSetupState } from '../../src/renderer/SetupDialog';
 import type { SetupProjection, TermProjection } from '../../src/shared/workspace-term-contract';
+import { evaluateAtWidths, skipWithoutBrowser } from './headless-chrome.fixture';
 
 const TERM: TermProjection = {
     termId: '11111111-1111-4111-8111-111111111111',
@@ -189,4 +191,129 @@ test('read-only management disables every editable control instead of hiding the
     assert.match(html, /<fieldset(?=[^>]*class="form-control-group")(?=[^>]*disabled="")[^>]*>/);
     assert.match(html, /只读模式；可以查看已保存的正式数据，但不能新增或更改。/);
     assert.match(html, /CSC108 · Introduction to Computer Programming/);
+});
+
+test('management adopts new formal defaults while preserving edited and unconfirmed drafts', {
+    skip: skipWithoutBrowser,
+    timeout: 30000,
+}, async () => {
+    const { build } = await import('vite');
+    const modulePath = path.resolve('src/renderer/ManagementDialog.tsx').replaceAll('\\', '/');
+    const entry = path.resolve('management-lifecycle-fixture.js').replaceAll('\\', '/');
+    const bundle = await build({
+        configFile: false,
+        logLevel: 'silent',
+        define: { 'process.env.NODE_ENV': '"production"' },
+        plugins: [{
+            name: 'management-lifecycle',
+            resolveId: id => id.endsWith('management-lifecycle-fixture.js') ? '\0management-lifecycle' : undefined,
+            load: id => id === '\0management-lifecycle' ? `
+                import { createElement } from 'react';
+                import { createRoot } from 'react-dom/client';
+                import { flushSync } from 'react-dom';
+                import { ManagementDialog } from ${JSON.stringify(modulePath)};
+                const root = createRoot(document.getElementById('root'));
+                window.renderManagement = props => flushSync(() => {
+                    root.render(createElement(ManagementDialog, props));
+                });
+            ` : undefined,
+        }],
+        build: {
+            write: false,
+            minify: false,
+            lib: { entry, name: 'ManagementLifecycle', formats: ['iife'] },
+        },
+    });
+    const built = Array.isArray(bundle) ? bundle[0] : bundle;
+    assert.ok(built && 'output' in built);
+    const chunk = built.output.find(item => item.type === 'chunk');
+    assert.ok(chunk?.type === 'chunk');
+    const html = '<!doctype html><html><head><meta charset="utf-8"></head><body>'
+        + '<div id="root"></div><script>' + chunk.code.replaceAll('</script', '<\\/script')
+        + '</script></body></html>';
+    const expression = `(async () => {
+        const state = ${JSON.stringify(STATE)};
+        const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+        let props = {
+            open: false, surface: 'course', state,
+            onClose() {}, onProjection() {}, onSurfaceChange() {},
+        };
+        const render = async changes => {
+            props = { ...props, ...changes };
+            window.renderManagement(props);
+            await tick();
+        };
+        const field = name => document.querySelector('[name="' + name + '"]');
+        const edit = async (name, value) => {
+            const input = field(name);
+            Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, value);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            await tick();
+        };
+        const values = () => ['course-code', 'course-name', 'course-teaching-start', 'course-teaching-end']
+            .map(name => field(name).value);
+        await render({ state: { ...state, kind: 'term', projection: {
+            ...state.projection, workspaceRevision: '0', currentTerm: null, terms: [], courses: [],
+        } } });
+        await render({ state });
+        await render({ open: true });
+        const defaults = values();
+        await edit('course-code', 'CSC148');
+        await edit('course-name', 'Introduction to Computer Science');
+        let submitted = null;
+        window.courseFlow = { createCourse: async command => {
+            submitted = command;
+            throw new Error('transport unavailable');
+        } };
+        field('course-code').form.requestSubmit();
+        await tick();
+        await tick();
+        if (submitted === null) return { defaults, submitted };
+        const unconfirmed = values();
+        await render({ state: { ...state, projection: {
+            ...state.projection, workspaceRevision: '5',
+            currentTerm: { ...state.projection.currentTerm, startDate: '2026-09-09' },
+        } } });
+        const afterRefresh = values();
+        const locked = field('course-code').closest('fieldset').disabled;
+        window.courseFlow = {
+            createCourse: async command => {
+                if (JSON.stringify(command) !== JSON.stringify(submitted)) throw new Error('changed retry');
+                return { ok: true };
+            },
+            querySetup: async () => ({ ok: true, value: {
+                kind: 'workspace.setup-projection', dataMode: 'ready', projection: state.projection,
+            } }),
+        };
+        document.querySelector('.settings-modal-footer button').click();
+        await tick();
+        await tick();
+        const afterCommit = values();
+        await edit('course-code', 'MAT102');
+        await edit('course-teaching-start', '2026-09-10');
+        const edited = values();
+        await render({ open: false });
+        await render({ open: true });
+        const reopened = values();
+        return { defaults, submitted, unconfirmed, afterRefresh, locked, afterCommit, edited, reopened };
+    })()`;
+    const measured = await evaluateAtWidths<{
+        defaults: string[];
+        submitted: { intent: { payload: { course: { teachingRange: { kind: string } } } } };
+        unconfirmed: string[];
+        afterRefresh: string[];
+        locked: boolean;
+        afterCommit: string[];
+        edited: string[];
+        reopened: string[];
+    }>(html, [1280], expression);
+    const result = measured.get(1280);
+    assert.ok(result);
+    assert.deepEqual(result.defaults, ['', '', TERM.startDate, TERM.endDate]);
+    assert.equal(result.submitted.intent.payload.course.teachingRange.kind, 'inherit-term');
+    assert.deepEqual(result.unconfirmed, ['CSC148', 'Introduction to Computer Science', TERM.startDate, TERM.endDate]);
+    assert.deepEqual(result.afterRefresh, result.unconfirmed);
+    assert.equal(result.locked, true);
+    assert.deepEqual(result.afterCommit, result.defaults);
+    assert.deepEqual(result.reopened, result.edited);
 });

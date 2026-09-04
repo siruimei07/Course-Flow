@@ -536,6 +536,23 @@ body {
 - 样式基线由 121190 改为 120943 字节；`tasks.css` 分区由 274 改为 268，其他分区未变。
 - 未运行 `pnpm package`、`pnpm smoke:packaged`，也未在真实 Electron 窗口人工复看。
 
+`WP-UI-01` 切片 24 / `BUG-P1-01` 修复证据（2026-09-04，本提交）：
+
+- 修复管理弹窗在无学期时初始化后不刷新默认值的问题；复用首次设置的 dirty 标记。
+- 未编辑草稿在打开或正式 revision 更新时重新取默认值；已编辑和结果未知的草稿保留。
+- 成功提交且取得有效投影后清除 dirty；查询失败仍保留原输入与精确重试请求。
+- 浏览器回归改前为两个空日期，改后为 `2026-09-08` / `2026-12-18`。
+- 回归同时覆盖继承范围提交、未知结果后投影刷新、原 command 精确重试、提交后重置及关闭重开。
+- Windows / Node `v24.19.0` / pnpm `11.19.0`：定向测试 20/20；`pnpm typecheck` PASS。
+- `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：742 = 741 通过 / 0 失败 / 1 跳过，38502.682 ms。
+- `pnpm package` PASS；提交前 smoke 因 dirty development build 被正确拒绝，clean smoke 在提交后执行。
+- 打包 Electron 隔离数据根自动复验：同次会话创建学期，仅填课程代码/名称即可保存；
+  `querySetup` 读回正式课程的 `teachingRange.kind=inherit-term` 及完整学期起止日期。
+- 取证：工作区 `_scratch/bug-p1-01-live/verified/result.json` 与 `course-saved.png`。
+- `git diff --check` PASS；FECS TS/TSX 分支复核，Impeccable detector 无命中。
+- 本行关闭 `BUG-P1-01`，不关闭整个 `WP-UI-01` 或 `WP-GA-01`；
+  `BUG-P1-03` 仍缺稳定修复，本轮偶然全绿不能替代该项根因处理。macOS 与人工矩阵未重跑。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
