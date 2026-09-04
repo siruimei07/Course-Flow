@@ -623,6 +623,34 @@ macOS 自动回归修复证据（2026-09-04，本提交）：
 - 本行仅登记自动回归修复；最终 clean source 的 package/smoke 与真实 packaged 交互另行记录。
   `WP-UI-01`、两个 RF 验证包与 `WP-GA-01` 状态不变，macOS 人工矩阵和 G1–G7 不据此关闭。
 
+macOS clean package 验证与剩余验收项（2026-09-04，本提交）：
+
+- 被测源码为 clean `c2e56a0e822432ba602c6552f2fc2b0b29895d3b`，包含上行六项失败的修复；
+  本次只补证据，不再更改运行时代码。设备为 MacBook Air `Mac15,12` / Apple M3 / 16 GB，
+  macOS arm64 `26.5.2` / build `25F84`，Chrome `152.0.7977.76`。
+- `pnpm package` exit 0，产物为 `out/CourseFlow Dev-darwin-arm64/CourseFlow Dev.app`。
+  仅有既有 Vite native config 与 `inlineDynamicImports` 弃用 warning。
+- `pnpm smoke:packaged` exit 0，结果为
+  `PASS packaged smoke darwin/arm64 development:c2e56a0e822432ba602c6552f2fc2b0b29895d3b`
+  `SQLite 3.53.1 verified-local`。未把开发包声明为签名、公证或公开发布制品。
+- 使用仓库外测试驱动，在 packaged main 首次执行前经 Node inspector 将 appData 指向独立取证目录；
+  原生打包程序成功进入欢迎页，页面标题为 `CourseFlow`，入口为 app.asar 内的 renderer 文件。
+  这一启动观测是带测试驱动的补充证据，不替代上述原始 wrapper smoke 或真人验收。
+- 原生 Computer Use 在两次调用中均报告 Accessibility / Screen Recording 权限待用户完成；
+  本轮未完成五导航、设置/管理、窗口拖拽/控制、滚轮/触控板、系统辅助设置的真实界面验收。
+  没有将模拟截图、自动指针或先前 Windows 的 48/48 声明计作 macOS 人工通过。
+- 自动化范围包括全量 744 项中的全部 738 项非 Windows 专属测试，0 失败；浏览器测试未跳过。
+  其余 6 项为 Windows-only，不能在 macOS 冒充通过。精确旧/新开发 build 的独立 runner
+  当前在 `runLegacyFixture` / `runCompatibleFixture` 显式限定 Windows x64，本轮未扩展或绕过该守卫。
+- G1 最小核对：R0–R6 Done 包注册表显式列出的主 Requirement / TEST 均可定位到 Contracts
+  §10 定义和 §11.1 追溯行；未检查完整当前需求集合的逐项语义覆盖，不声称 G1 全门通过。
+  G2–G5 适用自动测试随全量运行，仍不能替代逐 Gate 验收记录；G6 原生/真人项仍缺，
+  G7 仍缺已批准并版本化的参考工作区、双平台设备档案和性能数值预算。
+- 原始证据继续保存在本机本任务 `macos-verification/`：`package-final.log`、`smoke-final.log`、
+  `isolation.json` 和 `ui-process.log`。未向生产数据根写入用于交互测试的学期、课程或任务。
+- `WP-UI-01` 仍为 `In Progress`，`WP-RF-01` / `WP-RF-02` 仍为 `Verification`，
+  `WP-GA-01` 仍为 `—`；新源码的 Windows 复验与同源双平台人工矩阵也未由本轮覆盖。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
