@@ -721,6 +721,24 @@ macOS skip link 文档滚动修复（2026-09-04，本提交）：
 - 仪器化副本仅用于定位原因，不是正式验收制品，也不替代真人或同源 Windows 的证据。
   系统辅助状态的未验证边界、G1–G7 与既有工作包状态保持不变。
 
+macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
+
+- clean source 为 `b39124d3d83e887ee6a142c416a41654c304ab57`；`pnpm package` 与
+  `pnpm smoke:packaged` 均 exit 0，smoke 报
+  `PASS packaged smoke darwin/arm64 development:b39124d3d83e887ee6a142c416a41654c304ab57`
+  `SQLite 3.53.1 verified-local`。日志为 `package-scroll-final.log` 与 `smoke-scroll-final.log`。
+- 在未附加测量面板的新制品中，沿用隔离 appData 重启，学期、课程、课节、两个 pending 任务与
+  TBA 区分保留。原生“关于与版本”的 AppBuildId 与上述 smoke 一致，schema 仍为 17。
+- 默认 1280×800 启动后缩至 960×640，复跑 Tab + Return：主内容得到焦点，顶栏不再卷走，
+  底部不再留出 72px 空白。End 可到达 Today 最后任务汇总；Home、PageDown、PageUp 往返正常，
+  导航、四边和内容滚动范围保持固定。Calendar 的 skip link + End 也保持外壳，TBA 末项完整可达。
+- 五导航页面、方向键导航、课程/任务计数与 Files 不可用状态均复看；设置当前分类悬停仍保持
+  深色背景白字，版本长 ID 在最小窗口内换行可读；Escape 返回设置按钮焦点，自绘关闭按钮生效。
+  本行关闭此次新发现的 skip link 原生阻断，原先悬停修复也在最新制品复验通过。
+- 这些结果仍为 agent 原生交互证据；VoiceOver、增强对比度、降低透明度、减弱动态效果尚未获准
+  临时切换，因此没有将其记作通过。同源 Windows、真人物理设备矩阵与 G1–G7 缺口不因本行关闭，
+  `WP-UI-01`、两个 RF 包和 `WP-GA-01` 的生命周期保持原状态。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
