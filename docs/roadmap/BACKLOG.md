@@ -673,6 +673,16 @@ macOS 原生交互复验与设置悬停修复（2026-09-04，本提交）：
 - 新修复的 clean package/smoke、原生悬停复验与同根重启结果在后续行登记；不将旧制品的观察
   写成新制品已通过。系统辅助设置尚待获准临时切换，G1–G7 和现有工作包生命周期保持不变。
 
+macOS 悬停修复的 clean package 结果（2026-09-04，本提交）：
+
+- clean source 为 `c3522d1abdcd49e131854db8dbe9d33d67f123bc`；同机 `pnpm package` exit 0，
+  `pnpm smoke:packaged` exit 0，报告
+  `PASS packaged smoke darwin/arm64 development:c3522d1abdcd49e131854db8dbe9d33d67f123bc`
+  `SQLite 3.53.1 verified-local`。日志为 `package-native-fix.log` 与 `smoke-native-fix.log`。
+- 新制品已使用原隔离 appData 启动。Computer Use 此时连续返回 Mac 已锁屏、无法自动解锁；
+  尚未观察新制品的悬停颜色或重启后的领域数据，不能据启动成功宣称两项通过。
+  解锁后的原生复验另行追加，既有未验证项与工作包状态不变。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
