@@ -318,6 +318,7 @@ async function main() {
             const lifetime = runBoundedProcess(wrapper, ['--remote-debugging-port=0'], {
                 timeoutMilliseconds: index === 19 ? 120_000 : 30_000,
                 description: `packaged round ${index + 1}`,
+                windowsHide: false,
             });
             // Attach immediately so a spawn/timeout failure cannot become an unhandled rejection.
             const exited = lifetime.then(result => ({result}), error => ({error}));

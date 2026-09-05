@@ -347,7 +347,7 @@ async function terminateProcessTree(child, graceDeadline, rootStartedAt, observe
  *
  * @param {string} command Executable path.
  * @param {string[]} args Exact arguments.
- * @param {object} options Timeout, cleanup grace, and description.
+ * @param {object} options Timeout, cleanup grace, description, and native window visibility.
  * @return {Promise<object>} Closed process result.
  */
 export function runBoundedProcess(
@@ -357,6 +357,7 @@ export function runBoundedProcess(
       timeoutMilliseconds: processTimeout,
       terminationGraceMilliseconds: terminationGrace = terminationGraceMilliseconds,
       description = 'process',
+      windowsHide = true,
   },
 ) {
   return new Promise((resolve, reject) => {
@@ -367,7 +368,7 @@ export function runBoundedProcess(
       detached: process.platform !== 'win32',
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
+      windowsHide,
     });
     const stdout = [];
     const stderr = [];

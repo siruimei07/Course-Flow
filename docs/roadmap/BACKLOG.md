@@ -824,6 +824,19 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   唯一 skip 仍为 Windows 文件 symlink 权限。此行尚不提供新 package 或 macOS 结果。
 - 新模型已独立登记为 `WP-MODEL-01`，状态 `—`，不加入 R7 前置依赖；G-A/UI/RF-02 仍为 Verification。
 
+`WP-GA-01` 当前 Windows packaged 恢复补证与性能驱动（2026-09-04，本提交）：
+
+- `2986822` clean package/隔离 smoke PASS，SQLite 3.53.1 verified-local；实际 8 项恢复/失败检查通过、
+  8 次 packaged 启动全部 exit 0。证据 `_scratch/r7-prereq-g6-20260905/r-33b7aaae/result.json`；
+  host fixture/重新授权、packaged 后续备份、未禁网与未真人输入的范围详见 [G-A §4](./WP-GA-01-ACCEPTANCE.md#4-g6产品环境证据)。
+- 两轮 G7 首帧等待失败分别保留在 `_scratch/ga-pkg-2986822` 和 `_scratch/ga-pkg-fb50385`；
+  后轮确认 PLAN DOM 已存在而 document visibility 为 hidden，不能认作完整性能样本。
+  保留双 animation-frame 端点、前台请求、visibility/focus 与失败阶段原始观察。
+- 通用进程 helper 保持默认隐藏，G7 GUI 采样显式请求可见启动；不据此宣称早先偶发失败根因已证实。
+  两脚本语法、driver self-check 与 smoke helper 定向回归 7/7 通过；最终完整采样须另记真实结果。
+  产品 src/tests 相比已通过全套的 `2986822` 未改。
+- G-A/UI/RF-02 继续 Verification；真实禁网、真人矩阵、Mac 性能、真实备份重叠及适用 ADR 内部运行时观测尚缺。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

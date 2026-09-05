@@ -92,6 +92,21 @@ ROADMAP §8 与 2026-08-28 一体化设计 §10 都把新模型安排为另行�
   此处只证明包内容和欢迎会话，不扩大为所有失败旅程的 artifact 已通过。
   Chromium 自身缓存与正式 receipt/operation 不应误判为产品诊断日志。
 
+### 当前恢复修复的 Windows packaged 实证
+
+干净 `2986822de330725d4d857335f034078d5d70e37e` 的 package 与隔离 smoke 均通过，
+SQLite `3.53.1`、verified-local；2026-09-05 03:11:09–03:11:14 UTC 完成 8 项检查，8 次进程全部 exit 0。
+真实备份目录不可用时仍可提交 Course/查询 PLAN，重启保留该本地事实；整库恢复验证 SafetySet，
+替换 DATA 后重启保留快照事实，并保持 unconfigured/PROTECT healthy。
+恢复后显式重新授权原目录产生新 BackupSet；随后 packaged 提交更高 revision 并实际备份至 current，
+再次重启保持新授权，旧成功快照 manifest/SQLite 字节不变。两个损坏 DATA 启动均进入 recovery，
+拒绝普通访问且原始字节未变。
+
+原始结果为工作区 `_scratch/r7-prereq-g6-20260905/r-33b7aaae/result.json`。
+初始 fixture 与恢复后的重新授权由关闭 packaged 后的 host Workspace 正式请求准备；原生目录选择未测。
+其后的更高 revision 备份确由 packaged 完成。网络未禁、非真人输入，不能关闭完整 G6/TEST-PLATFORM-004。
+修前 `r-2ff9468f` 现场及 RED/GREEN 日志保留在同父目录，不把 API succeeded 掩盖的旧备份退化改写为通过。
+
 ## 5. G7：已批准基线与未完成项
 
 用户在本次任务中明确批准以下基线：
