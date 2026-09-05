@@ -907,6 +907,23 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   23313c2 的单轮恢复 v2 探针验证了 14 个实际内部阶段，未计入最终源码的正常 20 轮。
 - G-A/UI/RF-02 保持 Verification，R7 尚未领取。
 
+`WP-GA-01` 最终 Windows 自动化与平台交接（2026-09-05）：
+
+- clean 实测源码 `0e55715dd4afd1e2efbd38d9af24d95c525b3dd9`，正式包与 seed/bootstrap 身份一致。
+  typecheck、759 项必需浏览器全套（758 pass / 0 fail / 1 权限 skip）、package/隔离 smoke 均通过。
+- 普通启动/默认查询/月查询/提交 p95 631.421/58.4/68.5/3.9 ms，原预算全部通过。
+  同观测对照 56.7/72.1/5.6 ms；真实后台各 20 次完整同步重叠，p95 83.3/88.9/18.1 ms，
+  增量 26.6/16.8/12.5 ms，也全部通过。12 个非严格重叠尝试和所有历史 RED 均保留。
+  最终 current/水位 398，当时 cleanup=pending；不把覆盖完成写成清理 idle。
+- 同源 Main/Renderer/utility 资源与内部阶段、20 次真实 schema16→17 迁移、20 次正常恢复、
+  独立进程中断后正式回滚，以及单轮恢复临时磁盘/WAL 观察均完成。
+  host 的 5239 observations/2773 hooks 与 packaged 证据分开，0 failed owner；采样峰值保留方法限制。
+  原始目录、精确数据与退出结果见[验收记录](./WP-GA-01-ACCEPTANCE.md#最终同源-windows-结果0e55715)。
+- Mac 一次命令交接为工作区 `_scratch/r7-prereq-handoff-0e55715`；固定源码、Git bundle、
+  全部驱动与逐阶段日志/结果压缩包，见[平台验证](./WP-GA-01-HANDOFF.md)。旧交接 ZIP 保留不覆盖。
+- 剩余依赖明确为用户执行的同源 Mac 自动化/性能，以及当前 Windows 真人矩阵和实际禁网旅程。
+  G-A/UI/RF-02 保持 Verification；既有 Mac UI 验收不重开，R7 尚未领取。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

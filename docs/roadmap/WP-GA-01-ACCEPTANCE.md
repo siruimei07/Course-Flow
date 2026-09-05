@@ -45,7 +45,7 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
 | G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 759 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | 23313c2 Windows 前台普通端点通过，后台延迟已下降，但同观测月份对照 p95 105.2 ms 仍超标；重复 SQL 准备开销已修复并通过完整测试，待新包按原预算复测。Mac 同源及适用 ADR 证据见第 5 节 |
+| G7 性能基线 | Windows 已批准预算通过；全门待 Mac | clean 0e55715 的普通端点、匹配对照与真实后台预算全部通过；同源运行时、20 次迁移/恢复、独立回滚及恢复磁盘观察已归档。Mac 同源实测待用户执行，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -384,13 +384,60 @@ journal fsync/publish 各 N=200，p95 为 11.263/0.824 ms；逐窗口 loop histo
 原始结果与尚缺内部拆分见 `_scratch/ga-restore-e2-final/README.md`；失败准备轮同样保留。
 以上仍是 e2ea721 的真实身份，不能代替新调度修复后制品，也未代填 Mac 数据。
 
+### 最终同源 Windows 结果（0e55715）
+
+实测源码为 clean `0e55715dd4afd1e2efbd38d9af24d95c525b3dd9`，实际 AppBuildId 精确一致。
+typecheck、必需浏览器全套 759 项（758 pass / 0 fail / 1 权限 skip）、package 和隔离 smoke 均通过。
+普通/control/backup 按固定顺序各完成一次，没有删除或重采慢样本；正常 20 次应用均 exit 0。
+
+| 正式端点 | 普通 p95 ms | 匹配对照 p95 ms | 真实后台 p95 ms | 后台增量 ms | 结果 |
+|---|---:|---:|---:|---:|---|
+| process-cold 启动，N=20 | 631.421 | 不适用 | 不适用 | 不适用 | PASS |
+| 默认 PLAN，普通/对照各 N=100 | 58.4 | 56.7 | 83.3 | 26.6 | PASS |
+| 月窗口 PLAN，普通/对照各 N=100 | 68.5 | 72.1 | 88.9 | 16.8 | PASS |
+| 正式提交，普通/对照各 N=40 | 3.9 | 5.6 | 18.1 | 12.5 | PASS |
+
+后台三组各有 20 个完整同步片段包含且 CPU 增长的样本，总尝试 23/20/29；12 个非严格重叠尝试
+全部保留，不计成重叠证据。两臂观察配置一致、focusComplete=true、0 Debugger.paused。
+最终观察为 current、neededThrough=succeededThrough=398，但当时 cleanup=pending，不宣称 cleanup idle。
+普通查询 p99 为 59.7/70.6 ms，对照为 58.1/73.4 ms；p99 没有批准阈值。
+原始路径为 `_scratch/ga-pkg-0e55715`、`ga-backup-control-0e55715-v2`、`ga-backup-overlap-0e55715-v2`；
+同期 Silent 电源计划和逐秒 CPU/进程负载保存在 `ga-load-0e55715`，未修改计划或结束用户程序。
+
+同源 Main/Renderer 资源诊断各 20 次通过，记录 `ga-observe-0e55715-foreground`；10 ms resolution 的
+Main histogram p95 为 39.09/51.12 ms，保留 Renderer timer 与自有进程资源原值，不合并到正式预算。
+首轮 observer 已收默认 20 次后变 hidden 而失败，原始 `ga-observe-0e55715` 及执行脚本保留；
+仅外部驱动补每组前 Main 置前及双帧准备后固定补测成功，不改产品或旧结果。
+
+同源正常恢复 20/20，通过 14 个内部 span、940 对记录，193 events/轮；preview/confirm/resume
+p95 为 205.8/270.5/728.3 ms，最大 resume 1203.4 ms 原样保留，无新批准阈值。
+WAL checkpoint/close-to-reopen p95 为 5.08/432.76 ms，journal fsync/publish 各 N=200、p95 16.19/2.14 ms。
+utility OS RSS 高水位 105236 KiB，阶段采样最大 107761664 bytes；不把分窗口 histogram 合并伪造 p95。
+独立精确进程树中断后正式重启回滚通过，596.2 ms，恢复 configured/current；不混入正常分布或称为断电。
+原始、统计与实测脚本归档在 `ga-restore-0e55715-v2`。
+
+额外单轮恢复资源观察在 `ga-restore-resources-0e55715`，正常恢复与退出通过；仅采本次隔离
+DataSlots/ActivityControl/backup，175 个原始样本，75 个完整落在正式 start→resume 窗口。
+该窗口采样最大逻辑大小 3,441,358 bytes、WAL 45,352 bytes。10 ms 为目标频率，
+全生命周期最大实际间隔 434.77 ms；这是采样下界，非精确瞬时磁盘峰值，不并入正常 20 轮。
+
+真实旧 bd60a16 schema16/revision256 的 20 个副本由当前包完成 17/257 迁移；20 个 SafetyCopy
+verified、全部业务表行保持，仅允许正式 revision/backupNeededThrough 各增一次，旧 fixture 不变。
+含迁移启动 p95 为 1267.805 ms，不混入普通启动；每轮结束 DataSlots 为 1,414,004 bytes，
+10 ms 目标采样最大 1,608,660–1,809,364 bytes。原始及方法为 `ga-migration-0e55715`。
+
+同源 host ADR 在 `ga-adr-host-0e55715` 完成 5239 observations、2773 hooks、0 failed owner，
+20 次备份/恢复/重新授权及独立 owner-exception rollback 语义通过。该 host 结果不冒充 packaged
+进程、真实 kill 或整树资源；packaged、采样资源与 host 的端点/边界分别保留。
+以上均未代填 Mac 数据。最终交接见 [平台验证](./WP-GA-01-HANDOFF.md)。
+
 ## 6. 生命周期与下一步
 
 `WP-RF-01` 的 Windows typecheck/test/package/smoke 已齐，因此关闭为 Done。
 UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 登记 Verification；
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
-G1 的验收口径已获用户确认，默认并行测试、恢复授权及打包查询预算阻断均已修复。剩余动作集中为 G6 的当前 Windows 人工矩阵与实际禁网旅程；
-G7 的调度修复后同源 packaged 基线与后台预算、Mac 样本及剩余适用 ADR 运行时测量。Mac 已完成的 UI 验收继续保留，
-新增内核代码仅需补其相关自动化和性能证据。
+G1 的验收口径已获用户确认；本轮已完成 Windows 自动化、已批准打包预算及适用运行时补测。
+剩余为 G6 当前 Windows 真人矩阵/实际禁网旅程，以及用户已同意运行的最终同源 Mac 自动化与性能实测。
+Mac 已完成的 UI 验收继续保留，新增内核代码只补相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。
