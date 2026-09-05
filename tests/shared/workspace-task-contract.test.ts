@@ -13,6 +13,7 @@ import {
     deleteTaskDigestProjection,
     deriveTaskOccurrenceId,
     isTaskOccurrenceImpactProjection,
+    isTaskOccurrenceProjection,
     isTaskProjection,
     isTaskSeriesDetailProjection,
     normalizeCompleteTaskCommand,
@@ -30,6 +31,8 @@ import {
     normalizeUpdateTaskCommand,
     updateTaskDigestProjection,
 } from '../../src/shared/workspace-task-contract';
+import {normalizeTaskDeadline} from '../../src/shared/workspace-task-contract/makers';
+import {canonicalTimeZone} from '../../src/shared/workspace-task-contract/types';
 
 const COURSE_ID = '22222222-2222-4222-8222-222222222222';
 const TASK_SERIES_ID = '33333333-3333-4333-8333-333333333333';
@@ -109,6 +112,67 @@ test('A-TASK-002/003: once Task accepts each exact size and Deadline union varia
             }).intent.payload,
             { ...payload, title: 'Read Chapter 1' },
         );
+    }
+});
+
+test('G7/A-TASK-002: timed Task validation reuses only the last successful display zone', () => {
+    const originalDateTimeFormat = Intl.DateTimeFormat;
+    const alias = 'US/Eastern';
+    const canonical = new originalDateTimeFormat('en-CA', {timeZone: alias}).resolvedOptions().timeZone;
+    const otherZone = 'Pacific/Kiritimati';
+    const otherCanonical = new originalDateTimeFormat('en-CA', {timeZone: otherZone}).resolvedOptions().timeZone;
+    const deadline = {kind: 'timed', instant: '2026-09-15T23:59:59.999Z', timeZone: alias} as const;
+    const expected = {...deadline, timeZone: canonical};
+    const occurrence = {
+        occurrenceId: {taskSeriesId: TASK_SERIES_ID, originalLogicalAnchor: 'once'},
+        title: 'Timed Task',
+        size: 'small',
+        deadline: expected,
+        segmentId: '44444444-4444-4444-8444-444444444444',
+        status: 'pending',
+        reportedProgress: null,
+        displayProgress: null,
+        overrideKind: 'none',
+    } as const;
+    canonicalTimeZone('UTC');
+    let constructions = 0;
+    Intl.DateTimeFormat = new Proxy(originalDateTimeFormat, {
+        construct(target, argumentsList, newTarget) {
+            constructions += 1;
+            return Reflect.construct(target, argumentsList, newTarget);
+        },
+    });
+
+    try {
+        for (let index = 0; index < 16; index += 1) {
+            assert.deepEqual(normalizeTaskDeadline(deadline), expected);
+            assert.equal(isTaskOccurrenceProjection(occurrence), true);
+        }
+        assert.equal(constructions, 1);
+        assert.equal(isTaskOccurrenceProjection({...occurrence, deadline}), alias === canonical);
+        assert.equal(constructions, 1);
+
+        assert.deepEqual(normalizeTaskDeadline({...deadline, timeZone: otherZone}), {
+            ...deadline, timeZone: otherCanonical,
+        });
+        assert.equal(constructions, 2);
+        assert.deepEqual(normalizeTaskDeadline(deadline), expected);
+        assert.equal(constructions, 3);
+
+        for (const invalid of [undefined, null, 0, '', {}, {timeZone: canonical}]) {
+            assert.equal(canonicalTimeZone(invalid), null);
+        }
+        assert.equal(constructions, 3);
+        for (let index = 0; index < 2; index += 1) {
+            assert.equal(normalizeTaskDeadline({...deadline, timeZone: 'Toronto/Local'}), null);
+        }
+        assert.equal(constructions, 5);
+        assert.deepEqual(normalizeTaskDeadline(deadline), expected);
+        assert.equal(isTaskOccurrenceProjection(occurrence), true);
+        assert.equal(constructions, 5);
+    }
+    finally {
+        Intl.DateTimeFormat = originalDateTimeFormat;
     }
 });
 

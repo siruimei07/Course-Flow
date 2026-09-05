@@ -1,3 +1,7 @@
+/**
+ * @file Defines Task facts, canonical values, and command digest projections.
+ */
+
 import { CanonicalValue } from '../canonical-json';
 import { INTL_ZONE_RULES } from '../meeting-time';
 import { MeetingOccurrenceWindow, MeetingWeekday } from '../workspace-course-contract';
@@ -473,6 +477,9 @@ export function hasExactDataKeys(value: unknown, expectedKeys: readonly string[]
         });
 }
 
+/** ponytail: One Task zone; expand only if mixed-zone validation is measured hot. Independent of Term date caches. */
+let recentTaskTimeZone: Readonly<{input: string; canonicalZone: string}> | null = null;
+
 /**
  * Resolves one explicit IANA display zone through the runtime tzdb.
  * @param {unknown} value - Candidate zone value.
@@ -482,9 +489,15 @@ export function canonicalTimeZone(value: unknown): string | null {
     if (typeof value !== 'string' || value.length === 0) {
         return null;
     }
+    if (recentTaskTimeZone !== null
+        && (value === recentTaskTimeZone.input || value === recentTaskTimeZone.canonicalZone)) {
+        return recentTaskTimeZone.canonicalZone;
+    }
 
     try {
-        return new Intl.DateTimeFormat('en-CA', { timeZone: value }).resolvedOptions().timeZone;
+        const canonicalZone = new Intl.DateTimeFormat('en-CA', { timeZone: value }).resolvedOptions().timeZone;
+        recentTaskTimeZone = {input: value, canonicalZone};
+        return canonicalZone;
     }
     catch {
         return null;

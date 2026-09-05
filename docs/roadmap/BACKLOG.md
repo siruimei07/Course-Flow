@@ -837,6 +837,22 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   产品 src/tests 相比已通过全套的 `2986822` 未改。
 - G-A/UI/RF-02 继续 Verification；真实禁网、真人矩阵、Mac 性能、真实备份重叠及适用 ADR 内部运行时观测尚缺。
 
+`WP-GA-01` 打包查询预算阻断与 Task 时区修复（2026-09-04，本提交）：
+
+- clean `4da47dfd94c02c22126047ecf30ed6045f96acae` 的 Windows 完整正常 packaged 样本：
+  启动 20 次 p95 641.73 ms、提交 40 次 p95 11.10 ms 达标；两组各 100 次查询的 p95
+  163.30/205.20 ms 超过已批准的 100 ms。`_scratch/ga-pkg-4da47df` 保留原始失败，未删除慢样本。
+- 同包无暂停 CPU profile 归因到 Main/preload 结果校验里的 Task `canonicalTimeZone`：默认各 20 次
+  self 时间约 1126.92/836.20 ms，月窗口约 2008.31/1684.70 ms；完整原始 profile 在
+  `_scratch/ga-query-profile-4da47df`。profile 带诊断开销，不并入正式预算数组。
+- 在既有 Task 函数中仅保留最近一次成功的 input/canonicalZone。类型/非空先验证，混合 zone 重新解析，
+  失败不缓存、不污染成功值；独立于 Term 日期缓存。全部严格投影重建与边界校验保留。
+- 构造计数回归 RED 为 32 次对 1 次，GREEN 仅 1 次，并覆盖别名、混合 zone 与非法输入。
+  Task/PLAN/Term 定向 38/38；typecheck PASS；默认并行必需浏览器全套
+  756 = 755 pass / 0 fail / 1 Windows symlink 权限 skip，71069.2488 ms。
+  日志 `_scratch/r7-prereq-task-zone-20260905` 与 `_scratch/r7-prereq-test-task-zone.log`。
+  新干净 package 性能结果另记，不凭定向回归宣布查询达标。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

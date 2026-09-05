@@ -21,6 +21,7 @@
 | 唯一 Windows skip | `tests/platform/backup-destination.test.ts` 的文件 symlink 创建权限。保留环境跳过，不声称在 Windows 执行通过 |
 | R7 前置收口的默认并行复验 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：754 = 753 pass / 0 fail / 1 skip，62396.4652 ms；修复与原始失败对照见 Backlog 最新证据，日志为 `_scratch/r7-prereq-test-default.log` |
 | 恢复后目录授权修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 755 = 754 pass / 0 fail / 1 skip，48099.3505 ms；新增成功恢复必须重新授权的回归与既有双次恢复、rollback/receipt 测试通过；日志 `_scratch/r7-prereq-test-restore-final.log` |
+| 打包查询 Task 时区修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 756 = 755 pass / 0 fail / 1 skip，71069.2488 ms；别名/混合时区/非法输入构造计数 RED→GREEN，全部严格校验保留；日志 `_scratch/r7-prereq-test-task-zone.log` |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-b39124d.log`、`wp-ga-01-smoke-b39124d.log`、
