@@ -23,7 +23,7 @@ function expectedWrapper(relativePath) {
   throw new Error(`unsupported host ${process.platform}/${process.arch}; expected win32/x64 or darwin/arm64`);
 }
 
-function findWrapper() {
+export function findWrapper() {
   if (!existsSync(outRoot)) {
     throw new Error('out/ does not exist; run pnpm package first');
   }

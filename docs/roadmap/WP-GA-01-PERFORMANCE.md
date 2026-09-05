@@ -63,6 +63,7 @@ WorkspaceId、前后 revision 和备份水位；不得删除慢样本、测后�
 ```text
 node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY
 node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY --short-reference
+node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY --seed-only
 ```
 
 `ABSOLUTE_NEW_DIRECTORY` 替换为真实绝对路径：父目录须存在，目标目录须不存在。
@@ -73,9 +74,13 @@ node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY --short-re
 |---|---|
 | 默认 | 完整种子；同一 host Node 进程内 20 次 Workspace reopen；两个查询组各 10 次暖身 + 100 次采样；40 次无备份提交；40 次配置备份后的提交/默认查询 |
 | `--short-reference` | 相同完整种子，省略 reopen、200 次查询与无备份提交；仅 20 次配置备份后的提交/默认查询，并逐轮验证真实快照水位 current |
+| `--seed-only` | 只用正式 Workspace 请求创建同一参考数据并关闭连接，不配置备份、不运行计时循环；输出 `reference-setup.json` 与标为 `seeded-no-measurements` 的报告，供独立 packaged driver 复用 |
 | 无 DATA 检查 | `--help` 输出用法；`--self-check` 检查 CLI 拒绝已有/相对目录及分位数算法；二者均不加载 Workspace 或生成参考库 |
 
 工具计时仅覆盖 `WorkspaceApplication.open/handle`，不经过 Electron、preload/IPC 或 Renderer。
+`--seed-only` 与 `--short-reference` 互斥。Windows 种子位于输出目录的 `Local/CourseFlow Dev/DataSlots`；
+macOS 的 seed-only 种子位于 `Home/Library/Application Support/CourseFlow Dev/DataSlots`，
+供事先确认隔离路径的 packaged 进程使用；它不授权在用户已有数据根写入参考数据。
 reopen 保留同一进程的模块/OS 缓存且不包含后续 bootstrap，不能填入 packaged 启动预算。
 提交计时不包含之前读取乐观版本的 setup 查询。
 成功响应不额外执行 JSON 字符串化；失败响应才序列化到断言报告，避免把驱动开销计入请求耗时。

@@ -209,6 +209,35 @@ test(
     const parentPath = path.join(fixtureRoot, 'parent.mjs');
     const harnessPath = path.join(fixtureRoot, 'harness.mjs');
     const pidPath = path.join(fixtureRoot, 'pids.json');
+    const helperPath = path.join(fixtureRoot, 'helper.cjs');
+    const invocationPath = path.join(fixtureRoot, 'helper-invocations.txt');
+
+    // The 600ms window tests cached discovery, not Windows taskkill startup under suite load.
+    writeFileSync(helperPath, [
+        "const fs = require('node:fs');",
+        `const pidPath = ${JSON.stringify(pidPath)};`,
+        `const invocationPath = ${JSON.stringify(invocationPath)};`,
+        "const pids = JSON.parse(fs.readFileSync(pidPath, 'utf8'));",
+        "if (process.argv[2] === 'powershell.exe') {",
+        '    const query = process.argv.at(-1);',
+        '    if (!query.includes(`ParentProcessId = ${pids[0]}`)) {',
+        "        throw new Error('discovery must target the recorded root');",
+        '    }',
+        "    fs.appendFileSync(invocationPath, 'discovery\\n');",
+        '    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 800);',
+        '    const createdAt = fs.statSync(pidPath).mtime.toISOString();',
+        '    process.stdout.write(`${pids[1]}\\t${createdAt}\\n`);',
+        '} else {',
+        "    const pidIndex = process.argv.indexOf('/PID');",
+        '    const targetPid = Number(process.argv[pidIndex + 1]);',
+        '    if (targetPid !== pids[1]) {',
+        "        throw new Error('cleanup must target the exact discovered descendant');",
+        '    }',
+        '    fs.appendFileSync(invocationPath, `taskkill:${targetPid}\\n`);',
+        "    process.kill(targetPid, 'SIGKILL');",
+        '}',
+        '',
+    ].join('\n'));
 
     writeFileSync(descendantPath, "setInterval(() => {}, 1_000);\n");
     writeFileSync(
@@ -230,6 +259,17 @@ test(
       harnessPath,
       [
         `import { runBoundedProcess } from ${JSON.stringify(runnerUrl)};`,
+        "import childProcess from 'node:child_process';",
+        "import { syncBuiltinESMExports } from 'node:module';",
+        'const originalSpawn = childProcess.spawn;',
+        'childProcess.spawn = function (command, args, options) {',
+        "    if (command === 'powershell.exe' || command === 'taskkill.exe') {",
+        `        const helperArgs = [${JSON.stringify(helperPath)}, command, ...args];`,
+        '        return originalSpawn(process.execPath, helperArgs, options);',
+        '    }',
+        '    return originalSpawn(command, args, options);',
+        '};',
+        'syncBuiltinESMExports();',
         'let message;',
         'try {',
         '  await runBoundedProcess(',
@@ -257,6 +297,11 @@ test(
       const evidence = JSON.parse(execution.stdout) as { message: string };
       assert.match(evidence.message, /timed out after 1500ms; process tree was terminated/);
       const pids = fixturePids(pidPath);
+      assert.equal(pids.length, 2, 'fixture must record its root and inherited-stderr descendant');
+      assert.deepEqual(readFileSync(invocationPath, 'utf8').trim().split(/\r?\n/), [
+          'discovery',
+          `taskkill:${pids[1]}`,
+      ], 'cleanup must reuse the single discovery that started before the 600ms window');
       assert.deepEqual(await waitForResidue(pids, 500), [], evidence.message);
     } finally {
       const pids = fixturePids(pidPath);

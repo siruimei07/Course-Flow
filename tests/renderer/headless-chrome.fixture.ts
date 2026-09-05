@@ -77,7 +77,14 @@ export async function evaluateAtWidths<T>(
         for (let attempt = 0; attempt < 200 && port === ''; attempt += 1) {
             await new Promise(resolve => setTimeout(resolve, 50));
             if (existsSync(portFile)) {
-                port = readFileSync(portFile, 'utf8').split('\n')[0]?.trim() ?? '';
+                try {
+                    port = readFileSync(portFile, 'utf8').split('\n')[0]?.trim() ?? '';
+                } catch (error) {
+                    // Chrome can still hold the Windows write handle after the file becomes visible.
+                    if ((error as NodeJS.ErrnoException).code !== 'EBUSY') {
+                        throw error;
+                    }
+                }
             }
         }
         if (port === '') {

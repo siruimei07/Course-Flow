@@ -20,21 +20,24 @@ const REPOSITORY = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 /** Validates the one new output directory and the optional bounded verification profile. */
 function parseOptions(args) {
     const shortReference = args.includes('--short-reference');
-    const remaining = args.filter(value => value !== '--short-reference');
-    assert.ok(args.length === remaining.length + (shortReference ? 1 : 0), 'Repeated flag');
+    const seedOnly = args.includes('--seed-only');
+    assert.ok(!(shortReference && seedOnly), 'Choose either --short-reference or --seed-only');
+    const remaining = args.filter(value => value !== '--short-reference' && value !== '--seed-only');
+    assert.ok(args.length === remaining.length + Number(shortReference) + Number(seedOnly), 'Repeated flag');
     assert.ok(remaining.length === 2 && remaining[0] === '--output',
-        'Usage: node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY [--short-reference]');
+        'Usage: node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY [--short-reference | --seed-only]');
     assert.ok(path.isAbsolute(remaining[1]), '--output must be absolute');
     const output = path.resolve(remaining[1]);
     assert.equal(existsSync(output), false, '--output already exists; existing DATA is never overwritten');
-    return {output, shortReference};
+    return {output, shortReference, seedOnly};
 }
 
 if (process.argv.length === 3 && process.argv[2] === '--help') {
     process.stdout.write('Usage: node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY\n'
-        + '       [--short-reference]\n'
+        + '       [--short-reference | --seed-only]\n'
         + 'Run pnpm test:compile first. Measures host Workspace kernel only; never packaged startup or all G7.\n'
-        + '--short-reference seeds the same data, then measures only 20 commits/queries with real backup.\n');
+        + '--short-reference seeds the same data, then measures only 20 commits/queries with real backup.\n'
+        + '--seed-only creates the approved reference through Workspace, closes it, and records no timings.\n');
     process.exit(0);
 }
 
@@ -43,6 +46,10 @@ if (process.argv.length === 3 && process.argv[2] === '--self-check') {
     assert.throws(() => parseOptions(['--output', 'relative-directory']));
     assert.throws(() => parseOptions(['--output', REPOSITORY]));
     assert.throws(() => parseOptions(['--output', REPOSITORY, '--unknown']));
+    const freshOutput = path.join(os.tmpdir(), `courseflow-seed-self-check-${randomUUID()}`);
+    assert.equal(parseOptions(['--output', freshOutput, '--seed-only']).seedOnly, true);
+    assert.throws(() => parseOptions(['--output', freshOutput, '--seed-only', '--seed-only']));
+    assert.throws(() => parseOptions(['--output', freshOutput, '--seed-only', '--short-reference']));
     assert.equal(summarize(Array.from({length: 20}, (_, index) => index + 1)).p95Milliseconds, 19);
     assert.equal(summarize(Array.from({length: 20}, (_, index) => index + 1)).p99Milliseconds, null);
     process.stdout.write('PASS CLI refusal and nearest-rank self-check; no DATA created.\n');
@@ -52,8 +59,13 @@ if (process.argv.length === 3 && process.argv[2] === '--self-check') {
 /** The CLI owns only a previously absent directory selected explicitly by the caller. */
 const OPTIONS = parseOptions(process.argv.slice(2));
 const SHORT_REFERENCE = OPTIONS.shortReference;
+/** Creates the shared reference for a separate packaged measurement without host timing loops. */
+const SEED_ONLY = OPTIONS.seedOnly;
 const REFERENCE = OPTIONS.output;
-const DATA = path.join(REFERENCE, 'Local', 'CourseFlow Dev', 'DataSlots');
+/** Packaged macOS isolation uses the probed CFFIXED_USER_HOME Application Support directory. */
+const DATA_BASE = SEED_ONLY && process.platform === 'darwin'
+    ? path.join(REFERENCE, 'Home', 'Library', 'Application Support') : path.join(REFERENCE, 'Local');
+const DATA = path.join(DATA_BASE, 'CourseFlow Dev', 'DataSlots');
 const BACKUP = path.join(REFERENCE, 'b');
 const SOURCE = execFileSync('git', ['rev-parse', 'HEAD'], {cwd: REPOSITORY, encoding: 'utf8'}).trim();
 const BUILD = `development:${SOURCE}`;
@@ -133,7 +145,7 @@ async function main() {
             requestedCalendarWindow: WINDOW,
             ids: 'Formal owners generate entity IDs; exact resulting reference projection is saved',
         },
-        profile: SHORT_REFERENCE ? 'short-reference' : 'full-host-kernel',
+        profile: SEED_ONLY ? 'seed-only' : (SHORT_REFERENCE ? 'short-reference' : 'full-host-kernel'),
         approvedP95BudgetsMilliseconds: {
             packagedStartup: 3000,
             coreQuery: 100,
@@ -323,6 +335,10 @@ async function main() {
         report.referenceRevision = seeded.workspaceRevision;
         report.referenceDataBytes = directoryBytes(DATA);
         process.stdout.write('Seeded 1 term, 5 courses, 15 weekly meeting rules, 200 tasks.\n');
+        if (SEED_ONLY) {
+            report.status = 'seeded-no-measurements';
+            return;
+        }
         await application.close();
         // ponytail: cached host-process reopen only; use a packaged driver for process-cold startup evidence.
         const cold = [];

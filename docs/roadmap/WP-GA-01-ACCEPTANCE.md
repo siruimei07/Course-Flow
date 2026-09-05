@@ -19,6 +19,7 @@
 | 第二轮修复验证 | 时间转换结果有界复用及驱动计时修正；typecheck 与脚本 self-check PASS；相同 752 项串行测试 751 pass / 0 fail / 1 skip。默认并行完整测试仍有失败，详见第 5 节 |
 | 本轮最终源码与 Windows 包 | clean `df9841e4b1e942cbb856da14e677d5c7737d07ad`；`pnpm package` 与 `pnpm smoke:packaged` 均 exit 0；`development:df9841e4b1e942cbb856da14e677d5c7737d07ad`、SQLite `3.53.1`、`verified-local` |
 | 唯一 Windows skip | `tests/platform/backup-destination.test.ts` 的文件 symlink 创建权限。保留环境跳过，不声称在 Windows 执行通过 |
+| R7 前置收口的默认并行复验 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：754 = 753 pass / 0 fail / 1 skip，62396.4652 ms；修复与原始失败对照见 Backlog 最新证据，日志为 `_scratch/r7-prereq-test-default.log` |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-b39124d.log`、`wp-ga-01-smoke-b39124d.log`、
@@ -34,12 +35,12 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 
 | Gate | 当前判定 | 证据与适用边界 |
 |---|---|---|
-| G1 追溯 | 待明确内部验收模型口径 | 已逐族定位 MOD/IF/FLOW/Q/TEST；下节列出 PRD 新模型与当前已交付模型的差异。不能仅因相同 TEST ID 的旧测试通过就覆盖新语义 |
+| G1 追溯 | 已交付 A-only 剖面 PASS | 用户于 2026-09-04 确认按已交付 A-only 模型验收，新模型另行登记后续工作包；已逐族定位 MOD/IF/FLOW/Q/TEST，新增语义的排除分支见第 3 节 |
 | G2 依赖 | A-only PASS | `tests/architecture/module-dependency.test.ts` 全源码依赖扫描；`renderer-boundary.test.ts` 递归特权导入/权限/CSP；`runtime-boundaries.test.ts` 单 utility、固定 IPC/preload；`tests/shared/workspace-migration-contract.test.ts` 额外字段及路径拒绝 |
-| G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类仍受 G1 待决约束；Attendance/Grade 公式不属于此内部剖面 |
+| G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类按 G1 已确认范围留到后续工作包；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、当前串行套件的源边界及焦点/ARIA/布局通过；默认并行测试有主机敏感失败。人工、实际禁网旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 754 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
 | G7 性能基线 | 尚未通过 | 参考规模与 p95 预算已批准并版本化；最终 Windows host 内核 query p95 为 45.28/48.93 ms，长路径备份已恢复；仍缺双平台 packaged 端点、真实后台重叠及适用 ADR 测量，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
@@ -49,7 +50,7 @@ G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R
 ## 3. G1：已定位的适用性决定
 
 ROADMAP §8 与 2026-08-28 一体化设计 §10 都把新模型安排为另行登记的后续切片，
-但当前 PRD/Contracts 已更新以下语义；G-A 计划尚未明确冻结其内部验收版本：
+当前 PRD/Contracts 已更新以下语义；用户于 2026-09-04 明确确认本次 G-A 按已交付 A-only 模型验收：
 
 | Requirement 分支 | 已交付 | 已批准的后续目标 |
 |---|---|---|
@@ -58,8 +59,8 @@ ROADMAP §8 与 2026-08-28 一体化设计 §10 都把新模型安排为另行�
 | `A-TASK-009` | large 任务进度 | 与任务分类独立的 progressTracking |
 | `A-VIEW-003` | next-small / next-large | next-coursework / next-assessment |
 
-待确认的最小口径是：G-A 按已交付剖面验收，上表新增分支留到后续工作包，且不撤销它们的批准。
-此决定尚未据推测写回 PRD，也没有以本次验收为由实现新模型。
+已确认口径：G-A 按已交付剖面验收，上表新增分支另行登记后续工作包，且不撤销它们的批准。
+此决定只冻结本次内部验收的适用范围，不回退 PRD/Contracts，也不把新模型记为已实现。
 当前首次设置已经是 Term-only minimum，不能把 ROADMAP 历史段落中的旧 minimum 写回产品。
 
 实际存在的 `A-TERM-006` 已在用户批准的 UI 切片 9 实现并具备重置/幂等/冲突/重启测试。
@@ -265,7 +266,7 @@ host kernel 测量：每窗口 100 次的默认/月窗口 p95 为 103.66/114.00 
 UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 登记 Verification；
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
-剩余动作集中为 G1 的验收口径；G6 的当前 Windows 人工矩阵、禁网/失败旅程及默认并行测试稳定性；
+G1 的验收口径已获用户确认，默认并行测试阻断已修复并完整通过。剩余动作集中为 G6 的当前 Windows 人工矩阵与禁网/失败旅程；
 G7 的双平台 packaged 启动/IPC、实际后台重叠及适用 ADR 测量。Mac 已完成的 UI 验收继续保留，
 新增内核代码仅需补其相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。
