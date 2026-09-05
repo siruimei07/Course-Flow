@@ -13,9 +13,10 @@
 | macOS arm64 | package/smoke 与最终原生复验见 BACKLOG 的“macOS 最终 clean 制品原生复验”；用户在本次任务前确认 macOS 测试完成 |
 | Windows x64 | 本轮在该提交的独立 detached worktree 中通过 `pnpm package` 与 `pnpm smoke:packaged`，均 exit 0 |
 | 双平台烟测身份 | `development:b39124d3d83e887ee6a142c416a41654c304ab57`；SQLite `3.53.1`、`verified-local` |
-| 当前工作树基线 | `07d2379bcb140a3f51c072e4e79af4598f1df206`；开始任务时相对上述源码仅追加 18 行台账。本轮另修复已实测的时间格式化性能与 Windows SQLite 长路径问题 |
-| 当前 Windows 包 | clean `07d2379` 的 package/smoke 也均 exit 0；与同源配对的 `b39124d` 分别记录，不混淆 identity |
-| 最终自动化 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：750 = 749 pass / 0 fail / 1 skip，65293.6158 ms；包含 G5、formatter 与长路径修复 |
+| 开始任务的源码 | `07d2379bcb140a3f51c072e4e79af4598f1df206`；相对上述 macOS 源码仅追加 18 行台账；本轮修复的源码与验证另行记录 |
+| 开始任务的 Windows 包 | clean `07d2379` 的 package/smoke 也均 exit 0；与同源配对的 `b39124d` 分别记录，不混淆 identity |
+| 第一轮修复自动化 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：750 = 749 pass / 0 fail / 1 skip，65293.6158 ms；包含 G5、formatter 与长路径修复，提交为 `f8f5f51ce727d23e12c8aceb3325e9bf67daf55c` |
+| 第二轮修复验证 | 时间转换结果有界复用及驱动计时修正；typecheck 与脚本 self-check PASS；相同 752 项串行测试 751 pass / 0 fail / 1 skip。默认并行完整测试仍有失败，详见第 5 节 |
 | 唯一 Windows skip | `tests/platform/backup-destination.test.ts` 的文件 symlink 创建权限。保留环境跳过，不声称在 Windows 执行通过 |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
@@ -36,7 +37,7 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类仍受 G1 待决约束；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 同源双平台 package/smoke、源边界及焦点/ARIA/布局自动化已通过；人工、实际禁网旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、当前串行套件的源边界及焦点/ARIA/布局通过；默认并行测试有主机敏感失败。人工、实际禁网旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
 | G7 性能基线 | 尚未通过 | 用户已批准并版本化参考规模与 p95 预算；原始 PLAN 热点和长路径备份失败已修复，仍缺双平台完整端点分布及后台重叠证据，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
@@ -162,7 +163,7 @@ process-cold startup p95 ≤ 3000 ms、核心 query p95 ≤ 100 ms、正式 comm
 CPU profile 证实每个默认/月窗口查询分别创建约 12,304/16,532 个日期 formatter，
 构造路径占约 70.6%/72.8% 的采样；这些包含子调用的比例不可相加。
 先修复 Term 日期转换，后续采样再定位到 Meeting/weekly Task 共用的时区转换。
-两个既有 shared 时间函数现各保留最近一个显式时区的已验证 formatter，
+两个既有 shared 时间函数首先各保留最近一个显式时区的已验证 formatter，
 不改变 DST offset 算法或 PLAN 数据范围；同时拒绝缺失 Meeting TermZone 导致的系统时区回退。
 构造次数回归分别从 33/32 次降为 1 次，时区切换、alias、DST 和非法输入回归通过。
 
@@ -193,6 +194,40 @@ Windows 长路径回归实际经过 DATA 创建、三份备份发布、quarantin
 
 原失败报告保留，恢复记录在 `_scratch/resume-after-fix.json`；WorkspaceId、原配置与开发身份保持。
 该恢复使用当前有修复的编译工作树，不能称为旧 clean 包结果。所有测试库连接已关闭。
+
+### 较大样本与第二轮性能修复
+
+干净提交 `f8f5f51ce727d23e12c8aceb3325e9bf67daf55c` 上，版本化工具完成全部正式造数与
+host kernel 测量：每窗口 100 次的默认/月窗口 p95 为 103.66/114.00 ms，仍超过 100 ms。
+40 次配置备份后的提交全部追平且最终 current，查询 p95 为 87.89 ms。
+原始结果保留在 `_scratch/wp-ga-01-reference-f8f5f51/kernel-measurements.json`；未删除慢样本。
+
+正常模式的后续采样确认，时区解析约 72%–73%、Instant 日期转换约 98% 为相同输入的重复计算。
+因此在既有两个时区记录上各增加最多 512 个成功结果；满后清空重算，输入校验先于查表，
+失败不入表，不缓存 DATA、投影或可变事实。DST 计算本体未改。
+新增回归证明重复输入不再重新格式化、超过容量后正确重算，并覆盖非法输入的缓存键碰撞。
+
+同一参考库、正常模式、每窗口 10 次的诊断 p95/最大值降至默认 49.14 ms、月窗口 38.09 ms；
+这组仍包含原驱动的 JSON 序列化开销，单独 handle 的最大值为 47.70/35.89 ms。
+完整样本在 `_scratch/wp-ga-01-query-timing-f8f5f51-bounded-results.json`，仍按 N=10 诊断记录。
+驱动另外移除了成功路径多余的 JSON 字符串化；其独立开销约 1–2 ms，不将它冒充产品优化。
+
+第二轮的 18 项时间契约定向回归全部通过；`pnpm typecheck`、脚本语法及 `--self-check` 通过。
+`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 第一次为 752 = 750 pass / 1 fail / 1 skip，
+70408.1542 ms；失败为既有 `packaged smoke reuses exited-root discovery prepared before a constrained cleanup window`
+用例的 `taskkill timed out`（清理宽限 600 ms）。单独复跑该项 1/1 通过，2996.0776 ms。
+第二次默认并行全套为 752 = 749 pass / 2 fail / 1 skip，58013.0708 ms：同一清理超时，
+另有既有 topbar layout fixture 读取 `DevToolsActivePort` 的 EBUSY；后者未进入布局断言。
+这些测试及其 runner/fixture 没有在本轮修改。失败仍保留，不能用定向通过替代完整通过。
+原始日志为 `_scratch/wp-ga-01-typecheck-bounded.log`、`wp-ga-01-test-bounded.log`、
+`wp-ga-01-test-bounded-cleanup-retry.log`、`wp-ga-01-test-bounded-retry.log`。
+
+独立完整 smoke 测试文件随后 7/7 通过，17.054 s，且无该轮测试进程遗留。
+在同一编译输出上设置 `COURSEFLOW_REQUIRE_BROWSER=1`，执行
+`node --test --test-concurrency=1 ".test-dist/tests/**/*.test.js"`，相同 752 项为
+751 pass / 0 fail / 1 skip，164754.8887 ms，原始日志为 `_scratch/wp-ga-01-test-bounded-serial.log`。
+此结果证明明确串行条件下的完整回归通过，不改写两次默认并行运行的失败结果。
+正式 Windows smoke runner 使用 5000 ms 清理宽限；测试特设的 600 ms 未放宽，产品代码未为此修改。
 
 ## 6. 生命周期与下一步
 

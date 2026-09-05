@@ -744,7 +744,7 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
 - 用户要求完成 G-A 收口，并确认 macOS 测试已完成；本轮不重开其已完成测试。
 - 同一 clean `b39124d3d83e887ee6a142c416a41654c304ab57` 的 Windows x64 package/smoke
   均 exit 0，与前行 macOS arm64 证据配对；smoke 报对应 development identity 与 SQLite 3.53.1 verified-local。
-- 当前 `07d2379` 的 Windows package/smoke 也通过；它与 `b39124d` 之间仅有验收文档变动。
+- 开始任务时 `07d2379` 的 Windows package/smoke 也通过；它与 `b39124d` 之间仅有验收文档变动。
 - 补强既有 G5 用例：真实备份失败后创建 Term、Course/Meeting、Task 并查询 PLAN，
   在 PROTECT degraded 下保留 plan.write，重启后正式投影逐字段保持。
 - 实测定位并修复两个 G7 阻断：Term/Meeting 日期 formatter 重复构造，以及 Windows SQLite
@@ -754,8 +754,17 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
 - 用户已批准并版本化 [G7 参考规模和 p95 预算](./WP-GA-01-PERFORMANCE.md)。
   无 Proxy 的修复后诊断样本每窗口 10 次，默认/月窗口 p95 为 96.96/86.19 ms；
   该小样本不替代双平台完整分布、packaged 端点及真实后台重叠证据。
-- 最终 `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为
+- 第一轮修复的 `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为
   750 = 749 通过 / 0 失败 / 1 文件链接权限跳过，65293.6158 ms；浏览器布局测试实际执行。
+- 干净提交 `f8f5f51` 的每窗口 100 次 host query p95 为 103.66/114.00 ms，仍未达预算；
+  保留原始慢样本后，根据重复计算采样给两个时间函数各增加最多 512 个纯结果，校验先于查表。
+  DST、容量清空重算及非法输入碰撞回归通过；驱动另移除成功路径多余的 JSON 字符串化。
+- 第二轮 typecheck 与脚本 self-check 通过；默认并行全套两次分别为
+  752 = 750 通过 / 1 失败 / 1 跳过、752 = 749 通过 / 2 失败 / 1 跳过。
+  两次均为既有 smoke 清理测试的 `taskkill` 超时，第二次另有既有浏览器 fixture 的 EBUSY。
+  独立 smoke 文件 7/7 通过；未修改其 runner、fixture 或超时阈值，未据定向通过抹去全套失败。
+  相同编译输出以 `COURSEFLOW_REQUIRE_BROWSER=1 node --test --test-concurrency=1 ".test-dist/tests/**/*.test.js"`
+  完整运行，752 = 751 通过 / 0 失败 / 1 文件链接权限跳过，164754.8887 ms；仅宣告串行条件下通过。
 - 逐 Gate 证据和剩余项见 [G-A 验收记录](./WP-GA-01-ACCEPTANCE.md)。
   G2–G5 的 A-only 内核证据已归并；G1 验收模型口径、G6 剩余产品环境证据和 G7 性能基线仍待收口。
 - `WP-RF-01` 的 Windows typecheck/test/package/smoke 证据已满足，登记为 `Done`；

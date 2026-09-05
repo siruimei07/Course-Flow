@@ -81,25 +81,33 @@ function localCoordinate(localDate: string, localTime: string): number {
     return utcCoordinate(year, month, day, hour, minute, 0);
 }
 
-/** ponytail: Retain one explicit zone; revisit only if concurrent multi-zone views need formatter reuse. */
+/**
+ * ponytail: Bound pure results to 512 entries in one zone; eviction only repeats locked-tzdb work.
+ * @const
+ * @type {number}
+ */
+const MAX_RECENT_ZONE_INSTANTS = 512;
+
+/** Keeps only the most recent explicit zone and its recomputable Instant results. */
 let recentZoneFormatter: {
     input: string;
     canonicalZone: string;
     formatter: Intl.DateTimeFormat;
+    instants: Map<string, string>;
 } | null = null;
 
 /**
  * Reuses the validated explicit-zone formatter used to inspect one tzdb rule set.
  * @param {string} termZone - Candidate IANA zone identity.
- * @return {Intl.DateTimeFormat} Formatter that never consults the system default zone.
+ * @return {Object} Validated explicit-zone formatter and bounded resolved Instants.
  */
-function localFormatter(termZone: string): Intl.DateTimeFormat {
+function localZoneFormatting(termZone: string): NonNullable<typeof recentZoneFormatter> {
     if (typeof termZone !== 'string' || termZone.length === 0) {
         throw new TypeError('Meeting time has an invalid TermZone');
     }
     if (recentZoneFormatter !== null
         && (termZone === recentZoneFormatter.input || termZone === recentZoneFormatter.canonicalZone)) {
-        return recentZoneFormatter.formatter;
+        return recentZoneFormatter;
     }
 
     try {
@@ -116,8 +124,13 @@ function localFormatter(termZone: string): Intl.DateTimeFormat {
             second: '2-digit',
             hourCycle: 'h23',
         });
-        recentZoneFormatter = {input: termZone, canonicalZone: formatter.resolvedOptions().timeZone, formatter};
-        return formatter;
+        recentZoneFormatter = {
+            input: termZone,
+            canonicalZone: formatter.resolvedOptions().timeZone,
+            formatter,
+            instants: new Map(),
+        };
+        return recentZoneFormatter;
     }
     catch {
         throw new TypeError('Meeting time has an invalid TermZone');
@@ -147,17 +160,13 @@ function formattedLocalCoordinate(formatter: Intl.DateTimeFormat, instant: numbe
 }
 
 /**
- * Resolves a local date-time using compatible DST disambiguation.
- * @param {string} termZone - Explicit TermZone.
+ * Computes compatible DST disambiguation for validated local fields.
+ * @param {Intl.DateTimeFormat} formatter - Validated explicit-zone formatter.
  * @param {string} localDate - Canonical LocalDate.
  * @param {string} localTime - Canonical LocalTime.
- * @return {string} Canonical Instant, choosing the earlier overlap and shifting a gap forward.
+ * @return {string} Canonical Instant from the runtime's locked tzdb.
  */
-function resolveIntlInstant(termZone: string, localDate: string, localTime: string): string {
-    if (!isCanonicalLocalDate(localDate) || !LOCAL_TIME_PATTERN.test(localTime)) {
-        throw new TypeError('Meeting time has invalid local fields');
-    }
-    const formatter = localFormatter(termZone);
+function resolveLocalInstant(formatter: Intl.DateTimeFormat, localDate: string, localTime: string): string {
     const target = localCoordinate(localDate, localTime);
     const offsets = new Set(OFFSET_SAMPLE_HOURS.map(hours => {
         const sample = target + hours * 60 * MILLISECONDS_PER_MINUTE;
@@ -179,6 +188,33 @@ function resolveIntlInstant(termZone: string, localDate: string, localTime: stri
         throw new TypeError('Meeting local time cannot be resolved in its TermZone');
     }
     return new Date(shifted[0]!.instant).toISOString();
+}
+
+/**
+ * Resolves a local date-time using compatible DST disambiguation.
+ * @param {string} termZone - Explicit TermZone.
+ * @param {string} localDate - Canonical LocalDate.
+ * @param {string} localTime - Canonical LocalTime.
+ * @return {string} Canonical Instant, choosing the earlier overlap and shifting a gap forward.
+ */
+function resolveIntlInstant(termZone: string, localDate: string, localTime: string): string {
+    if (!isCanonicalLocalDate(localDate)
+        || typeof localTime !== 'string'
+        || !LOCAL_TIME_PATTERN.test(localTime)) {
+        throw new TypeError('Meeting time has invalid local fields');
+    }
+    const zoneFormatting = localZoneFormatting(termZone);
+    const key = `${localDate}T${localTime}`;
+    const cachedInstant = zoneFormatting.instants.get(key);
+    if (cachedInstant !== undefined) {
+        return cachedInstant;
+    }
+    const instant = resolveLocalInstant(zoneFormatting.formatter, localDate, localTime);
+    if (zoneFormatting.instants.size >= MAX_RECENT_ZONE_INSTANTS) {
+        zoneFormatting.instants.clear();
+    }
+    zoneFormatting.instants.set(key, instant);
+    return instant;
 }
 
 /**

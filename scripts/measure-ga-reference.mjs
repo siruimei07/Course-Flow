@@ -164,7 +164,9 @@ async function main() {
     /** Asserts every formal outcome; failed requests are never silently omitted from timing. */
     async function send(request) {
         const outcome = await application.handle(request);
-        assert.equal(outcome.ok, true, JSON.stringify(outcome));
+        if (!outcome.ok) {
+            assert.fail(JSON.stringify(outcome));
+        }
         return outcome.value;
     }
 

@@ -77,8 +77,10 @@ node scripts/measure-ga-reference.mjs --output ABSOLUTE_NEW_DIRECTORY --short-re
 
 工具计时仅覆盖 `WorkspaceApplication.open/handle`，不经过 Electron、preload/IPC 或 Renderer。
 reopen 保留同一进程的模块/OS 缓存且不包含后续 bootstrap，不能填入 packaged 启动预算。
-提交计时不包含之前读取乐观版本的 setup 查询。备份使用正式配置、真实异步 writer，
-每次提交后都等待并验证 `current`/覆盖水位；原始查询前后状态单独保留。
+提交计时不包含之前读取乐观版本的 setup 查询。
+成功响应不额外执行 JSON 字符串化；失败响应才序列化到断言报告，避免把驱动开销计入请求耗时。
+备份使用正式配置、真实异步 writer，每次提交后都等待并验证 `current`/覆盖水位；
+原始查询前后状态单独保留。
 它没有独立测定后台 I/O 与请求区间的重叠，short 模式也没有无备份对照，不能据此判定完整后台影响门。
 
 报告记录真实 host OS/CPU/RAM/Node/SQLite、HEAD、`git status --short` 与开发 AppBuildId。
@@ -90,7 +92,7 @@ reopen 保留同一进程的模块/OS 缓存且不包含后续 bootstrap，不�
 
 | 平台 | 已有实测/台账档案 | 每次正式测量仍须记录 |
 |---|---|---|
-| Windows | 2026-09-04 host kernel：Windows 11 Home China `10.0.26200` / x64；Core Ultra 9 275HX、24 logical processors、33,693,310,976 bytes RAM；Node 24.19.0、SQLite 3.53.3 | 实际 OS 补丁、设备型号、存储/文件系统与空闲空间、电源/节能状态、其他负载；packaged Electron/Node/SQLite、显示/DPR |
+| Windows | 2026-09-04：ROG Strix G16 G615LP；Windows 11 Home China 25H2 `26200.9168` / x64；Core Ultra 9 275HX、24 logical processors、33,693,310,976 bytes RAM；E 盘 Samsung 990 PRO 2TB / NVMe / NTFS，约 1.15 TB 空闲；当前 Razer Cortex Power Plan；host Node 24.19.0、SQLite 3.53.3 | 每次记录电源/负载变化；packaged Electron/Node/SQLite、显示/DPR与进程树资源。只读设备原始记录为工作区 `_scratch/wp-ga-01-device-windows.json` |
 | macOS | [BACKLOG 原生复验台账](./BACKLOG.md)：MacBook Air `Mac15,12` / Apple M3 / 16 GB；macOS 26.5.2 build 25F84 / arm64 | 在真实设备刷新上述字段、存储/文件系统、电源与负载；保存同一最终源码的原始数组及 packaged runtime 身份，现有 UI 复验不提供这些数值 |
 
 本轮时间格式化与 Windows SQLite 路径边界修复属于新的源码状态。

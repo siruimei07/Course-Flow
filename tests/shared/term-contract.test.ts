@@ -70,6 +70,55 @@ test('G7: repeated TermZone evaluation reuses its validated date formatter', () 
     }
 });
 
+test('G7: repeated Instant dates reuse bounded results and recompute after the limit', () => {
+    localDateInTermZone('2026-01-01T12:00:00.000Z', 'UTC');
+    const originalDateTimeFormat = Intl.DateTimeFormat;
+    const restorations: (() => void)[] = [];
+    let formattingCalls = 0;
+    Intl.DateTimeFormat = new Proxy(originalDateTimeFormat, {
+        construct(target, argumentsList, newTarget) {
+            const formatter = Reflect.construct(target, argumentsList, newTarget) as Intl.DateTimeFormat;
+            const formatToParts = formatter.formatToParts;
+            formatter.formatToParts = instant => {
+                formattingCalls += 1;
+                return formatToParts.call(formatter, instant);
+            };
+            restorations.push(() => {
+                formatter.formatToParts = formatToParts;
+            });
+            return formatter;
+        },
+    });
+
+    try {
+        const instant = '2026-03-09T03:59:59.999Z';
+        assert.equal(localDateInTermZone(instant, 'America/Toronto'), '2026-03-08');
+        assert.equal(formattingCalls, 1);
+        for (let index = 0; index < 16; index += 1) {
+            assert.equal(localDateInTermZone(instant, 'America/Toronto'), '2026-03-08');
+        }
+        assert.equal(formattingCalls, 1);
+
+        const firstInstant = '2026-01-01T12:00:00.000Z';
+        let lastInstant = firstInstant;
+        for (let index = 0; index <= 512; index += 1) {
+            lastInstant = new Date(Date.parse(firstInstant) + index * 86_400_000).toISOString();
+            assert.equal(localDateInTermZone(lastInstant, 'UTC'), lastInstant.slice(0, 10));
+        }
+        const workAfterLimit = formattingCalls;
+        assert.equal(localDateInTermZone(lastInstant, 'UTC'), lastInstant.slice(0, 10));
+        assert.equal(formattingCalls, workAfterLimit);
+        assert.equal(localDateInTermZone(firstInstant, 'UTC'), '2026-01-01');
+        assert.equal(formattingCalls, workAfterLimit + 1);
+    }
+    finally {
+        Intl.DateTimeFormat = originalDateTimeFormat;
+        for (const restore of restorations) {
+            restore();
+        }
+    }
+});
+
 test('A-TERM-003: formatter reuse preserves zone changes, DST boundaries, and invalid-input rejection', () => {
     const cases = [
         ['2026-03-08T04:59:59.999Z', 'America/Toronto', '2026-03-07'],

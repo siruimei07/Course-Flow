@@ -183,11 +183,19 @@ export function isCanonicalLocalDate(value: unknown): value is string {
         && date.getUTCDate() === day;
 }
 
-/** ponytail: Keep only the latest explicit zone; revisit if concurrent multi-zone views need reuse. */
+/**
+ * ponytail: Bound pure results to 512 entries in one zone; eviction only repeats locked-tzdb work.
+ * @const
+ * @type {number}
+ */
+const MAX_RECENT_TERM_DATES = 512;
+
+/** Keeps only the most recent explicit zone and its recomputable date results. */
 let recentTermZone: {
     input: string;
     canonicalZone: string;
     formatter: Intl.DateTimeFormat;
+    dates: Map<string, string>;
 } | null = null;
 
 /**
@@ -211,7 +219,12 @@ function termZoneFormatting(value: unknown): typeof recentTermZone {
             month: '2-digit',
             day: '2-digit',
         });
-        recentTermZone = {input: value, canonicalZone: formatter.resolvedOptions().timeZone, formatter};
+        recentTermZone = {
+            input: value,
+            canonicalZone: formatter.resolvedOptions().timeZone,
+            formatter,
+            dates: new Map(),
+        };
         return recentTermZone;
     }
     catch {
@@ -234,9 +247,18 @@ export function localDateInTermZone(evaluatedAt: string, termZone: string): stri
         throw new TypeError('Term evaluation has invalid time values');
     }
 
+    const cachedDate = zoneFormatting.dates.get(evaluatedAt);
+    if (cachedDate !== undefined) {
+        return cachedDate;
+    }
     const parts = zoneFormatting.formatter.formatToParts(new Date(evaluatedAt));
     const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-    return `${values.year}-${values.month}-${values.day}`;
+    const date = `${values.year}-${values.month}-${values.day}`;
+    if (zoneFormatting.dates.size >= MAX_RECENT_TERM_DATES) {
+        zoneFormatting.dates.clear();
+    }
+    zoneFormatting.dates.set(evaluatedAt, date);
+    return date;
 }
 
 /**
