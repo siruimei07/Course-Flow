@@ -3,7 +3,8 @@
  */
 
 import assert from 'node:assert/strict';
-import {existsSync, mkdtempSync, rmSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
+import {existsSync, mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -214,6 +215,7 @@ async function prepareProtectedRestore(
         applications,
         confirmed,
         dataSlotsRoot,
+        destination,
         initial,
         protection,
         queried,
@@ -273,6 +275,100 @@ test('TEST-WORKSPACE-002/TEST-PROTECT-004: restore remains path-free across Work
         /(?:[A-Za-z]:[\\/]|canonicalPath|directoryPath|workspace\.sqlite)/,
     );
     assert.equal(BACKUP_REPOSITORY_SCHEMA, 'courseflow-backup-repository-v1');
+});
+
+test('ADR-08/FLOW-05: restored backup destination requires a new explicit grant', async t => {
+    const fixture = await prepareProtectedRestore(t);
+    const original = fixture.protection.value.projection;
+    if (original.configuration.kind !== 'configured') {
+        throw new Error('Expected original backup configuration');
+    }
+    const snapshotDirectory = path.join(
+        fixture.destination,
+        'CourseFlow',
+        fixture.started.value.session.current.workspaceId,
+        original.configuration.backupSetId,
+        `snapshot-${fixture.started.value.session.candidate.snapshotId}`,
+    );
+    const originalManifest = readFileSync(path.join(snapshotDirectory, 'manifest.json'));
+    const originalDatabase = readFileSync(path.join(snapshotDirectory, 'workspace.sqlite'));
+    const restored = await fixture.application.handle(contract().makeResumeRestoreSessionRequest(
+        'restore-before-backup-restart',
+        APP_BUILD_ID,
+        fixture.initial.workspaceEpoch,
+        {
+            commandId: RESUME_COMMAND_ID,
+            restoreSessionId: fixture.confirmed.value.session.restoreSessionId,
+            expectedSessionVersion: fixture.confirmed.value.session.sessionVersion,
+        },
+    ) as never) as unknown as RestoreWorkspaceOutcome;
+    assert.equal(restored.ok, true);
+    if (!restored.ok) {
+        throw new Error('Expected completed restore');
+    }
+    assert.equal(restored.value.session.phase, 'succeeded');
+    await fixture.application.close();
+
+    const restarted = await WorkspaceApplication.open(fixture.dataSlotsRoot, APP_BUILD_ID, {
+        activityControlRoot: fixture.activityControlRoot,
+    });
+    fixture.applications.push(restarted);
+    const initial = await bootstrap(restarted);
+    await restarted.waitForDurableBackups();
+    const settled = await bootstrap(restarted);
+    assert.equal(settled.workspaceData.kind, 'ready');
+    const protection = await restarted.handle(contract().makeDataProtectionQueryRequest(
+        'backup-after-restore-restart',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ) as never) as unknown as ProtectionOutcome;
+    assert.equal(protection.ok, true);
+    if (!protection.ok) {
+        throw new Error('Expected restored data protection projection');
+    }
+    assert.equal(protection.value.projection.configuration.kind, 'unconfigured');
+    assert.equal(settled.workspaceLifecycle.moduleHealth['MOD-PROTECT'], 'healthy');
+    assert.equal(settled.workspaceLifecycle.operations.some(operation => operation.kind === 'backup'), false);
+    const configured = await restarted.handle(contract().makeSelectedBackupDestinationRequest(
+        contract().makeConfigureBackupDestinationRequest('grant-new-backup-destination', APP_BUILD_ID,
+            initial.workspaceEpoch, {
+                commandId: randomUUID(),
+                followUpId: randomUUID(),
+                workspaceId: fixture.started.value.session.current.workspaceId,
+                expectedRevision: protection.value.projection.workspaceRevision,
+                expectedProtectionVersion: protection.value.projection.protectionEntityVersion,
+                intent: {kind: 'protect.configure-backup-destination', intentSchemaVersion: 1, payload: {}},
+            }),
+        fixture.destination,
+    ));
+    assert.equal(configured.ok, true);
+    await restarted.waitForDurableBackups();
+    const reconfigured = await restarted.handle(contract().makeDataProtectionQueryRequest(
+        'new-backup-current', APP_BUILD_ID, initial.workspaceEpoch,
+    )) as unknown as ProtectionOutcome;
+    assert.equal(reconfigured.ok, true);
+    if (!reconfigured.ok || !('backup' in reconfigured.value.projection)) {
+        throw new Error('Expected explicitly configured new BackupSet');
+    }
+    assert.equal(reconfigured.value.projection.backup.state, 'current');
+    assert.notEqual(reconfigured.value.projection.configuration.backupSetId, original.configuration.backupSetId);
+    await restarted.close();
+
+    const secondRestart = await WorkspaceApplication.open(fixture.dataSlotsRoot, APP_BUILD_ID, {
+        activityControlRoot: fixture.activityControlRoot,
+    });
+    fixture.applications.push(secondRestart);
+    const secondInitial = await bootstrap(secondRestart);
+    const kept = await secondRestart.handle(contract().makeDataProtectionQueryRequest(
+        'new-grant-survives-old-restore-receipt', APP_BUILD_ID, secondInitial.workspaceEpoch,
+    )) as unknown as ProtectionOutcome;
+    assert.equal(kept.ok, true);
+    if (!kept.ok) {
+        throw new Error('Expected retained new backup grant');
+    }
+    assert.deepEqual(kept.value.projection.configuration, reconfigured.value.projection.configuration);
+    assert.deepEqual(readFileSync(path.join(snapshotDirectory, 'manifest.json')), originalManifest);
+    assert.deepEqual(readFileSync(path.join(snapshotDirectory, 'workspace.sqlite')), originalDatabase);
 });
 
 test('FLOW-05: armed recovery blocks ordinary open until explicit rollback reopens DATA', async t => {

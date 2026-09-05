@@ -20,6 +20,7 @@
 | 本轮最终源码与 Windows 包 | clean `df9841e4b1e942cbb856da14e677d5c7737d07ad`；`pnpm package` 与 `pnpm smoke:packaged` 均 exit 0；`development:df9841e4b1e942cbb856da14e677d5c7737d07ad`、SQLite `3.53.1`、`verified-local` |
 | 唯一 Windows skip | `tests/platform/backup-destination.test.ts` 的文件 symlink 创建权限。保留环境跳过，不声称在 Windows 执行通过 |
 | R7 前置收口的默认并行复验 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：754 = 753 pass / 0 fail / 1 skip，62396.4652 ms；修复与原始失败对照见 Backlog 最新证据，日志为 `_scratch/r7-prereq-test-default.log` |
+| 恢复后目录授权修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 755 = 754 pass / 0 fail / 1 skip，48099.3505 ms；新增成功恢复必须重新授权的回归与既有双次恢复、rollback/receipt 测试通过；日志 `_scratch/r7-prereq-test-restore-final.log` |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-b39124d.log`、`wp-ga-01-smoke-b39124d.log`、
@@ -59,7 +60,7 @@ ROADMAP §8 与 2026-08-28 一体化设计 §10 都把新模型安排为另行�
 | `A-TASK-009` | large 任务进度 | 与任务分类独立的 progressTracking |
 | `A-VIEW-003` | next-small / next-large | next-coursework / next-assessment |
 
-已确认口径：G-A 按已交付剖面验收，上表新增分支另行登记后续工作包，且不撤销它们的批准。
+已确认口径：G-A 按已交付剖面验收，上表新增分支已登记为 Backlog 的 `WP-MODEL-01`（尚未领取），且不撤销它们的批准。
 此决定只冻结本次内部验收的适用范围，不回退 PRD/Contracts，也不把新模型记为已实现。
 当前首次设置已经是 Term-only minimum，不能把 ROADMAP 历史段落中的旧 minimum 写回产品。
 

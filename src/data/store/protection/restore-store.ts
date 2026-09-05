@@ -1,3 +1,7 @@
+/**
+ * @file Persists typed Restore sessions and completion receipts in DATA.
+ */
+
 import { createHash } from 'node:crypto';
 import { insertRestoreCommandReceipt } from '../context';
 import type { StoreContext } from '../context';
@@ -147,6 +151,27 @@ export function recordRestoreCompletionReceipt(ctx: StoreContext,
                     DELETE FROM restore_sessions
                     WHERE restore_session_id = ? AND operation_id = ?
                 `).run(input.restoreSessionId, input.operationId);
+        }
+        if (input.outcome === 'succeeded') {
+            // Snapshot paths and BackupSet operations are historical facts, never a current-device grant.
+            // Invalidate them in the receipt transaction; rollback and receipt replay retain current grants.
+            ctx.database.exec(`
+                DELETE FROM backup_cleanup_operations;
+                DELETE FROM backup_snapshots;
+                DELETE FROM backup_operations;
+                UPDATE durable_followups
+                SET state = 'pending', follow_up_version = 0
+                WHERE owner = 'protect' AND kind = 'backup-needed-through';
+                UPDATE protection_watermarks SET backup_succeeded_through = 0 WHERE singleton = 1;
+                UPDATE backup_configuration
+                SET backup_set_id = NULL,
+                    repository_schema = NULL,
+                    canonical_destination_path = NULL,
+                    destination_display_name = NULL,
+                    originating_command_id = NULL,
+                    configured_revision = NULL
+                WHERE singleton = 1;
+            `);
         }
         ctx.database.prepare(`
                 INSERT INTO restore_completion_receipts (

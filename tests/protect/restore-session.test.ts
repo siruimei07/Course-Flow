@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { LEVEL_13_DDL } from '../../src/data/schema/levels/level-13';
 import { rebuildReceiptLedgerAtLevel } from '../data/schema-level.fixture';
-import {createHash} from 'node:crypto';
+import {createHash, randomUUID} from 'node:crypto';
 import {
     appendFileSync,
     copyFileSync,
@@ -1368,6 +1368,36 @@ test('TEST-DATA-006: a later successful replacement chains prior terminal eviden
         fixture.dataSlotsRoot,
     );
     assert.equal(advancedBoot.kind, 'committed');
+
+    const protection = firstStore.readDataProtectionProjection();
+    assert.equal(protection.configuration.kind, 'unconfigured');
+    const configured = await firstStore.commit(normalizeAcceptedConfigureBackupDestinationCommand({
+        commandId: randomUUID(),
+        followUpId: randomUUID(),
+        workspaceId: WORKSPACE_ID,
+        expectedRevision: protection.workspaceRevision,
+        expectedProtectionVersion: protection.protectionEntityVersion,
+        intent: {
+            kind: 'protect.configure-backup-destination',
+            intentSchemaVersion: 1,
+            payload: {},
+        },
+        destination: {
+            backupSetId: randomUUID(),
+            canonicalPath: fixture.destination,
+            displayName: path.basename(fixture.destination),
+            repositorySchema: BACKUP_REPOSITORY_SCHEMA,
+        },
+    }));
+    assert.equal(configured.ok, true);
+    await restoreModule().runDurableBackupPass(firstStore, {
+        clock: {now: () => '2026-08-26T12:01:00.000Z'},
+        identityFactory: () => ({
+            operationId: randomUUID(),
+            snapshotId: randomUUID(),
+            nonce: 'fedcba9876543210',
+        }),
+    });
 
     const candidate = firstActivation.coordinator.listCandidates()
         .find(item => item.status === 'verified');

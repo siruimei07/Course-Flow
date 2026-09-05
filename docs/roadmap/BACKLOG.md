@@ -300,6 +300,15 @@ body {
 | `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉，并修复用户逐项列出的桌面显示缺陷：窗口控件伪影、卡片圆角白斑、多余外缘与根滚动、低分辨率滚动条与错位、首次设置页多余窗口按钮、进度卡黑卡位置，以及把「设置」改为含分类导航的独立设置表面；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | `A-TERM-006`（用户批准的切片 9） | — | `Verification` |
 | `WP-RF-02` | 把 2,848 行的 `src/renderer/styles.css` 按表面拆成多个样式文件并保持行为不变：新增一条 CSS 契约测试断言拆分后按固定顺序拼接的结果与拆分前逐字节相同，`workspace-shell`/`setup-ui` 既有 CSS 断言逐名等值通过 | `WP-UI-01` | 用户 Windows 主机复验 `pnpm test`/`typecheck` | — | — | `Verification` |
 
+### MODEL — 已批准模型的后续实现（不属于本次 G-A）
+
+2026-09-04 用户确认本次按已交付 A-only 模型验收，并将新增模型单独登记。
+下包不增加 R7 的前置依赖；只登记已批准目标，尚未领取，也不改写既有 Requirement/TEST 主所有权。
+
+| WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
+|---|---|---|---|---|---|---|
+| `WP-MODEL-01` | 原子创建多条课节；Coursework/Assessment 与类型；独立 progressTracking；next-coursework/next-assessment 投影。分支与既有交付差异见 [G-A §3](./WP-GA-01-ACCEPTANCE.md#3-g1已定位的适用性决定) | `WP-GA-01` | 实施前补齐迁移与验收切片 | —（关联既有 `A-COURSE-002`、`A-TASK-002`、`A-TASK-009`、`A-VIEW-003` 主所有者） | — | — |
+
 ## 3. 首发 TEST 主所有权校验
 
 注册表必须满足：
@@ -797,6 +806,23 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   CLI 自检 RED→GREEN，真实隔离种子验证 1 学期、5 课程、15 课节规则、200 任务，报告不含性能样本。
 - G6/G7 与 UI 人工证据仍逐项收集，本提交不把 `WP-GA-01`、`WP-UI-01`、`WP-RF-02` 改为 Done，
   也不启动 R7。
+
+`WP-GA-01` 恢复后设备授权修复（2026-09-04，本提交）：
+
+- 真实 Windows packaged 恢复/重启以及 host ADR 取证发现：快照中旧 BackupSet 的排队操作会复活，
+  导致 `Snapshot staging and final directories both exist`。首轮 host 的 41 次错误保留为失败观察，
+  不能用恢复 API 的 succeeded 掩盖 PROTECT 退化。
+- 按 ADR-08 §7.2/§10.2 与 ADR-07 §5.2，在新成功 restore receipt 的既有事务中失效恢复副本里的
+  旧目录授权、备份/清理登记和完成水位。保留业务事实、正式命令回执、旧物理快照与 SafetySet。
+  rollback 保持原授权，已有 receipt 的重放不会清除之后的新授权。
+- 新回归真实经历 restore → restart → unconfigured/healthy → 正式重新授权原目录、新 BackupSet/current
+  → 再次 restart；比较旧 manifest/SQLite 字节未改。既有双次恢复测试补正式重新授权，原 terminal-chain 断言保留。
+- 最小回归 RED → GREEN；`pnpm typecheck` PASS。首轮全套因上述旧测试前提失配为
+  755 = 753 pass / 1 fail / 1 skip，39127.6988 ms；修正后默认并行
+  `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为 755 = 754 pass / 0 fail / 1 skip，48099.3505 ms。
+  原始日志分别保存在 `_scratch/r7-prereq-test-restore.log`、`r7-prereq-test-restore-final.log`；
+  唯一 skip 仍为 Windows 文件 symlink 权限。此行尚不提供新 package 或 macOS 结果。
+- 新模型已独立登记为 `WP-MODEL-01`，状态 `—`，不加入 R7 前置依赖；G-A/UI/RF-02 仍为 Verification。
 
 ## 7. 拆包与变更规则
 
