@@ -18,8 +18,12 @@ import { WorkspaceApplication } from '../src/workspace/application';
 import { makeBootstrapRequest } from '../src/shared/bootstrap-contract';
 import {
     makeConfigureBackupDestinationRequest,
+    makeCreateCourseWithMeetingRequest,
+    makeCreateTaskRequest,
+    makeCreateTermRequest,
     makeDataProtectionQueryRequest,
     makeInitializeWorkspaceRequest,
+    makePlanQueryRequest,
     makeSelectedBackupDestinationRequest,
 } from '../src/shared/workspace-setup-contract';
 import {
@@ -235,10 +239,16 @@ test('TEST-DATA-004/FLOW-04: a formal commit wakes backup asynchronously', async
     await application.close();
 });
 
-test('FLOW-04: an asynchronous backup failure never rolls back the local commit', async t => {
+test('G5/TEST-PROTECT-003: backup failure preserves core writes, queries, and restart facts', async t => {
     const dataSlotsRoot = createDirectory(t, 'workspace-failed-durable-backup');
     const destination = createDirectory(t, 'failed-durable-backup-destination');
+    const clock = {
+        now(): string {
+            return '2026-09-10T13:30:00.000Z';
+        },
+    };
     const application = await WorkspaceApplication.open(dataSlotsRoot, APP_BUILD_ID, {
+        clock,
         durableBackupOptions: {
             failpoint(point: string): void {
                 if (point === 'backup.after-database-temp-write') {
@@ -293,14 +303,130 @@ test('FLOW-04: an asynchronous backup failure never rolls back the local commit'
     }
     assert.equal(projection.value.projection.workspaceRevision, '1');
     assert.equal(projection.value.projection.configuration.kind, 'configured');
+    assert.equal(failedLifecycle.workspaceLifecycle.capabilities['plan.write'], 'available');
+    const term = await application.handle(makeCreateTermRequest(
+        'create-term-after-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: '33333333-3333-4333-8333-333333333333',
+            followUpId: '44444444-4444-4444-8444-444444444444',
+            expectedRevision: '1',
+            expectedPlanVersion: '0',
+            intent: {
+                kind: 'plan.create-term',
+                intentSchemaVersion: 1,
+                payload: {
+                    name: 'Fall 2026',
+                    startDate: '2026-09-01',
+                    endDate: '2026-09-30',
+                    timeZone: 'America/Toronto',
+                },
+            },
+        },
+    ));
+    assert.equal(term.ok, true, JSON.stringify(term));
+    const course = await application.handle(makeCreateCourseWithMeetingRequest(
+        'create-course-after-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: '55555555-5555-4555-8555-555555555555',
+            followUpId: '66666666-6666-4666-8666-666666666666',
+            expectedRevision: '2',
+            expectedPlanVersion: '1',
+            overlapDecision: 'review',
+            intent: {
+                kind: 'plan.create-course-with-first-meeting',
+                intentSchemaVersion: 3,
+                payload: {
+                    course: {
+                        code: 'CSC301',
+                        name: 'Software Engineering',
+                        section: null,
+                        instructor: null,
+                        color: null,
+                        credits: null,
+                        teachingRange: {kind: 'inherit-term'},
+                    },
+                    meeting: {
+                        type: 'LEC',
+                        weekday: 'THU',
+                        localStart: '09:00',
+                        localEnd: '10:00',
+                        endDayOffset: 0,
+                        effectiveRange: {kind: 'inherit-course'},
+                        location: {kind: 'tba'},
+                    },
+                },
+            },
+        },
+    ));
+    assert.equal(course.ok, true, JSON.stringify(course));
+    if (!course.ok || course.value.kind !== 'workspace.command-outcome') {
+        throw new Error('Expected Course creation while backup is degraded');
+    }
+    const courseId = course.value.outcome.effects[0]!.entity.id;
+    const task = await application.handle(makeCreateTaskRequest(
+        'create-task-after-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+        {
+            commandId: '77777777-7777-4777-8777-777777777777',
+            followUpId: '88888888-8888-4888-8888-888888888888',
+            expectedRevision: '3',
+            expectedPlanVersion: '2',
+            intent: {
+                kind: 'plan.create-task-series',
+                intentSchemaVersion: 2,
+                payload: {
+                    courseId,
+                    title: 'Submit while backup is degraded',
+                    size: 'small',
+                    schedule: {kind: 'once', deadline: {kind: 'date-only', date: '2026-09-10'}},
+                },
+            },
+        },
+    ));
+    assert.equal(task.ok, true, JSON.stringify(task));
+    await application.waitForDurableBackups();
+    const afterCoreWrites = await bootstrap(application);
+    assert.equal(afterCoreWrites.workspaceLifecycle.mode, 'limited');
+    assert.equal(afterCoreWrites.workspaceLifecycle.moduleHealth['MOD-PROTECT'], 'degraded');
+    assert.equal(afterCoreWrites.workspaceLifecycle.capabilities['plan.write'], 'available');
+    const plan = await application.handle(makePlanQueryRequest(
+        'query-plan-after-failed-backup',
+        APP_BUILD_ID,
+        initial.workspaceEpoch,
+    ));
+    assert.equal(plan.ok, true, JSON.stringify(plan));
+    if (!plan.ok || plan.value.kind !== 'workspace.plan-projection') {
+        throw new Error('Expected PLAN query while backup is degraded');
+    }
+    assert.equal(plan.value.projection.workspaceRevision, '4');
+    assert.equal(plan.value.projection.term.name, 'Fall 2026');
+    assert.equal(plan.value.projection.today.meetings.length, 1);
+    assert.equal(plan.value.projection.today.tasks.length, 1);
+    assert.equal(plan.value.projection.today.tasks[0]!.occurrence.title, 'Submit while backup is degraded');
     await application.close();
 
     const restarted = await WorkspaceApplication.open(
         dataSlotsRoot,
         APP_BUILD_ID,
+        {clock},
     ) as BackupAwareWorkspaceApplication;
-    await bootstrap(restarted);
+    const restartedBootstrap = await bootstrap(restarted);
     await restarted.waitForDurableBackups();
+    const restartedPlan = await restarted.handle(makePlanQueryRequest(
+        'query-plan-after-restart',
+        APP_BUILD_ID,
+        restartedBootstrap.workspaceEpoch,
+    ));
+    assert.equal(restartedPlan.ok, true, JSON.stringify(restartedPlan));
+    if (!restartedPlan.ok || restartedPlan.value.kind !== 'workspace.plan-projection') {
+        throw new Error('Expected persisted PLAN query after restart');
+    }
+    assert.deepEqual(restartedPlan.value.projection, plan.value.projection);
     assert.equal(readdirSync(path.join(
         destination,
         'CourseFlow',

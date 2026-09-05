@@ -46,6 +46,56 @@ test('A-TERM-003: the same Instant resolves only through the supplied TermZone',
     assert.equal(localDateInTermZone(instant, 'Pacific/Kiritimati'), '2026-12-19');
 });
 
+test('G7: repeated TermZone evaluation reuses its validated date formatter', () => {
+    const instant = '2026-12-19T04:59:59.999Z';
+    localDateInTermZone(instant, 'UTC');
+    const originalDateTimeFormat = Intl.DateTimeFormat;
+    let constructions = 0;
+    Intl.DateTimeFormat = new Proxy(originalDateTimeFormat, {
+        construct(target, argumentsList, newTarget) {
+            constructions += 1;
+            return Reflect.construct(target, argumentsList, newTarget);
+        },
+    });
+
+    try {
+        assert.deepEqual(normalizeCreateTermCommand(VALID_COMMAND), VALID_COMMAND);
+        for (let index = 0; index < 16; index += 1) {
+            assert.equal(localDateInTermZone(instant, 'America/Toronto'), '2026-12-18');
+        }
+        assert.equal(constructions, 1);
+    }
+    finally {
+        Intl.DateTimeFormat = originalDateTimeFormat;
+    }
+});
+
+test('A-TERM-003: formatter reuse preserves zone changes, DST boundaries, and invalid-input rejection', () => {
+    const cases = [
+        ['2026-03-08T04:59:59.999Z', 'America/Toronto', '2026-03-07'],
+        ['2026-03-08T05:00:00.000Z', 'America/Toronto', '2026-03-08'],
+        ['2026-03-09T03:59:59.999Z', 'America/Toronto', '2026-03-08'],
+        ['2026-03-09T04:00:00.000Z', 'America/Toronto', '2026-03-09'],
+        ['2026-11-01T03:59:59.999Z', 'America/Toronto', '2026-10-31'],
+        ['2026-11-01T04:00:00.000Z', 'America/Toronto', '2026-11-01'],
+        ['2026-11-02T04:59:59.999Z', 'America/Toronto', '2026-11-01'],
+        ['2026-11-02T05:00:00.000Z', 'America/Toronto', '2026-11-02'],
+        ['2026-11-02T04:59:59.999Z', 'UTC', '2026-11-02'],
+        ['2026-11-02T04:59:59.999Z', 'America/Toronto', '2026-11-01'],
+    ];
+    for (const [instant, zone, expectedDate] of cases) {
+        assert.equal(localDateInTermZone(instant, zone), expectedDate);
+    }
+
+    for (const zone of ['', 'Toronto/Local', undefined]) {
+        assert.throws(() => localDateInTermZone(cases[0][0], zone as string), TypeError);
+    }
+    for (const instant of ['not-an-instant', '2026-02-30T00:00:00.000Z']) {
+        assert.throws(() => localDateInTermZone(instant, 'America/Toronto'), TypeError);
+    }
+    assert.equal(localDateInTermZone(cases[0][0], 'America/Toronto'), '2026-03-07');
+});
+
 test('A-TERM-001/TEST-PLAN-001/007: CreateTerm rejects invalid names, dates, ranges, and zones', () => {
     const invalidPayloads = [
         { ...VALID_COMMAND.intent.payload, name: '   ' },

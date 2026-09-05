@@ -81,25 +81,47 @@ function localCoordinate(localDate: string, localTime: string): number {
     return utcCoordinate(year, month, day, hour, minute, 0);
 }
 
+/** ponytail: Retain one explicit zone; revisit only if concurrent multi-zone views need formatter reuse. */
+let recentZoneFormatter: {
+    input: string;
+    canonicalZone: string;
+    formatter: Intl.DateTimeFormat;
+} | null = null;
+
 /**
- * Creates the explicit-zone formatter used to inspect one tzdb rule set.
- * @param {string} termZone - Canonical IANA zone identity.
+ * Reuses the validated explicit-zone formatter used to inspect one tzdb rule set.
+ * @param {string} termZone - Candidate IANA zone identity.
  * @return {Intl.DateTimeFormat} Formatter that never consults the system default zone.
  */
 function localFormatter(termZone: string): Intl.DateTimeFormat {
-    return new Intl.DateTimeFormat('en-CA', {
-        calendar: 'gregory',
-        numberingSystem: 'latn',
-        timeZone: termZone,
-        year: 'numeric',
-        era: 'short',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hourCycle: 'h23',
-    });
+    if (typeof termZone !== 'string' || termZone.length === 0) {
+        throw new TypeError('Meeting time has an invalid TermZone');
+    }
+    if (recentZoneFormatter !== null
+        && (termZone === recentZoneFormatter.input || termZone === recentZoneFormatter.canonicalZone)) {
+        return recentZoneFormatter.formatter;
+    }
+
+    try {
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+            calendar: 'gregory',
+            numberingSystem: 'latn',
+            timeZone: termZone,
+            year: 'numeric',
+            era: 'short',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hourCycle: 'h23',
+        });
+        recentZoneFormatter = {input: termZone, canonicalZone: formatter.resolvedOptions().timeZone, formatter};
+        return formatter;
+    }
+    catch {
+        throw new TypeError('Meeting time has an invalid TermZone');
+    }
 }
 
 /**
@@ -125,20 +147,6 @@ function formattedLocalCoordinate(formatter: Intl.DateTimeFormat, instant: numbe
 }
 
 /**
- * Canonicalizes a TermZone through the runtime's locked tzdb.
- * @param {string} termZone - Candidate IANA zone identity.
- * @return {string} Canonical zone identity.
- */
-function canonicalTermZone(termZone: string): string {
-    try {
-        return new Intl.DateTimeFormat('en-CA', { timeZone: termZone }).resolvedOptions().timeZone;
-    }
-    catch {
-        throw new TypeError('Meeting time has an invalid TermZone');
-    }
-}
-
-/**
  * Resolves a local date-time using compatible DST disambiguation.
  * @param {string} termZone - Explicit TermZone.
  * @param {string} localDate - Canonical LocalDate.
@@ -149,8 +157,7 @@ function resolveIntlInstant(termZone: string, localDate: string, localTime: stri
     if (!isCanonicalLocalDate(localDate) || !LOCAL_TIME_PATTERN.test(localTime)) {
         throw new TypeError('Meeting time has invalid local fields');
     }
-    const canonicalZone = canonicalTermZone(termZone);
-    const formatter = localFormatter(canonicalZone);
+    const formatter = localFormatter(termZone);
     const target = localCoordinate(localDate, localTime);
     const offsets = new Set(OFFSET_SAMPLE_HOURS.map(hours => {
         const sample = target + hours * 60 * MILLISECONDS_PER_MINUTE;

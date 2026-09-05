@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import {join, toNamespacedPath} from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type { DatabaseSyncOptions } from 'node:sqlite';
 import { validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17 } from '../schema';
@@ -74,7 +74,7 @@ export function configureReadOnlyDatabase(database: DatabaseSync): void {
 }
 
 export function openDatabase(path: string, readOnly: boolean): DatabaseSync {
-    const database = new DatabaseSync(path, { ...DATABASE_OPTIONS, readOnly });
+    const database = new DatabaseSync(toNamespacedPath(path), {...DATABASE_OPTIONS, readOnly});
     try {
         if (readOnly) {
             configureReadOnlyDatabase(database);
@@ -104,7 +104,7 @@ export function fireCommitFailpoint(options: CommitOptions, point: CommitFailpoi
  * @return {void}
  */
 export function normalizeBackupDatabaseCopy(path: string): void {
-    const database = new DatabaseSync(path, DATABASE_OPTIONS);
+    const database = new DatabaseSync(toNamespacedPath(path), DATABASE_OPTIONS);
     try {
         database.exec('PRAGMA foreign_keys = ON');
         database.exec('PRAGMA trusted_schema = OFF');

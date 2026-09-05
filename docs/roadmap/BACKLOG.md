@@ -91,7 +91,7 @@
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-GA-01` | 完成已批准桌面窗口 UI 优化后，不含 Attendance/Library 的 A-only 打包剖面通过 G1–G7；其保护证据会在 R11/R12 被替代 | `WP-R6-05` | `WP-R1-05`, 当前双平台 A-only 包、Windows 真实物理鼠标环境 | — | — | — |
+| `WP-GA-01` | 完成已批准桌面窗口 UI 优化后，不含 Attendance/Library 的 A-only 打包剖面通过 G1–G7；其保护证据会在 R11/R12 被替代 | `WP-R6-05` | `WP-R1-05`, 当前双平台 A-only 包、Windows 真实物理鼠标环境 | — | — | `Verification` |
 
 #### `WP-GA-01` 桌面窗口 UI 优化 Implementation Plan
 
@@ -99,7 +99,7 @@
 
 **目标：** 默认恢复窗口为显式 `1280×800`、最小窗口为 `960×640`（2026-08-29 用户直接指令，取代原计划的 `1120×720` 且不再排除最小尺寸），Renderer 只呈现一个贴合窗口客户区的视觉外壳；正常窗口的四边保持一致，内容较长或窗口较矮时底边仍始终可见，右侧不显示垂直滚动条但滚轮、触控板和键盘滚动继续可用。
 
-> **实施状态（2026-09-04）：** 切片 1 与切片 2 的代码已按上述数值在 `WP-UI-01` 切片 2 中实现，既有自动化证据见台账；`WP-GA-01` 本身仍为 `—`。剩余工作须结合[证据台账](#6-证据台账)中的后续 P1 修复记录、自动门禁结果和跨平台证据缺口判定：处理仍开放的缺陷与自动门禁阻断，并补齐同一 clean source 的双平台 packaged 人工验收与 A-only G1–G7。
+> **实施状态（2026-09-04）：** 切片 1 与切片 2 的代码已按上述数值在 `WP-UI-01` 切片 2 中实现，既有自动化证据见台账；`WP-GA-01` 已进入 `Verification`。剩余工作须结合[证据台账](#6-证据台账)中的后续 P1 修复记录、自动门禁结果和跨平台证据缺口判定：处理仍开放的缺陷与自动门禁阻断，并补齐同一 clean source 的双平台 packaged 人工验收与 A-only G1–G7。
 
 **架构：** Main 继续拥有原生窗口尺寸和 `thickFrame`；Renderer 技术根节点只约束客户区，现有 `.workspace-frame` 拥有唯一视觉边界，现有 `.workspace-content` 拥有唯一纵向滚动。设置对话框和业务页面不改变事实或 DOM 所有权。
 
@@ -228,7 +228,7 @@ body {
 
 ##### Packaged 人工验收与 Gate
 
-- [ ] 从同一 clean source 分别在 Windows x64 与 macOS arm64 运行 `pnpm package`、`pnpm smoke:packaged`，记录精确 commit、平台、制品身份和结果；单平台不得推断另一平台通过。
+- [x] 从同一 clean source 分别在 Windows x64 与 macOS arm64 运行 `pnpm package`、`pnpm smoke:packaged`，记录精确 commit、平台、制品身份和结果；单平台不得推断另一平台通过。
 - [ ] 在两平台真实 packaged app 的首次默认打开中观察恢复窗口为 `1280×800`；桌面只出现在原生窗口之外，客户区内没有第二层灰白外框或不对称外围留白。
 - [ ] 使用真实长内容分别在默认 `1280×800` 与最小 `960×640` 恢复窗口检查页面顶部、中段、末尾：四边属于同一外壳，底边始终留在窗口底部，最后一项可完整到达，最右侧没有可见垂直滚动条。
 - [ ] 用真实鼠标滚轮/触控板和键盘 `PageUp`、`PageDown`、`Home`、`End` 验证内容仍可双向滚动；键盘焦点、skip link、Today/Courses/Calendar/Tasks/Files 与设置对话框不得被内部滚动区困住或遮挡。
@@ -290,12 +290,12 @@ body {
 
 ### RF — 维护性重构（非首发交付链）
 
-本节工作包不属于 §1 所述 53 个首发工作包，不拥有任何 Requirement/TEST 主所有权，也不改变首发剖面；它只登记行为保持的仓库结构维护，遵守与主链相同的状态与证据规则。
+本节工作包不属于 §1 所述 53 个首发工作包。两个 RF 包只登记行为保持的仓库结构维护，不拥有 Requirement/TEST 主所有权；`WP-UI-01` 另拥有用户在切片 9 明确批准并已实现的补充需求 `A-TERM-006`，不新增 TEST 主所有权。该例外不改变首发剖面；三个包遵守与主链相同的状态与证据规则。
 
 | WorkPacket | 可验证结果 | 硬依赖 | 证据依赖 | 主 Requirement | 主 TEST | 状态 |
 |---|---|---|---|---|---|---|
-| `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `Verification` |
-| `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉，并修复用户逐项列出的桌面显示缺陷：窗口控件伪影、卡片圆角白斑、多余外缘与根滚动、低分辨率滚动条与错位、首次设置页多余窗口按钮、进度卡黑卡位置，以及把「设置」改为含分类导航的独立设置表面；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | — | — | `In Progress` |
+| `WP-RF-01` | 按[已批准重构计划](../superpowers/plans/2026-08-28-courseflow-physical-architecture-refactor.md)完成 `src/` 物理模块化：`plan`/`workspace` 新包、data store 与 schema 内部拆分、renderer/protect/shared 拆分、依赖方向架构测试；全程行为保持，现有测试逐名等值通过 | `WP-R6-05` | 用户 Windows 主机复验 `pnpm test`/`typecheck`/`package`/`smoke:packaged` | — | — | `Done` |
+| `WP-UI-01` | 按用户 2026-08-29 直接指令与参考图对齐桌面视觉，并修复用户逐项列出的桌面显示缺陷：窗口控件伪影、卡片圆角白斑、多余外缘与根滚动、低分辨率滚动条与错位、首次设置页多余窗口按钮、进度卡黑卡位置，以及把「设置」改为含分类导航的独立设置表面；验收以用户在运行应用中的人工评审为准 | `WP-RF-01` | 用户运行应用人工评审 | `A-TERM-006`（用户批准的切片 9） | — | `Verification` |
 | `WP-RF-02` | 把 2,848 行的 `src/renderer/styles.css` 按表面拆成多个样式文件并保持行为不变：新增一条 CSS 契约测试断言拆分后按固定顺序拼接的结果与拆分前逐字节相同，`workspace-shell`/`setup-ui` 既有 CSS 断言逐名等值通过 | `WP-UI-01` | 用户 Windows 主机复验 `pnpm test`/`typecheck` | — | — | `Verification` |
 
 ## 3. 首发 TEST 主所有权校验
@@ -312,7 +312,7 @@ body {
 
 注册表必须满足：
 
-- 42 条 MVP-A、6 条 MVP-A-P、13 条 MVP-B Requirement 各有且只有一个主工作包，共 61 条。
+- 43 条 MVP-A、6 条 MVP-A-P、13 条 MVP-B Requirement 各有且只有一个主工作包，共 62 条；其中 `A-TERM-006` 的补充主所有者为 `WP-UI-01` 切片 9，其余由首发主链拥有。
 - `C-GRADE-001`–`C-GRADE-014` 与 `C-TARGET-001`–`C-TARGET-007` 明确排除，且不得由无 Requirement 的基础工作包暗中实现。
 - 没有主 Requirement 的工作包只建设当前纵向切片必需的部署、契约、测试或安全边界，不拥有新的产品行为。
 
@@ -738,6 +738,30 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
 - 这些结果仍为 agent 原生交互证据；VoiceOver、增强对比度、降低透明度、减弱动态效果尚未获准
   临时切换，因此没有将其记作通过。同源 Windows、真人物理设备矩阵与 G1–G7 缺口不因本行关闭，
   `WP-UI-01`、两个 RF 包和 `WP-GA-01` 的生命周期保持原状态。
+
+`WP-GA-01` 验收收口补证（2026-09-04，本提交）：
+
+- 用户要求完成 G-A 收口，并确认 macOS 测试已完成；本轮不重开其已完成测试。
+- 同一 clean `b39124d3d83e887ee6a142c416a41654c304ab57` 的 Windows x64 package/smoke
+  均 exit 0，与前行 macOS arm64 证据配对；smoke 报对应 development identity 与 SQLite 3.53.1 verified-local。
+- 当前 `07d2379` 的 Windows package/smoke 也通过；它与 `b39124d` 之间仅有验收文档变动。
+- 补强既有 G5 用例：真实备份失败后创建 Term、Course/Meeting、Task 并查询 PLAN，
+  在 PROTECT degraded 下保留 plan.write，重启后正式投影逐字段保持。
+- 实测定位并修复两个 G7 阻断：Term/Meeting 日期 formatter 重复构造，以及 Windows SQLite
+  长路径使备份 queued/quarantined 无法收敛。两个时间函数各复用一个显式时区 formatter；
+  三个 DATA 文件的九个 SQLite 路径入口使用标准库适配，未修改持久路径、UUID 或备份格式。
+  长路径回归 RED→GREEN；原失败测试库通过正常恢复分别达到 current 337 和 277。
+- 用户已批准并版本化 [G7 参考规模和 p95 预算](./WP-GA-01-PERFORMANCE.md)。
+  无 Proxy 的修复后诊断样本每窗口 10 次，默认/月窗口 p95 为 96.96/86.19 ms；
+  该小样本不替代双平台完整分布、packaged 端点及真实后台重叠证据。
+- 最终 `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 为
+  750 = 749 通过 / 0 失败 / 1 文件链接权限跳过，65293.6158 ms；浏览器布局测试实际执行。
+- 逐 Gate 证据和剩余项见 [G-A 验收记录](./WP-GA-01-ACCEPTANCE.md)。
+  G2–G5 的 A-only 内核证据已归并；G1 验收模型口径、G6 剩余产品环境证据和 G7 性能基线仍待收口。
+- `WP-RF-01` 的 Windows typecheck/test/package/smoke 证据已满足，登记为 `Done`；
+  `WP-UI-01` 与 `WP-GA-01` 进入 `Verification`，`WP-RF-02` 保持 `Verification`。
+  不因自动化通过而将 G-A 或依赖它的 R7 提前关闭/启动。
+- 修正漏计既有 `A-TERM-006` 的需求总数及其补充主所有权；保留历史台账原始结论。
 
 ## 7. 拆包与变更规则
 

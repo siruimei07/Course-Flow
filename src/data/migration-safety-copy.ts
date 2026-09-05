@@ -376,7 +376,7 @@ function validateSchema(database: DatabaseSync, schemaLevel: number): SchemaFact
  * @return {void}
  */
 function normalizeClosedCopy(databasePath: string): void {
-    const database = new DatabaseSync(databasePath, {
+    const database = new DatabaseSync(path.toNamespacedPath(databasePath), {
         enableForeignKeyConstraints: true,
         enableDoubleQuotedStringLiterals: false,
         allowExtension: false,
@@ -432,7 +432,7 @@ function verifyCopyDirectory(
         || digest.sha256 !== metadata.closedDataSlotDigest) {
         throw new Error('Migration safety copy database digest changed');
     }
-    const database = new DatabaseSync(databasePath, {
+    const database = new DatabaseSync(path.toNamespacedPath(databasePath), {
         readOnly: true,
         enableForeignKeyConstraints: true,
         enableDoubleQuotedStringLiterals: false,
@@ -663,11 +663,11 @@ export async function ensureMigrationSafetyCopy(
     const finalName = `${FINAL_DIRECTORY_PREFIX}${copyId}`;
     const stagingPath = ensureSnapshotStagingDirectory(input.dataSlotsRoot, stagingName);
     const databasePath = path.join(stagingPath, DATABASE_FILE_NAME);
-    await backup(input.sourceDatabase, databasePath);
+    await backup(input.sourceDatabase, path.toNamespacedPath(databasePath));
     normalizeClosedCopy(databasePath);
     syncPlainFile(databasePath);
     const digest = digestPlainFile(databasePath, MAXIMUM_DATABASE_BYTES);
-    const database = new DatabaseSync(databasePath, {
+    const database = new DatabaseSync(path.toNamespacedPath(databasePath), {
         readOnly: true,
         enableForeignKeyConstraints: true,
     });
@@ -821,15 +821,18 @@ function requireActiveSafetyCopy(
         || member.sha256 !== metadata.closedDataSlotDigest) {
         throw new Error('Active DATA does not match the migration safety copy');
     }
-    const database = new DatabaseSync(path.join(dataSlotsRoot, 'active', DATABASE_FILE_NAME), {
-        readOnly: true,
-        enableForeignKeyConstraints: true,
-        enableDoubleQuotedStringLiterals: false,
-        allowExtension: false,
-        allowUnknownNamedParameters: false,
-        defensive: true,
-        timeout: 5_000,
-    });
+    const database = new DatabaseSync(
+        path.toNamespacedPath(path.join(dataSlotsRoot, 'active', DATABASE_FILE_NAME)),
+        {
+            readOnly: true,
+            enableForeignKeyConstraints: true,
+            enableDoubleQuotedStringLiterals: false,
+            allowExtension: false,
+            allowUnknownNamedParameters: false,
+            defensive: true,
+            timeout: 5_000,
+        },
+    );
     try {
         database.exec('PRAGMA trusted_schema = OFF');
         database.exec('PRAGMA query_only = ON');

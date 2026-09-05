@@ -1614,7 +1614,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 ## 11. 完整追溯矩阵
 
-### 11.1 已批准完整设计功能需求（75；首发 61）
+### 11.1 已批准完整设计功能需求（76；首发 62）
 
 为保持密集矩阵可读，§11 的 TEST 列允许省略共同前缀：例如 `PLAN-001/007` 精确展开为 `TEST-PLAN-001` 与 `TEST-PLAN-007`。roadmap、backlog、测试报告和 Agent 工作包必须使用 §10 定义的完整 `TEST-*` ID。
 
@@ -1662,7 +1662,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 `WP-R2-03` 只关闭 `A-COURSE-001–004` 中“创建 Course 与首个周期 Meeting”的纵向切片；Course 编辑/归档、同一 Course 的多个 Meeting 及其后续生命周期仍由后续工作包验收，不因本切片 `Done` 而声称完整 Requirement 已关闭。
 
-完整已批准设计计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 + GRADE 14 = 75。首发计数：PLAN/View/Calendar 31 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 = 61；C1 的 GRADE 14 条不进入首发构建。C-TARGET-001–007 不计入完整设计或首发功能覆盖，映射到 `EXT-C2`。
+完整已批准设计计数：PLAN/View/Calendar 32 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 + GRADE 14 = 76。首发计数：PLAN/View/Calendar 32 + DATA/PLATFORM 11 + ATTEND 6 + FILE 13 = 62；C1 的 GRADE 14 条不进入首发构建。C-TARGET-001–007 不计入完整设计或首发功能覆盖，映射到 `EXT-C2`。
 
 “已覆盖”表示架构边界、接口和证据位置存在，不伪称上游参数已经完整。`A-VIEW-004/005` 的 `near-due` 由 PLAN 单点实现，并引用 PRD 的已裁定产品规则。
 
@@ -1755,7 +1755,7 @@ disabled-by-user 的 ATTEND 不使 Workspace limited。备份目的地未配置�
 
 ### 11.6 非当前范围与未来接缝
 
-下表用于后续文档对齐，不计入当前 75 条功能需求、当前 Gate 或 backlog：
+下表用于后续文档对齐，不计入当前 76 条功能需求、当前 Gate 或 backlog：
 
 | Source item | Extension seam | 进入实现前必须补充 |
 |---|---|---|
@@ -1847,7 +1847,7 @@ WorkPacket
 
 ### 12.4 文档终审清单
 
-- [ ] 首发 61 条功能需求和完整已批准设计 75 条功能需求全部出现在 §11.1；C2/C3 未计入两者覆盖；
+- [ ] 首发 62 条功能需求和完整已批准设计 76 条功能需求全部出现在 §11.1；C2/C3 未计入两者覆盖；
 - [ ] 7 条 STATE、12 条 NFR、13 条 DOD、10 条 User Flow、首发 19 个 UI 表面及完整设计 24 个 UI 表面全部可追溯；
 - [ ] 九个模块都包含 Purpose、Owns、Does not own、Interfaces、Invariants、Problems、Test seams、Trace；
 - [ ] 八条 FLOW 都定义 Trigger、步骤、成功边界和失败/降级语义；

@@ -6,10 +6,58 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    INTL_ZONE_RULES,
     findMeetingTimeOverlap,
     isCanonicalInstant,
     resolveMeetingOccurrenceTime,
 } from '../../src/shared/meeting-time';
+
+test('G7: repeated explicit-zone resolution reuses its validated local formatter', () => {
+    INTL_ZONE_RULES.resolveInstant('UTC', '2026-02-02', '09:00');
+    const originalDateTimeFormat = Intl.DateTimeFormat;
+    let constructions = 0;
+    Intl.DateTimeFormat = new Proxy(originalDateTimeFormat, {
+        construct(target, argumentsList, newTarget) {
+            constructions += 1;
+            return Reflect.construct(target, argumentsList, newTarget);
+        },
+    });
+
+    try {
+        for (let index = 0; index < 16; index += 1) {
+            assert.equal(
+                INTL_ZONE_RULES.resolveInstant('America/Toronto', '2026-02-02', '09:00'),
+                '2026-02-02T14:00:00.000Z',
+            );
+        }
+        assert.equal(constructions, 1);
+    }
+    finally {
+        Intl.DateTimeFormat = originalDateTimeFormat;
+    }
+});
+
+test('Q-TIME-01: formatter reuse preserves explicit zone changes and rejects invalid inputs', () => {
+    for (const [zone, expectedInstant] of [
+        ['America/Toronto', '2026-02-02T14:00:00.000Z'],
+        ['UTC', '2026-02-02T09:00:00.000Z'],
+        ['US/Eastern', '2026-02-02T14:00:00.000Z'],
+        ['America/New_York', '2026-02-02T14:00:00.000Z'],
+        ['America/Toronto', '2026-02-02T14:00:00.000Z'],
+    ]) {
+        assert.equal(INTL_ZONE_RULES.resolveInstant(zone, '2026-02-02', '09:00'), expectedInstant);
+    }
+    for (const zone of ['', 'Toronto/Local', undefined]) {
+        assert.throws(() => INTL_ZONE_RULES.resolveInstant(zone as string, '2026-02-02', '09:00'), TypeError);
+    }
+    for (const [date, time] of [['2026-02-30', '09:00'], ['2026-02-02', '24:00']]) {
+        assert.throws(() => INTL_ZONE_RULES.resolveInstant('America/Toronto', date, time), TypeError);
+    }
+    assert.equal(
+        INTL_ZONE_RULES.resolveInstant('America/Toronto', '2026-02-02', '09:00'),
+        '2026-02-02T14:00:00.000Z',
+    );
+});
 
 test('Q-TIME-01: Meeting windows resolve only through the supplied TermZone', () => {
     const toronto = resolveMeetingOccurrenceTime({

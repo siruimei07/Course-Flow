@@ -138,15 +138,23 @@ function createTempDirectory(t: test.TestContext, prefix: string): string {
 /**
  * Creates one configured DATA store with a durable pending follow-up.
  * @param {test.TestContext} t - Owning test context.
+ * @param {object} directories - Optional isolated paths for filesystem boundary tests.
+ * @param {string} directories.dataSlotsRoot - Workspace DATA parent directory.
+ * @param {string} directories.destination - Selected backup destination directory.
  * @return {Promise<object>} Data root, destination, and writable store.
  */
-async function createConfiguredStore(t: test.TestContext): Promise<Readonly<{
+async function createConfiguredStore(
+    t: test.TestContext,
+    directories?: Readonly<{dataSlotsRoot: string; destination: string}>,
+): Promise<Readonly<{
     dataSlotsRoot: string;
     destination: string;
     store: SqliteDataStore;
 }>> {
-    const dataSlotsRoot = createTempDirectory(t, 'courseflow-flow04-data-');
-    const destination = createTempDirectory(t, 'courseflow-flow04-destination-');
+    const dataSlotsRoot = directories?.dataSlotsRoot ?? createTempDirectory(t, 'courseflow-flow04-data-');
+    const destination = directories?.destination ?? createTempDirectory(t, 'courseflow-flow04-destination-');
+    mkdirSync(dataSlotsRoot, {recursive: true});
+    mkdirSync(destination, {recursive: true});
     const store = initializeWorkspaceData(dataSlotsRoot, WORKSPACE_ID);
     const result = await store.commit(normalizeAcceptedConfigureBackupDestinationCommand({
         commandId: CONFIGURE_COMMAND_ID,
@@ -649,6 +657,96 @@ test('A-DATA-004/TEST-PROTECT-003: retention keeps the newest two and leaves unk
         [THIRD_SNAPSHOT_ID, SECOND_SNAPSHOT_ID],
     );
     await configured.store.close();
+});
+
+test('TEST-PROTECT-003: long Windows SQLite paths stay current through retention and restart', {
+    skip: process.platform !== 'win32',
+}, async t => {
+    const root = createTempDirectory(t, 'courseflow-long-path-');
+    const longRoot = path.join(root, 'nested-'.repeat(18), 'nested-'.repeat(18));
+    const dataSlotsRoot = path.join(longRoot, 'data');
+    const destination = path.join(longRoot, 'backups');
+    assert.ok(path.join(dataSlotsRoot, 'active', 'workspace.sqlite').length > 260);
+    const configured = await createConfiguredStore(t, {dataSlotsRoot, destination});
+    const store = configured.store;
+    const module = loadDurableBackup();
+
+    try {
+        await module.runDurableBackupPass(store, runOptions());
+        await commitDecision(store, {
+            commandId: SECOND_COMMAND_ID,
+            followUpId: SECOND_FOLLOW_UP_ID,
+            expectedRevision: '1',
+            expectedSetupVersion: '0',
+            decision: 'later',
+        });
+        await module.runDurableBackupPass(store, additionalRunOptions({
+            operationId: SECOND_OPERATION_ID,
+            snapshotId: SECOND_SNAPSHOT_ID,
+            nonce: '1111111111111111',
+            createdAt: '2026-08-25T12:00:02.000Z',
+            succeededAt: '2026-08-25T12:00:03.000Z',
+        }));
+        await commitDecision(store, {
+            commandId: THIRD_COMMAND_ID,
+            followUpId: THIRD_FOLLOW_UP_ID,
+            expectedRevision: '2',
+            expectedSetupVersion: '1',
+            decision: 'skip',
+        });
+        let hasQuarantinedDatabase = false;
+        await module.runDurableBackupPass(store, additionalRunOptions({
+            operationId: THIRD_OPERATION_ID,
+            snapshotId: THIRD_SNAPSHOT_ID,
+            nonce: '2222222222222222',
+            createdAt: '2026-08-25T12:00:04.000Z',
+            succeededAt: '2026-08-25T12:00:05.000Z',
+        }, point => {
+            if (point === 'retention.after-quarantine-record') {
+                const quarantinedDatabase = path.join(
+                    backupSetDirectory(destination),
+                    `.quarantine-${CLEANUP_OPERATION_ID}-${SNAPSHOT_ID}`,
+                    'workspace.sqlite',
+                );
+                assert.ok(quarantinedDatabase.length > 260);
+                assert.equal(existsSync(quarantinedDatabase), true);
+                hasQuarantinedDatabase = true;
+            }
+        }));
+        assert.equal(hasQuarantinedDatabase, true);
+        assert.deepEqual(store.readProtectionWatermarks(), {neededThrough: '3', succeededThrough: '3'});
+        assert.equal(store.readPendingFollowUps().length, 0);
+        assert.deepEqual(readdirSync(backupSetDirectory(destination)).sort(), [
+            `snapshot-${THIRD_SNAPSHOT_ID}`,
+            `snapshot-${SECOND_SNAPSHOT_ID}`,
+        ].sort());
+    }
+    finally {
+        await store.close();
+    }
+
+    const reopened = openWorkspaceData(dataSlotsRoot);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind !== 'ready') {
+        throw new Error('Expected ready Workspace DATA');
+    }
+    try {
+        const projection = module.readVerifiedDataProtectionProjection(reopened.store);
+        assert.equal('backup' in projection, true);
+        if (!('backup' in projection)) {
+            throw new Error('Expected configured protection projection');
+        }
+        assert.equal(projection.backup.state, 'current');
+        assert.equal(projection.backup.cleanup, 'idle');
+        assert.deepEqual(
+            projection.backup.recentVerifiedSnapshots.map(snapshot => snapshot.snapshotId),
+            [THIRD_SNAPSHOT_ID, SECOND_SNAPSHOT_ID],
+        );
+        assert.deepEqual(reopened.store.readProtectionWatermarks(), {neededThrough: '3', succeededThrough: '3'});
+    }
+    finally {
+        await reopened.store.close();
+    }
 });
 
 test('ADR-07/TEST-PROTECT-003: projection refresh lists only currently verified snapshots', async t => {

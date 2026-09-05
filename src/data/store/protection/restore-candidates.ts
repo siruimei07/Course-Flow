@@ -1,6 +1,6 @@
 import { constants as fsConstants } from 'node:fs';
 import { copyFileSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
+import {isAbsolute, toNamespacedPath} from 'node:path';
 import { backup } from 'node:sqlite';
 import { COURSEFLOW_APPLICATION_ID, CURRENT_SCHEMA_LEVEL, migrateLevel13To14, migrateLevel14To15, migrateLevel15To16, migrateLevel16To17, validateSchemaLevel13, validateSchemaLevel14, validateSchemaLevel15, validateSchemaLevel16, validateSchemaLevel17 } from '../../schema';
 import type { StoreContext } from '../context';
@@ -144,7 +144,7 @@ export async function writeRestoreSafetyDatabaseCopy(ctx: StoreContext,
         || !isCanonicalUnsignedSqliteInteger(expectedRevision)) {
         throw new TypeError('Restore safety database destination is invalid');
     }
-    await backup(ctx.database, destinationPath);
+    await backup(ctx.database, toNamespacedPath(destinationPath));
     normalizeBackupDatabaseCopy(destinationPath);
     return validateRestoreSafetyDatabaseCopy(ctx, destinationPath, expectedRevision);
 }
@@ -205,7 +205,7 @@ export async function writeBackupDatabaseCopy(ctx: StoreContext,
         || targetRevision === '0') {
         throw new TypeError('Backup database destination is invalid');
     }
-    await backup(ctx.database, destinationPath);
+    await backup(ctx.database, toNamespacedPath(destinationPath));
     normalizeBackupDatabaseCopy(destinationPath);
     return validateBackupDatabaseCopy(ctx, destinationPath, targetRevision);
 }

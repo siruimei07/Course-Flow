@@ -183,36 +183,58 @@ export function isCanonicalLocalDate(value: unknown): value is string {
         && date.getUTCDate() === day;
 }
 
-function canonicalTimeZone(value: unknown): string | null {
+/** ponytail: Keep only the latest explicit zone; revisit if concurrent multi-zone views need reuse. */
+let recentTermZone: {
+    input: string;
+    canonicalZone: string;
+    formatter: Intl.DateTimeFormat;
+} | null = null;
+
+/**
+ * Reuses date formatting only after validating an explicit time zone.
+ * @param {unknown} value - Candidate explicit IANA zone identity.
+ * @return {Object | null} Validated zone and formatter, or null for an invalid zone.
+ */
+function termZoneFormatting(value: unknown): typeof recentTermZone {
     if (typeof value !== 'string' || value.length === 0) {
         return null;
     }
+    if (recentTermZone !== null
+        && (value === recentTermZone.input || value === recentTermZone.canonicalZone)) {
+        return recentTermZone;
+    }
 
     try {
-        return new Intl.DateTimeFormat('en-CA', { timeZone: value }).resolvedOptions().timeZone;
+        const formatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone: value,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        });
+        recentTermZone = {input: value, canonicalZone: formatter.resolvedOptions().timeZone, formatter};
+        return recentTermZone;
     }
     catch {
         return null;
     }
 }
 
+function canonicalTimeZone(value: unknown): string | null {
+    return termZoneFormatting(value)?.canonicalZone ?? null;
+}
+
 /**
  * Converts an Instant to its calendar date using only the explicit TermZone.
  */
 export function localDateInTermZone(evaluatedAt: string, termZone: string): string {
-    const canonicalZone = canonicalTimeZone(termZone);
+    const zoneFormatting = termZoneFormatting(termZone);
     if (!INSTANT_PATTERN.test(evaluatedAt)
         || new Date(evaluatedAt).toISOString() !== evaluatedAt
-        || canonicalZone === null) {
+        || zoneFormatting === null) {
         throw new TypeError('Term evaluation has invalid time values');
     }
 
-    const parts = new Intl.DateTimeFormat('en-CA', {
-        timeZone: canonicalZone,
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-    }).formatToParts(new Date(evaluatedAt));
+    const parts = zoneFormatting.formatter.formatToParts(new Date(evaluatedAt));
     const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
     return `${values.year}-${values.month}-${values.day}`;
 }
