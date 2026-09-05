@@ -228,7 +228,7 @@ body {
 
 ##### Packaged 人工验收与 Gate
 
-- [x] 从同一 clean source 分别在 Windows x64 与 macOS arm64 运行 `pnpm package`、`pnpm smoke:packaged`，记录精确 commit、平台、制品身份和结果；单平台不得推断另一平台通过。
+- [x] 从同一 clean source 分别在 Windows x64 与 macOS arm64 运行 `pnpm package`、`pnpm smoke:packaged`，记录精确 commit、平台、制品身份和结果；已完成的配对源码为 `b39124d`，不替代新增内核修复的跨平台证据。
 - [ ] 在两平台真实 packaged app 的首次默认打开中观察恢复窗口为 `1280×800`；桌面只出现在原生窗口之外，客户区内没有第二层灰白外框或不对称外围留白。
 - [ ] 使用真实长内容分别在默认 `1280×800` 与最小 `960×640` 恢复窗口检查页面顶部、中段、末尾：四边属于同一外壳，底边始终留在窗口底部，最后一项可完整到达，最右侧没有可见垂直滚动条。
 - [ ] 用真实鼠标滚轮/触控板和键盘 `PageUp`、`PageDown`、`Home`、`End` 验证内容仍可双向滚动；键盘焦点、skip link、Today/Courses/Calendar/Tasks/Files 与设置对话框不得被内部滚动区困住或遮挡。
@@ -765,8 +765,14 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   独立 smoke 文件 7/7 通过；未修改其 runner、fixture 或超时阈值，未据定向通过抹去全套失败。
   相同编译输出以 `COURSEFLOW_REQUIRE_BROWSER=1 node --test --test-concurrency=1 ".test-dist/tests/**/*.test.js"`
   完整运行，752 = 751 通过 / 0 失败 / 1 文件链接权限跳过，164754.8887 ms；仅宣告串行条件下通过。
+- 最终干净源码 `df9841e4b1e942cbb856da14e677d5c7737d07ad` 的完整 host 测量每窗口 100 次，
+  默认/月窗口 query p95 为 45.28/48.93 ms；无备份/已配置备份的 commit p95 为 3.94/8.26 ms。
+  40 次备份后的提交逐轮追平，最终 current 337、两份 verified 快照、cleanup idle；仍未测实际 I/O 重叠。
+  同一 clean 源码的 Windows package/smoke 均 exit 0，smoke identity 为
+  `development:df9841e4b1e942cbb856da14e677d5c7737d07ad`，SQLite 3.53.1 verified-local。
 - 逐 Gate 证据和剩余项见 [G-A 验收记录](./WP-GA-01-ACCEPTANCE.md)。
-  G2–G5 的 A-only 内核证据已归并；G1 验收模型口径、G6 剩余产品环境证据和 G7 性能基线仍待收口。
+  G2–G5 的 A-only 内核证据已归并；G1 模型口径仍待用户答复；G6 当前 Windows 人工、禁网/失败旅程及
+  默认并行测试稳定性、G7 双平台 packaged 启动/IPC、实际后台重叠与适用 ADR 测量仍待收口。
 - `WP-RF-01` 的 Windows typecheck/test/package/smoke 证据已满足，登记为 `Done`；
   `WP-UI-01` 与 `WP-GA-01` 进入 `Verification`，`WP-RF-02` 保持 `Verification`。
   不因自动化通过而将 G-A 或依赖它的 R7 提前关闭/启动。

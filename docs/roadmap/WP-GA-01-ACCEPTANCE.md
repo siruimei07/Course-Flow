@@ -17,6 +17,7 @@
 | 开始任务的 Windows 包 | clean `07d2379` 的 package/smoke 也均 exit 0；与同源配对的 `b39124d` 分别记录，不混淆 identity |
 | 第一轮修复自动化 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：750 = 749 pass / 0 fail / 1 skip，65293.6158 ms；包含 G5、formatter 与长路径修复，提交为 `f8f5f51ce727d23e12c8aceb3325e9bf67daf55c` |
 | 第二轮修复验证 | 时间转换结果有界复用及驱动计时修正；typecheck 与脚本 self-check PASS；相同 752 项串行测试 751 pass / 0 fail / 1 skip。默认并行完整测试仍有失败，详见第 5 节 |
+| 本轮最终源码与 Windows 包 | clean `df9841e4b1e942cbb856da14e677d5c7737d07ad`；`pnpm package` 与 `pnpm smoke:packaged` 均 exit 0；`development:df9841e4b1e942cbb856da14e677d5c7737d07ad`、SQLite `3.53.1`、`verified-local` |
 | 唯一 Windows skip | `tests/platform/backup-destination.test.ts` 的文件 symlink 创建权限。保留环境跳过，不声称在 Windows 执行通过 |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
@@ -24,6 +25,7 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-07d2379.log`、`wp-ga-01-smoke-07d2379.log`、
 `wp-ga-01-typecheck-fixed.log`、`wp-ga-01-test-fixed.log`。
 修复前 745 项自动化的原日志仍保留为 `wp-ga-01-typecheck-final.log`、`wp-ga-01-test-final.log`。
+本轮最终包日志为 `wp-ga-01-package-df9841e.log`、`wp-ga-01-smoke-df9841e.log`。
 
 旧源码同源 worktree 使用同一 lockfile 离线安装既有依赖（0 downloaded）；未修改依赖。
 本轮内核修复属于新源码；旧 `b39124d` 的双平台记录保留其身份，不替代新增修改的验证。
@@ -38,7 +40,7 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
 | G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、当前串行套件的源边界及焦点/ARIA/布局通过；默认并行测试有主机敏感失败。人工、实际禁网旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | 用户已批准并版本化参考规模与 p95 预算；原始 PLAN 热点和长路径备份失败已修复，仍缺双平台完整端点分布及后台重叠证据，见第 5 节 |
+| G7 性能基线 | 尚未通过 | 参考规模与 p95 预算已批准并版本化；最终 Windows host 内核 query p95 为 45.28/48.93 ms，长路径备份已恢复；仍缺双平台 packaged 端点、真实后台重叠及适用 ADR 测量，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -129,11 +131,11 @@ process-cold startup p95 ≤ 3000 ms、核心 query p95 ≤ 100 ms、正式 comm
 `neededThrough=337`、`succeededThrough=0`、无已验证快照；40 次正式提交及查询仍成功，
 没有把备份失败回滚为本地失败或报告备份成功。故上表最后两行不能计作成功后台备份的影响证据。
 实际临时 SQLite 路径长 254 字符且文件为 0 字节；若附加 `-journal` 将为 262 字符。
-路径长度限制是待验证解释，未观察到对应 journal 文件，未认定它是唯一根因。
+此阶段路径长度限制仍是待验证解释，未观察到对应 journal 文件，尚未认定唯一根因。
 
 随后通过正式接口把目标改为同一专属参考树内的短目录 `b/`，请求返回 `conflict` /
 `dataEffect=unchanged`。当前 DATA 配置提交在 `backup_set_id` 已非空时拒绝再次配置
-（`src/data/store/commits/backup-configuration.ts`），因此本轮没有取得短目标备份恢复结果。
+（`src/data/store/commits/backup-configuration.ts`），因此该次重新配置没有取得短目标备份恢复结果。
 补测原始证据为 `_scratch/wp-ga-01-reference/kernel-short-backup.json`；未绕过守卫或直接修改 SQL。
 长目标的阶段观察停在 `backup.after-staging-create`，原失败数据和空短目录保留，所有 DATA 连接已关闭。
 
@@ -229,11 +231,41 @@ host kernel 测量：每窗口 100 次的默认/月窗口 p95 为 103.66/114.00 
 此结果证明明确串行条件下的完整回归通过，不改写两次默认并行运行的失败结果。
 正式 Windows smoke runner 使用 5000 ms 清理宽限；测试特设的 600 ms 未放宽，产品代码未为此修改。
 
+### 最终干净源码的完整 host 样本
+
+在干净提交 `df9841e4b1e942cbb856da14e677d5c7737d07ad` 完成 `pnpm test:compile` 后，
+运行版本化脚本的默认完整模式；其他测试与打包结束后才开始测量。
+报告的 `sourceCommit` 与 AppBuildId 均指向该提交，`worktreeStatus` 为空。
+仍使用已批准的 v1 输入、Windows host Node 24.19.0 / SQLite 3.53.3 和
+[性能基线](./WP-GA-01-PERFORMANCE.md) 规定的 host kernel 计时边界。
+
+| 实测端点 | 样本数 | p50（ms） | p95（ms） |
+|---|---:|---:|---:|
+| 同进程 Workspace reopen | 20 | 26.59 | 33.25 |
+| 默认 PLAN | 100 | 36.75 | 45.28 |
+| 9 月窗口 PLAN | 100 | 38.97 | 48.93 |
+| 未配置备份的正式提交 | 40 | 2.72 | 3.94 |
+| 已配置备份的正式提交 | 40 | 6.34 | 8.26 |
+| 已配置备份后的默认 PLAN | 40 | 33.85 | 40.26 |
+
+两个查询组的 p99 观测值为 48.68/52.48 ms；未增加 p99 通过门槛。
+40 次配置备份后的提交逐轮验证真实快照追平，最终 `neededThrough=succeededThrough=337`，
+两份最近快照 verified、cleanup idle；没有删去慢样本或覆盖此前的失败报告。
+主机内核查询低于 100 ms 参考值，但本轮没有 packaged IPC、首帧、Mac 或实际 I/O 重叠测量，
+不能据此关闭完整 G7。所有 DATA 连接已经关闭。
+
+原始数组与完整结果为 `_scratch/wp-ga-01-reference-df9841e/kernel-measurements.json`，
+同目录保存种子投影；编译和执行日志为 `wp-ga-01-measure-df9841e-compile.log`、
+`wp-ga-01-measure-df9841e.log`。该源码随后独立完成 Windows package/smoke，身份见第 1 节；
+最终证据归档提交只修改文档，不把文档提交身份写成实测制品身份。
+
 ## 6. 生命周期与下一步
 
 `WP-RF-01` 的 Windows typecheck/test/package/smoke 已齐，因此关闭为 Done。
 UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 登记 Verification；
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
-剩余动作集中为 G1 的验收口径、G6 尚缺的产品环境证据，以及 G7 性能问题与双平台数值结果。
+剩余动作集中为 G1 的验收口径；G6 的当前 Windows 人工矩阵、禁网/失败旅程及默认并行测试稳定性；
+G7 的双平台 packaged 启动/IPC、实际后台重叠及适用 ADR 测量。Mac 已完成的 UI 验收继续保留，
+新增内核代码仅需补其相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。
