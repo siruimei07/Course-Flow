@@ -4,6 +4,7 @@
 
 import {randomBytes, randomUUID} from 'node:crypto';
 import path from 'node:path';
+import {setImmediate as yieldToEventLoop} from 'node:timers/promises';
 
 import {
     deleteQuarantinedSnapshotDirectory,
@@ -120,6 +121,18 @@ type SnapshotPaths = Readonly<{
  */
 function fire(options: DurableBackupPassOptions, point: DurableBackupFailpoint): void {
     options.failpoint?.(point);
+}
+
+/**
+ * Lets queued core requests run before the next synchronous validation and mutation.
+ * @param {SqliteDataStore} store - DATA owner whose writable state may change between turns.
+ * @return {Promise<void>} Rejects if an intervening command made DATA non-writable.
+ */
+async function yieldBeforeBackupMutation(store: SqliteDataStore): Promise<void> {
+    await yieldToEventLoop();
+    if (store.status().kind !== 'ready') {
+        throw new Error('Backup work requires a writable Workspace');
+    }
 }
 
 /**
@@ -494,15 +507,15 @@ function findOldestVerifiedCleanupCandidate(
  * @param {BackupCleanupOperation} cleanup - Persisted cleanup facts.
  * @param {readonly SuccessfulBackupSnapshot[]} snapshots - Registered success facts.
  * @param {DurableBackupPassOptions} options - Deterministic failpoint controls.
- * @return {void}
+ * @return {Promise<void>} Resolves after the journaled cleanup finishes.
  */
-function resumeSnapshotCleanup(
+async function resumeSnapshotCleanup(
     store: SqliteDataStore,
     backupSetDirectoryPath: string,
     cleanup: BackupCleanupOperation,
     snapshots: readonly SuccessfulBackupSnapshot[],
     options: DurableBackupPassOptions,
-): void {
+): Promise<void> {
     const candidate = snapshots.find(snapshot => snapshot.snapshotId === cleanup.snapshotId);
     if (!candidate
         || candidate.backupSetId !== cleanup.backupSetId
@@ -519,6 +532,8 @@ function resumeSnapshotCleanup(
         cleanup.quarantineDirectoryName,
     );
     let current = cleanup;
+    // Serve queued core requests only between durable phases, before their fresh validation.
+    await yieldBeforeBackupMutation(store);
     if (current.phase === 'planned') {
         const finalExists = plainChildDirectoryExists(
             backupSetDirectoryPath,
@@ -552,6 +567,7 @@ function resumeSnapshotCleanup(
         fire(options, 'retention.after-quarantine');
         current = store.markBackupCleanupQuarantined(current.operationId);
         fire(options, 'retention.after-quarantine-record');
+        await yieldBeforeBackupMutation(store);
     }
     if (current.phase === 'quarantined') {
         const finalExists = plainChildDirectoryExists(
@@ -579,6 +595,7 @@ function resumeSnapshotCleanup(
         fire(options, 'retention.after-delete-authorization');
     }
     while (current.phase === 'deleting') {
+        await yieldBeforeBackupMutation(store);
         const finalExists = plainChildDirectoryExists(
             backupSetDirectoryPath,
             current.snapshotDirectoryName,
@@ -684,14 +701,15 @@ function releaseIneligiblePlannedCleanup(
  * @param {SqliteDataStore} store - DATA backup and cleanup owner.
  * @param {BackupConfigurationForProtection} configuration - Current internal BackupSet facts.
  * @param {DurableBackupPassOptions} options - Deterministic identities and failpoints.
- * @return {void}
+ * @return {Promise<void>} Resolves after eligible cleanup operations finish.
  */
-function runSnapshotRetention(
+async function runSnapshotRetention(
     store: SqliteDataStore,
     configuration: BackupConfigurationForProtection,
     options: DurableBackupPassOptions,
-): void {
+): Promise<void> {
     while (true) {
+        await yieldBeforeBackupMutation(store);
         const snapshots = store.readSuccessfulBackupSnapshots();
         const activeCleanup = store.readBackupCleanupOperation();
         if (!activeCleanup && snapshots.length <= 2) {
@@ -723,7 +741,7 @@ function runSnapshotRetention(
             fire(options, 'retention.after-cleanup-claim');
         }
         try {
-            resumeSnapshotCleanup(
+            await resumeSnapshotCleanup(
                 store,
                 tree.backupSetDirectoryPath,
                 cleanup,
@@ -895,7 +913,7 @@ export async function runDurableBackupPass(
         if (configuration === null) {
             return;
         }
-        runSnapshotRetention(store, configuration, options);
+        await runSnapshotRetention(store, configuration, options);
         const identity = (options.identityFactory ?? defaultIdentityFactory)();
         let operation = store.claimBackupOperation({
             operationId: identity.operationId,
@@ -1000,6 +1018,7 @@ export async function runDurableBackupPass(
                 'library-copy',
                 'staging-validation',
             );
+            await yieldBeforeBackupMutation(store);
         }
         if (operation.phase === 'staging-validation') {
             validateSnapshotDirectory(
@@ -1015,6 +1034,7 @@ export async function runDurableBackupPass(
                 'publishing',
             );
             fire(options, 'backup.after-publishing');
+            await yieldBeforeBackupMutation(store);
         }
         if (operation.phase === 'publishing') {
             if (!plainFileExists(paths.finalDatabasePath)) {
@@ -1033,6 +1053,7 @@ export async function runDurableBackupPass(
                 'published-pending-record',
             );
             fire(options, 'backup.after-published-pending-record');
+            await yieldBeforeBackupMutation(store);
         }
         if (operation.phase === 'published-pending-record') {
             const finalTree = readBackupSetTree({

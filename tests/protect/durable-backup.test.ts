@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
+import {DatabaseSync} from 'node:sqlite';
 import test from 'node:test';
 
 import * as durableBackup from '../../src/protect/durable-backup';
@@ -657,6 +658,134 @@ test('A-DATA-004/TEST-PROTECT-003: retention keeps the newest two and leaves unk
         [THIRD_SNAPSHOT_ID, SECOND_SNAPSHOT_ID],
     );
     await configured.store.close();
+});
+
+test('ADR-03/TEST-PROTECT-003: retention lets queued reads run before cleanup completes', async t => {
+    let observedStore: SqliteDataStore | undefined;
+    let cleanupCompleted = false;
+    let queuedRead: Promise<Readonly<{
+        cleanupCompleted: boolean;
+        cleanupPhase: string | null;
+        revision: string;
+    }>> | undefined;
+    const configured = await createThreeSuccessfulSnapshots(t, point => {
+        if (point === 'retention.after-quarantine-record') {
+            assert.equal(observedStore?.readBackupCleanupOperation()?.phase, 'quarantined');
+            // Queue real event-loop work after a persisted safe boundary, without a wall-clock budget.
+            queuedRead = new Promise<void>(resolve => setImmediate(resolve)).then(() => ({
+                cleanupCompleted,
+                cleanupPhase: observedStore!.readBackupCleanupOperation()?.phase ?? null,
+                revision: observedStore!.readWorkspaceSetupSnapshot().revision,
+            }));
+        }
+        if (point === 'retention.after-cleanup-record') {
+            cleanupCompleted = true;
+        }
+    }, ({store}) => {
+        observedStore = store;
+    });
+    try {
+        assert.ok(queuedRead, 'Third-snapshot retention must reach its persisted quarantine boundary');
+        const observed = await queuedRead;
+        assert.equal(observed.cleanupCompleted, false, 'Queued reads must run before retention finishes');
+        assert.ok(observed.cleanupPhase === 'quarantined' || observed.cleanupPhase === 'deleting');
+        assert.equal(observed.revision, '3');
+        assert.equal(cleanupCompleted, true);
+        assert.deepEqual(configured.store.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId), [
+            SECOND_SNAPSHOT_ID,
+            THIRD_SNAPSHOT_ID,
+        ]);
+    }
+    finally {
+        await configured.store.close();
+    }
+});
+
+test('ADR-03/TEST-PROTECT-003: retention stops deleting after a queued commit becomes read-only', async t => {
+    const configured = await createTwoSuccessfulSnapshots(t);
+    const {store} = configured;
+    const readOnlyDatabase = new DatabaseSync(path.join(
+        configured.dataSlotsRoot,
+        'active',
+        'workspace.sqlite',
+    ), {readOnly: true});
+    let queuedCommit: ReturnType<SqliteDataStore['commit']> | undefined;
+    let survivingManifestPath = '';
+    let deletedMembers = 0;
+    try {
+        await commitDecision(store, {
+            commandId: THIRD_COMMAND_ID,
+            followUpId: THIRD_FOLLOW_UP_ID,
+            expectedRevision: '2',
+            expectedSetupVersion: '1',
+            decision: 'skip',
+        });
+        await assert.rejects(loadDurableBackup().runDurableBackupPass(store, additionalRunOptions({
+            operationId: THIRD_OPERATION_ID,
+            snapshotId: THIRD_SNAPSHOT_ID,
+            nonce: '2222222222222222',
+            createdAt: '2026-08-25T12:00:04.000Z',
+            succeededAt: '2026-08-25T12:00:05.000Z',
+        }, point => {
+            if (point !== 'retention.after-member-delete') {
+                return;
+            }
+            deletedMembers += 1;
+            if (queuedCommit) {
+                return;
+            }
+            const cleanup = store.readBackupCleanupOperation();
+            assert.equal(cleanup?.phase, 'deleting');
+            const quarantine = path.join(
+                backupSetDirectory(configured.destination),
+                cleanup!.quarantineDirectoryName,
+            );
+            assert.deepEqual(readdirSync(quarantine), ['manifest.json']);
+            survivingManifestPath = path.join(quarantine, 'manifest.json');
+            queuedCommit = new Promise<void>(resolve => setImmediate(resolve)).then(() => store.commit(
+                normalizeRecordSetupDecisionCommand({
+                    commandId: FOURTH_COMMAND_ID,
+                    followUpId: FOURTH_FOLLOW_UP_ID,
+                    workspaceId: WORKSPACE_ID,
+                    expectedRevision: '3',
+                    expectedSetupVersion: '2',
+                    intent: {
+                        kind: 'workspace.record-setup-decision',
+                        intentSchemaVersion: 1,
+                        payload: {decision: 'later'},
+                    },
+                }),
+                {
+                    failpoint(commitPoint) {
+                        if (commitPoint === 'commit.after-begin') {
+                            // Inject a genuine SQLite denial through the existing commit seam; no DATA facts change.
+                            readOnlyDatabase.exec('PRAGMA user_version = 0');
+                        }
+                    },
+                },
+            ));
+        })));
+        assert.ok(queuedCommit, 'Retention must yield after deleting the first member');
+        const committed = await queuedCommit;
+        assert.equal(committed.ok, false);
+        if (committed.ok) {
+            throw new Error('Expected the injected SQLite read-only denial');
+        }
+        assert.equal(committed.problem.code, 'permission');
+        assert.equal(store.status().kind, 'read-only');
+        assert.equal(store.readWorkspaceSetupSnapshot().revision, '3');
+        assert.equal(store.receipt(FOURTH_COMMAND_ID), null);
+        assert.equal(existsSync(survivingManifestPath), true, 'Read-only cleanup must preserve the next member');
+        assert.equal(deletedMembers, 1);
+        assert.equal(store.readBackupCleanupOperation()?.phase, 'deleting');
+        assert.deepEqual(store.readSuccessfulBackupSnapshots().map(snapshot => snapshot.snapshotId), [
+            SNAPSHOT_ID, SECOND_SNAPSHOT_ID, THIRD_SNAPSHOT_ID,
+        ]);
+    }
+    finally {
+        readOnlyDatabase.close();
+        await store.close();
+    }
 });
 
 test('TEST-PROTECT-003: long Windows SQLite paths stay current through retention and restart', {

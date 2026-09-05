@@ -866,6 +866,22 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
 - `WP-GA-01`、`WP-UI-01`、`WP-RF-02` 保持 Verification，R7 尚未领取。
   仍缺 Windows 真人/实际禁网、Mac 同源性能、真实后台备份重叠和剩余适用 ADR 打包运行时观测。
 
+`WP-GA-01` 真实后台预算阻断与调度修复（2026-09-05，本提交）：
+
+- e2ea721 的完整同观测对照通过；真实备份默认/月查询各 20 次、提交 20 次均取得完整同步工作段重叠证据，
+  但 p95 为 290.90/336.50/264.00 ms，绝对预算及增量预算全部失败。保留原始报告
+  `_scratch/ga-backup-control-e2`、`ga-backup-overlap-e2`；不把原有无备份端点通过扩大为 G7。
+- 减少到清理首尾两个 CPU 点后，真实同步 retention 仍为 168.13/162.76 ms，查询 278.10/269.40 ms；
+  `_scratch/ga-backup-reduced-e2` 证明不是大量观察点导致的假象。
+- 根因是备份发布及保留清理在同一 utility 事件循环连续同步运行。私有清理调用改为 async 并完整 await，
+  仅在已持久阶段之间让出事件循环；每次全量复验到对应 rename/delete 仍同步，未删校验、未缓存验证结果。
+  每次恢复执行先检查 DATA 可写，避免普通提交转为 read-only 后继续删除却不能登记；旧 journal 保留可续。
+- 排队读取旧实现 RED → 修复 GREEN；真实 SQLite 只读拒绝经已有 commit seam 注入，去掉可写检查的
+  独立编译副本 RED → 实际源码 GREEN。备份/恢复定向 138/138，typecheck PASS；官方默认并行全套
+  758 = 757 pass / 0 fail / 1 权限 skip，42966.1254 ms。日志 `_scratch/r7-prereq-retention-yield`、
+  `r7-prereq-typecheck-retention-yield.log`、`r7-prereq-test-retention-yield.log`。
+- 修复后的 clean package 与原预算复测尚未完成；Mac 须使用最终同源包。G-A/UI/RF-02 仍为 Verification。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

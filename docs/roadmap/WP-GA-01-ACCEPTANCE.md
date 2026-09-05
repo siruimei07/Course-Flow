@@ -1,6 +1,6 @@
 # WP-GA-01：MVP-A 内部验收记录
 
-> 日期：2026-09-04
+> 日期：2026-09-05
 > 生命周期：Verification；尚未宣告 G-A 通过。
 > 唯一状态来源：[BACKLOG 注册表与台账](./BACKLOG.md)。
 > Gate 语义：[Architecture §9](../architecture/ARCHITECTURE.md#9-架构验收门)。
@@ -22,6 +22,7 @@
 | R7 前置收口的默认并行复验 | `pnpm typecheck` PASS；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test`：754 = 753 pass / 0 fail / 1 skip，62396.4652 ms；修复与原始失败对照见 Backlog 最新证据，日志为 `_scratch/r7-prereq-test-default.log` |
 | 恢复后目录授权修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 755 = 754 pass / 0 fail / 1 skip，48099.3505 ms；新增成功恢复必须重新授权的回归与既有双次恢复、rollback/receipt 测试通过；日志 `_scratch/r7-prereq-test-restore-final.log` |
 | 打包查询 Task 时区修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 756 = 755 pass / 0 fail / 1 skip，71069.2488 ms；别名/混合时区/非法输入构造计数 RED→GREEN，全部严格校验保留；日志 `_scratch/r7-prereq-test-task-zone.log` |
+| 后台调度修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 758 = 757 pass / 0 fail / 1 skip，42966.1254 ms；排队读取及只读插队停止删除回归均 RED→GREEN，保护定向 138/138；日志 `_scratch/r7-prereq-test-retention-yield.log` |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-b39124d.log`、`wp-ga-01-smoke-b39124d.log`、
@@ -42,8 +43,8 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类按 G1 已确认范围留到后续工作包；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 756 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | 参考规模与 p95 预算已批准并版本化；最终 Windows packaged 启动/查询/提交已达标（查询 p95 95.00/98.10 ms），Main/Renderer 及 host ADR 部分观测已归档；仍缺 Mac 同源、真实后台重叠及剩余适用 ADR 运行时测量，见第 5 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 758 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
+| G7 性能基线 | 尚未通过 | e2ea721 Windows 无备份启动/查询/提交通过，但完整真实后台预算失败；调度修复已通过自动化，尚待 clean packaged 原预算复测。Mac 同源与剩余适用 ADR 证据继续保留，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -309,9 +310,50 @@ WAL checkpoint 3.91 ms、restore resume/reopen 743.02 ms。原始/派生结果�
 `_scratch/r7-prereq-adr-measure/raw-win32-e2ea721.json`、`derived-win32-e2ea721.json`。
 这是 host 内部阶段证据；不得改写成 packaged utility、迁移、真实掉电、精确资源峰值或另一平台结果。
 
-Windows 四个已测端点通过不等于完整 G7：Mac 同源结果、双平台实际备份重叠及其增量预算，
-Workspace utility event-loop 和尚缺的适用 ADR 打包内部阶段观测继续未测。
+Windows 四个已测端点通过不等于完整 G7：后台预算、utility 与恢复补测见下节，
+Mac 同源结果及剩余适用 ADR 内部阶段仍须另有证据。
 用户会在 Mac 运行[交接命令](./WP-GA-01-HANDOFF.md)，本次没有代填 Mac 数据。
+
+### 真实后台重叠及调度修复（2026-09-05）
+
+同一 e2ea721 包的两个独立参考副本，分别未配置与正式配置备份；两边启用相同 inspector/无暂停条件观察。
+对照查询各暖身 10 次后保留 100 次，提交 40 次；后台两个查询组和提交组各 20/20 次，
+每次均有完整同步备份工作段落在 Renderer 正式请求计时区间内，CPU 计数增加，最终 current/水位 377。
+未删样本，0 Debugger.paused；driver 因预算失败 exit 1，两个实际应用均正常 exit 0。
+
+| 端点 | 对照 p95 ms | 备份 p95 ms | 增量 ms | 结果 |
+|---|---:|---:|---:|---|
+| 默认 PLAN | 70.00 | 290.90 | 220.90 | FAIL |
+| 月窗口 PLAN | 81.60 | 336.50 | 254.90 | FAIL |
+| Task 正式提交 | 3.80 | 264.00 | 260.20 | FAIL |
+
+原始结果 `_scratch/ga-backup-control-e2/utility-probe.json`、`ga-backup-overlap-e2/utility-probe.json`；
+阶段归因 `ga-backup-overlap-e2/stage-contributions.json`。第 3 份快照起，成功登记后连续同步 retention
+占约 180–210 ms；只保留清理首尾 CPU 点的固定 3 轮诊断仍测到 168.13/162.76 ms 清理和
+278.10/269.40 ms 查询，第 1 轮无清理为 78.10 ms，记录在 `_scratch/ga-backup-reduced-e2`。
+
+修复在持久阶段之间让出事件循环，保留全部 fresh validation 与紧邻物理修改的同步性；
+恢复执行先检查 DATA 可写，禁止普通提交变成 read-only 后继续删除剩余成员。
+两个回归、138 项保护定向和官方全套 758 项已通过，打包预算复测另记；不以单元 GREEN 代替原预算。
+新增 yield 后，跨阶段的长区间不再称为同步 CPU 段；复测观察器须定位不含 await 的实际同步调用边界。
+
+### 真实旧版迁移与打包恢复的补充观测
+
+旧 clean `bd60a1662fd86bd15470bcfc1e15e45c8f17eb78` 的正式 owner 独立编译并造同一参考输入，
+schema 16/revision 256；20 个关闭副本由实际 e2ea721 包完成 16→17/revision 257。
+正式 setup 与全部 SQL 表行只允许 ADR-04 规定的 revision/backupNeededThrough 增长，业务事实完整；
+20 个唯一 SafetyCopy 均 verified/source16，原旧参考字节不变，全部 exit 0。
+含迁移与观察开销的启动 p50/p95 为 644.26/663.91 ms，不并入普通启动预算；DataSlots 目标 10 ms
+采样最大为 1,608,660–1,809,364 bytes，关闭后每轮 1,414,004 bytes，另存逐进程资源原值。
+原始、派生和首次 revision 驱动误假设保留在 `_scratch/r7-prereq-migration-20260905`。
+
+e2ea721 正常恢复 20/20，分别采到 99 个实际 utility 阶段点；preview/SafetySet confirm/resume
+p95 为 87.90/116.10/363.00 ms，最终 healthy/unconfigured 且正常关闭。
+journal fsync/publish 各 N=200，p95 为 11.263/0.824 ms；逐窗口 loop histogram 与 CPU/RSS 原值保留，
+不伪造合并 p95。独立 after-retire-action 受控终止精确进程树后，同根正式重启回滚通过，283.90 ms，
+结果 configured/current；此中断实验不混入正常恢复分布，也不称为真实掉电。
+原始结果与尚缺内部拆分见 `_scratch/ga-restore-e2-final/README.md`；失败准备轮同样保留。
+以上仍是 e2ea721 的真实身份，不能代替新调度修复后制品，也未代填 Mac 数据。
 
 ## 6. 生命周期与下一步
 
@@ -320,6 +362,6 @@ UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
 G1 的验收口径已获用户确认，默认并行测试、恢复授权及打包查询预算阻断均已修复。剩余动作集中为 G6 的当前 Windows 人工矩阵与实际禁网旅程；
-G7 的 Mac 同源 packaged 样本、双平台实际后台重叠及剩余适用 ADR 运行时测量。Mac 已完成的 UI 验收继续保留，
+G7 的调度修复后同源 packaged 基线与后台预算、Mac 样本及剩余适用 ADR 运行时测量。Mac 已完成的 UI 验收继续保留，
 新增内核代码仅需补其相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。
