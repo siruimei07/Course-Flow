@@ -269,7 +269,7 @@ async function main() {
         methodology: {
             startup: '20 independent packaged processes; OS caches retained; same disposable Chromium profile',
             startupEndpoint: 'spawn call to first PLAN DOM actionable and two animation frames; read-only observation',
-            startupOverhead: 'Includes spawn, DevTools discovery/connection/polling and frame wait; nothing subtracted',
+            startupOverhead: 'Includes spawn, DevTools discovery/connection/front activation/polling and frame wait',
             queryAndCommit: 'Renderer performance.now around formal preload API await; includes Main/Workspace IPC',
             excludedFromRequestTiming: 'External CDP, assertion/serialization, and setup version query before a commit',
             clock: 'Actual packaged system clock; differs from the fixed host-kernel 2026-09-10T13:30:00.000Z clock',
@@ -322,12 +322,16 @@ async function main() {
             // Attach immediately so a spawn/timeout failure cannot become an unhandled rejection.
             const exited = lifetime.then(result => ({result}), error => ({error}));
             try {
+                round.phase = 'devtools-endpoint';
                 const endpoint = await Promise.race([
                     rendererEndpoint(portFile),
                     lifetime.then(() => { throw new Error('Packaged process exited before Renderer readiness'); }),
                 ]);
                 browserUrl = endpoint.browserUrl;
+                round.phase = 'renderer-connection';
                 page = await connect(endpoint.page.webSocketDebuggerUrl);
+                await page.send('Page.bringToFront');
+                round.phase = 'first-plan-frames';
                 let ready;
                 const deadline = performance.now() + 20_000;
                 while (!ready && performance.now() < deadline) {
@@ -342,6 +346,7 @@ async function main() {
                         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
                         return {heading: document.querySelector('#today-page-title')?.textContent,
                             width: innerWidth, height: innerHeight, dpr: devicePixelRatio,
+                            visibilityState: document.visibilityState, hasFocus: document.hasFocus(),
                             systemTime: new Date().toISOString()};
                     })()`);
                     if (!ready) {
@@ -351,6 +356,7 @@ async function main() {
                 assert.ok(ready, 'First PLAN view never became actionable');
                 round.milliseconds = performance.now() - started;
                 round.firstPlan = ready;
+                round.phase = 'bootstrap-identity';
                 const bootstrap = await page.evaluate('window.courseFlow.query()');
                 assert.equal(bootstrap.ok, true, JSON.stringify(bootstrap));
                 round.bootstrap = bootstrap.value;
@@ -360,6 +366,7 @@ async function main() {
                 assert.equal(bootstrap.value.workspaceData.revision, reference.workspaceRevision);
                 report.appBuildId = bootstrap.value.appBuildId;
                 if (index === 19) {
+                    round.phase = 'formal-request-samples';
                     const browser = await connect(browserUrl);
                     try {
                         report.browserVersion = await browser.send('Browser.getVersion');
@@ -387,6 +394,13 @@ async function main() {
             } catch (error) {
                 round.status = 'failed';
                 round.error = error.stack ?? String(error);
+                if (page) {
+                    round.failureState = await page.evaluate(`({
+                        visibilityState: document.visibilityState, hasFocus: document.hasFocus(),
+                        readyState: document.readyState,
+                        planDom: Boolean(document.querySelector('.workspace-grid--today')),
+                    })`).catch(failure => ({error: failure.message}));
+                }
                 throw error;
             } finally {
                 let closeError;
