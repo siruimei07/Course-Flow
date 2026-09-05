@@ -1,6 +1,6 @@
 # CourseFlow R0–R1 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> **历史计划适用性：** 本文保留 R0–R1 实施设计与当时步骤；当前状态和待办以 [BACKLOG.md](../../roadmap/BACKLOG.md) 为准，执行与 skill 路由遵循 [AGENTS.md](../../../AGENTS.md)。旧路径、版本、复验与提交步骤仅在当前授权及实际改动仍适用时使用；已满足的工作不因旧复选框重做。
 
 **Goal:** 把已批准的首发剖面写回规范，并交付一个可重复安装依赖、可类型检查、可测试、可打包的 Electron/React/TypeScript walking skeleton；Main 监督单一 Workspace utility process，打包产物通过精确 build 握手、稳定开发数据根和内存 SQLite 探针。
 

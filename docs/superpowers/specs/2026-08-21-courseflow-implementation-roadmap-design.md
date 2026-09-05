@@ -5,6 +5,8 @@
 > 目标版本：CourseFlow 首个公开版本
 > 方法：Superpowers brainstorming + writing-for-agents
 
+> **适用性：** 本文保存 2026-08-21 的批准依据与规划过程；当时的审阅范围、方法、计数和“下一步”是历史上下文。当前执行流程与授权按 [AGENTS.md](../../../AGENTS.md)，顺序和 Gate 按 [ROADMAP.md](../../roadmap/ROADMAP.md)，状态、证据与工作包并行边界按 [BACKLOG.md](../../roadmap/BACKLOG.md)；不据旧步骤重做已完成规划或重复审批。
+
 ## 1. 分类与目标
 
 本轮属于架构级实施规划，不开始产品代码实现。目标是把现有产品、交互、逻辑架构、模块契约和 ADR 基线转换为一条可由 Agent 持续执行、逐包验证和可靠交接的实施 Roadmap。

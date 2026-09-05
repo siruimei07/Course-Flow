@@ -5,6 +5,8 @@
 > 工作包：`WP-RF-01`（维护性重构，非首发交付链）
 > 上游依据：[ARCHITECTURE.md](../../architecture/ARCHITECTURE.md)、[MODULE_CONTRACTS.md](../../architecture/MODULE_CONTRACTS.md)、已批准 ADR-01–10
 
+> **适用性：** 本文的 Stage、逐提交全量验证、固定环境与提交身份属于该次全仓行为保持重构。后续维护按 [AGENTS.md](../../../AGENTS.md) 和 [BACKLOG.md](../../roadmap/BACKLOG.md) 的当前任务与证据缺口执行，不继承旧基线或重复已完成 Stage；本包尚缺的平台与用户复验义务仍保留。
+
 ## 1. 目标与动机
 
 把 `src/` 重组为与已批准逻辑架构一一对应的显式模块包，并以架构测试强制依赖方向，使每个语义所有者都有独立、可导航的物理位置。动机（用户 2026-08-28 确认）：

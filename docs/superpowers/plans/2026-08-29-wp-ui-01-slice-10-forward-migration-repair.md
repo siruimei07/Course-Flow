@@ -1,6 +1,6 @@
 # WP-UI-01 切片 10 Forward Migration Repair Implementation Plan
 
-> **Skill availability:** The `superpowers:executing-plans`, `stop-that-shit`, `ponytail` and `applying-baidu-fecs-standards` skills named by `AGENTS.md` are not present in this Cowork session. Their manual ladders are followed instead, and every FECS claim below is a manual check of the changed paths, not a skill report.
+> **历史执行环境：** 原 Cowork 会话未提供所引用的 `superpowers:executing-plans`、`stop-that-shit`、`ponytail` 与 `applying-baidu-fecs-standards`；当时 FECS 记录为手动检查，不是 skill 执行报告。此记录不代表当前可用性；后续执行按 [AGENTS.md](../../../AGENTS.md) 路由，并以 [BACKLOG.md](../../roadmap/BACKLOG.md) 的状态和证据缺口为准。
 
 **Goal:** Repair the forward schema migration path so an existing workspace at `CURRENT_SCHEMA_LEVEL - 1` opens and migrates instead of routing to `recovery`, and make the recurrence structurally impossible rather than fixed once more by hand.
 

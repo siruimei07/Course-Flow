@@ -1,6 +1,6 @@
 # WP-R6-05 Workspace Lifecycle Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task. This task runs inline because the active task contract does not authorize subagents.
+> **历史计划适用性：** 本文保留 WP-R6-05 实施设计与当时步骤；当前状态和待办以 [BACKLOG.md](../../roadmap/BACKLOG.md) 为准，执行、skill 路由与包内并行遵循 [AGENTS.md](../../../AGENTS.md)。当时会话的 inline 选择不约束后续任务；已满足的工作不重做。
 
 **Goal:** Complete `WP-R6-05` by making one Workspace-owned startup projection decide the workspace mode, capabilities, module health, durable work, and welcome/setup/today/maintenance/recovery route after a unified pre-DATA PROTECT inspection.
 

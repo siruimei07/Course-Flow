@@ -1,6 +1,6 @@
 # CourseFlow WP-R2-01 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking.
+> **历史计划适用性：** 本文保留 WP-R2-01 实施设计与当时步骤；当前状态和待办以 [BACKLOG.md](../../roadmap/BACKLOG.md) 为准，执行与 skill 路由遵循 [AGENTS.md](../../../AGENTS.md)。旧路径、版本、复验与提交步骤仅在当前授权及实际改动仍适用时使用；已满足的工作不因旧复选框重做。
 
 **Goal:** 建立 CourseFlow 第一个可持久化、可重启重开的 MOD-DATA 纵向切片：受版本约束的本地 SQLite schema、原子 commit、终身 CommandReceipt、canonical digest、一致 ReadSnapshot，以及 read-only/recovery 打开分类。
 
@@ -1103,7 +1103,7 @@ export type DataFailpoint =
   git status --short --branch
   ~~~
 
-  Expected: commit 成功，工作树干净。报告最终 commit hash；不 push、不 amend。提交后停止，等待用户批准领取 WP-R2-02。
+  Expected: commit 成功，本任务改动均已提交。报告最终 commit hash；push/amend 按当前明确授权处理。若授权仅覆盖 WP-R2-01，到此结束；已授权后续工作时，按 Backlog 硬依赖继续。
 
 ## Plan Self-Review Checklist
 

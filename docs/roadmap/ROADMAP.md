@@ -19,7 +19,7 @@
 - 技术实现选择：[ADR 目录](../architecture/adr/)
 - 本 Roadmap 的已批准设计：[Implementation Roadmap Design](../superpowers/specs/2026-08-21-courseflow-implementation-roadmap-design.md)
 
-执行者必须先从 [BACKLOG.md](./BACKLOG.md) 领取一个处于 `Ready` 的工作包，再按该包引用的稳定 ID 定位规范。不得以 Roadmap 中的摘要替代上游定义。
+推进首发主链时，从 [BACKLOG.md](./BACKLOG.md) 领取 `Ready` 工作包，或继续已授权的 `In Progress` / `Verification` 工作包；按目标稳定 ID 定位上游定义。用户另行授权的审计、修复或文档维护按其范围执行，涉及工作包时登记到对应所有者，不为此领取下一主链包。
 
 ## 2. 首发范围校准
 
@@ -113,16 +113,16 @@ Gate 失败时，修复归入造成失败的最小语义所有者工作包；不
 
 Backlog 生命周期为 `Ready → In Progress → Verification → Done`，遇到真实外部阻塞时可标记 `Blocked`。尚未进入生命周期的已登记工作包显示为 `—`，它不是额外状态。
 
-推进一个工作包时必须：
+在已授权范围内推进工作包：
 
 1. 确认所有硬依赖 `Done`，并记录仍开放的证据依赖。
 2. 按 `MODULE_CONTRACTS.md` §1.5 只读取目标稳定 ID 所需章节。
-3. 在实现前写出或更新会先失败的最小测试证据。
+3. 按 [AGENTS.md](../../AGENTS.md) 的验证原则选择最小证据；需要回归保护的行为与缺陷保留能暴露缺口的检查。
 4. 完成最短正确纵向切片，不实现未列入目标的扩展。
-5. 运行包内最小验证，再运行受影响 Gate/平台检查。
+5. 运行与改动相称的测试和必要 Gate/平台检查；通过后，只有新改动、新失败或未解疑点才扩大或重复验证。
 6. 在 Backlog 登记证据、未验证项和最终状态；代码与证据同批提交。
 
-任何新增 Requirement、跨模块依赖、公共格式或技术选型都必须先回到其上游规范或 ADR 审批，再调整本 Roadmap。仅改变执行顺序、拆分粒度或资源安排时，才直接修改 Roadmap/Backlog。
+新增或改变 Requirement、跨模块依赖、公共格式或跨切面技术选择时，先在语义所有者或 ADR 完成所需决策，再调整本 Roadmap；已有批准已覆盖的决定直接沿用。仅改变执行顺序、拆分粒度或资源安排时，直接修改 Roadmap/Backlog 并保留硬依赖和 Gate。授权覆盖多个工作包时，按依赖顺序连续完成，不在包间重复申请执行许可；明确要求的用户评审仍是放行条件。
 
 ## 8. 当前执行点
 
