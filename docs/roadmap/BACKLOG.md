@@ -907,6 +907,42 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   23313c2 的单轮恢复 v2 探针验证了 14 个实际内部阶段，未计入最终源码的正常 20 轮。
 - G-A/UI/RF-02 保持 Verification，R7 尚未领取。
 
+`WP-GA-01` 当前源码 macOS 收口与 Windows 同源交接（2026-09-05，本提交）：
+
+- 从 clean `0e55715dd4afd1e2efbd38d9af24d95c525b3dd9` 开始；本次只登记证据和交接，
+  未修改运行时、依赖、测试、测量端点或预算。先核对缺口，再顺序执行验证与性能；未重做已完成的 Mac UI。
+- macOS arm64 / Node 24.19.0 / pnpm 11.19.0：`pnpm typecheck` PASS；
+  `COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 默认并行 759 = 752 pass / 0 fail / 7 Windows 专属 skip，
+  18356.896958 ms，浏览器用例实际执行。原始 `typecheck.log`、`test.log` 均保留。
+- `pnpm package` 与已验证隔离根中的 `pnpm smoke:packaged` PASS；实际 AppBuildId 为
+  `development:0e55715dd4afd1e2efbd38d9af24d95c525b3dd9`，Main/Renderer/Workspace exact，
+  Electron 43.4.1 / packaged Node 24.18.1 / SQLite 3.53.1 verified-local。
+- 同一 clean source 的 `pnpm package --platform win32 --arch x64` 在 Mac 交叉打包 PASS；
+  三运行时入口静态 identity 相同，PE32+ x86-64。当前无 Windows 执行资源，未冒充 Windows smoke/性能通过。
+- 两轮普通 packaged 均保留 N=20/100/100/40。首轮四项 p95 为 494.615/45.0/55.6/1.7 ms，
+  但两查询组 59/76 个样本失焦，exit 1。用户明确提供前台窗口后的一轮完整复测 exit 0，
+  p95 为 493.661/43.5/54.2/1.2 ms，240 个请求均 visible/focused，0 焦点事件，20 次进程正常退出。
+  参考配方、IPC/首帧端点和预算原样，未筛选慢样本；两轮原始与独立同期低频负载均保留。
+- 现有 host 工具完整补证 exit 0，40 次真实备份逐轮达到 current，最终水位 337、两份 verified、cleanup idle；
+  host 计时/内存/目录大小只作部分观测，不算 packaged 后台重叠或完整 ADR 通过。
+- 两平台静态 app.asar 清单已保存；同源 ZIP、`git bundle verify` 通过的完整源码 bundle、
+  Windows 命令和回传矩阵已准备，具体路径与尚缺旧观察器见 [交接说明 §3](./WP-GA-01-HANDOFF.md#3-本次便携交接与仍缺资源)。
+  旧 e2ea721 交接包和缺失 `_scratch` 不能作本次本机证据，历史失败结论继续保留。
+- 用户在本轮指示“现在不可用，先提交本机证据，真人验收记为完成”，据此登记真人验收为用户确认完成；
+  本轮未提供对应 Windows source/AppBuildId、逐项结果与系统状态，保留用户声明来源、待补录制品关联。
+  不把该确认扩展为实际禁网、性能或 ADR 观测通过。
+- G1–G5 仍按已交付 A-only PASS；G6 真人验收制品关联、实际禁网与失败 artifact、
+  G7 Windows 同源普通端点/双平台严格后台及剩余 ADR-02/03/04/07/08 运行时观测未齐。
+  `WP-GA-01`、`WP-UI-01`、`WP-RF-02` 保持 Verification；RF-02 的 UI 硬依赖不因自动化通过而豁免。
+- 只核实 R7 就绪性：`WP-R7-01` 的唯一硬依赖 WP-GA-01 尚未 Done；
+  `A-ATTEND-001/002` 可定位于 PRD §3.6，MOD-ATTEND 的半开窗口/稳定 occurrence 与
+  `TEST-ATTEND-001` 可定位于 Contracts §5.4/§10.3，验收可判定。未实现或宣称通过 Attendance 功能测试。
+  `WP-R7-01/02/03` 均保持 —；WP-MODEL-01 不增加前置，R12/G8 不属于本次。
+- 文档路径仅四份既有 roadmap Markdown；`stop-that-shit`、FECS 与前端三件套原文未在本机检出。
+  手动 Stop Ladder 限定授权，未开展前端改动；Markdown 按 AGENTS 的 FECS 未覆盖分支处理，
+  不宣称原文合规审查。46 个本地 Markdown 文件链接、新增锚点、稳定 ID/规范章节、目标注册表状态检查通过；
+  `git diff --check` 与四份最终 diff/status 审阅通过。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。

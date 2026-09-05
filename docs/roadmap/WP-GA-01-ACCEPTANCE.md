@@ -44,8 +44,8 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类按 G1 已确认范围留到后续工作包；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 759 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | 23313c2 Windows 前台普通端点通过，后台延迟已下降，但同观测月份对照 p95 105.2 ms 仍超标；重复 SQL 准备开销已修复并通过完整测试，待新包按原预算复测。Mac 同源及适用 ADR 证据见第 5 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 历史同源双平台 package/smoke 保留；本次 0e55715 macOS typecheck/默认并行全套/package/smoke 通过，759 = 752 pass / 0 fail / 7 Windows 专属 skip。真人已由用户确认完成，制品关联待补录；实际禁网与失败旅程 artifact 仍缺；实际权限既有分项不扩大范围，见第 4、5 节 |
+| G7 性能基线 | 尚未通过 | 0e55715 macOS 普通 packaged 端点完整前台复测 PASS；首轮失焦记录保留。Windows 同源普通端点、双平台严格后台预算与剩余 ADR 观测未齐；历史 23313c2 月份对照 105.2 ms 的 FAIL 不改写，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -72,6 +72,10 @@ ROADMAP §8 与 2026-08-28 一体化设计 §10 都把新模型安排为另行�
 
 ## 4. G6：产品环境证据
 
+- 2026-09-05 用户在本轮指示“现在不可用，先提交本机证据，真人验收记为完成”。
+  真人验收据此登记为**用户确认完成**；来源为本轮用户声明。本次未回传对应 Windows source/AppBuildId、
+  逐项结果与系统状态，仍待补录制品关联；不赋予其代理实测或 0e55715 的未经提供身份。
+  该确认不覆盖实际禁网、性能及 ADR 观测，历史人工证据的真实身份继续保留。
 - macOS：本轮沿用用户“测试已完成”的确认及最终 clean 制品台账，不要求重做已有验收。
   该确认不自动生成未记录的性能样本。
 - Windows 历史真人矩阵：Sirui 在 `4254d80` 上声明 48/48，包含八个表面、两档窗口、
@@ -384,13 +388,61 @@ journal fsync/publish 各 N=200，p95 为 11.263/0.824 ms；逐窗口 loop histo
 原始结果与尚缺内部拆分见 `_scratch/ga-restore-e2-final/README.md`；失败准备轮同样保留。
 以上仍是 e2ea721 的真实身份，不能代替新调度修复后制品，也未代填 Mac 数据。
 
+### 当前源码的 macOS 收口实测与同源交接（2026-09-05）
+
+本次从 clean `0e55715dd4afd1e2efbd38d9af24d95c525b3dd9` 开始，工作区无已有改动；
+未修改运行时、依赖、测试或测量驱动。后续提交只登记证据，不改变下列实际制品身份。
+原始证据根与便携制品见 [交接说明 §3](./WP-GA-01-HANDOFF.md#3-本次便携交接与仍缺资源)。
+历史 Windows 失败、失焦、非完整重叠和旧源码证据均继续保留，不套用本次身份。
+
+| 项目 | 本次实测与边界 |
+|---|---|
+| 自动化 | macOS `pnpm typecheck` exit 0；`COURSEFLOW_REQUIRE_BROWSER=1 pnpm test` 默认并行 exit 0，759 = 752 pass / 0 fail / 7 skip，18356.896958 ms。浏览器用例实际执行；7 项仅为 Windows 路径语法、长路径及五项 taskkill 用例，不宣称在 Mac 执行了这些用例 |
+| macOS 制品 | `pnpm package`、隔离根中的 `pnpm smoke:packaged` 均 exit 0；`development:0e55715dd4afd1e2efbd38d9af24d95c525b3dd9`，Main/Renderer/Workspace 均 exact，SQLite 3.53.1 verified-local |
+| 实际 runtime | darwin/arm64，Electron 43.4.1 / Chromium 150.0.7871.224 / packaged Node 24.18.1 / SQLite 3.53.1；构建与 host driver Node 24.19.0、pnpm 11.19.0，host SQLite 3.53.3，二者不混用 |
+| Windows 制品 | 同一 clean source、锁文件经 `pnpm package --platform win32 --arch x64` 在 Mac 交叉打包 exit 0；文件识别为 PE32+ x86-64。main/preload/workspace 三入口静态嵌入相同 development identity；尚无本次 Windows 启动、握手、smoke 或性能结果，不能称双平台运行通过 |
+| 隔离 | packaged driver 在任何参考事实写入前实际验证 `CFFIXED_USER_HOME` 的 appData 位于本次输出下的 `Home/Library/Application Support`；两轮参考根独立，未覆盖旧数据。后续独立 smoke 也使用已经验证的测试 Home |
+| G6 artifact 分项 | 两平台 app.asar 各 12 个目录/文件条目，三运行时入口与源码身份一致；清单为 `packaged-artifact-inventory.json`。这里只补静态包清单，不覆盖全部失败旅程落盘，也不替代 ADR-09 源边界守卫 |
+
+正式普通端点均使用 `courseflow-ga-reference-v1`、原批准预算、20 次独立进程启动、
+两个查询组各 10 次暖身与 100 次保留样本、40 次交替正式提交；不清 OS 缓存，
+启动端点仍含首个可操作 PLAN 与双 animation frame，请求耗时仍由 packaged Renderer/preload IPC 计时。
+
+| 完整轮次 | 启动 p95 ms | 默认 PLAN p95 ms | 9 月 PLAN p95 ms | 提交 p95 ms | 判定 |
+|---|---:|---:|---:|---:|---|
+| 首轮 `packaged/` | 494.615 | 45.000 | 55.600 | 1.700 | 数值均达标，但默认/月查询 59/76 个样本失焦，2 次 blur，driver exit 1；保留全数组，不充当前台参考 |
+| 用户提供前台窗口后 `packaged-foreground/` | 493.661 | 43.500 | 54.200 | 1.200 | 普通端点 PASS，driver exit 0；200 次查询与 40 次提交前后全部 visible/focused，0 焦点/可见性事件 |
+
+复测是用户明确提供前台条件后的一轮完整独立实验，不从首轮筛选或替换样本。
+两轮均 20 次进程正常 exit 0、revision 256→296、Task 000 回到 pending；备份保持 unconfigured。
+通过轮的查询 p99 为 44.6/54.9 ms，仅作观测；启动/提交不报告 p99。
+20 个首个 PLAN 的 Renderer 视区均 1280×800、DPR 2，不扩大为 960×640 或真人窗口验收。
+通过轮时间为 08:11:58.094–08:12:22.220 UTC。
+
+设备为 MacBook Air Mac15,12 / Apple M3 8 核 / 16 GiB，macOS 26.5.2 build 25F84，
+APPLE SSD AP0512Z / APFS，开始时约 390 GiB 可用；采样前电池 76% 放电、lowpowermode=0。
+两轮普通测量与 host 实验各有独立 5 秒低频 top 原始记录；保留同期负载，不以事后快照解释失焦。
+本任务的测试、打包及 ZIP 归档均与性能采样顺序执行，未停止其他用户进程或改变电源设置。
+
+同源码的现有 host 工具完整执行 exit 0：20 次同进程 reopen p95 15.187 ms，
+两组 100 次 host query p95 13.600/15.498 ms，40 次无备份/已配置备份 commit p95 0.507/0.717 ms，
+配置后 40 次默认 query p95 14.074 ms。40 次真实备份逐轮追平，最终 current/neededThrough/succeededThrough
+均为 337、两份 verified 快照、cleanup idle。host 末端 RSS 287637504 bytes，
+正式参考数据 700416 bytes、备份目录 1403110 bytes；保留包含造数的 resourceUsage 原值，
+不解释为 packaged 进程树峰值或独立磁盘 I/O。它没有观测严格同步重叠，不填入后台预算或完整 ADR 通过格。
+
+本次没有取得旧 `_scratch` 中后台 v2、ADR、迁移和恢复观察器，因此只完成上述可复用 CLI 的本机证据。
+真人验收已由本轮用户确认完成，制品关联待补录；实际禁网旅程与完整失败 artifact 仍缺；macOS 已完成 UI 身份仍为 b39124d，不重开原矩阵。
+G7 仍缺 Windows 同源普通端点、双平台严格后台与合格对照、适用 ADR-02/03/04/07/08 剩余运行时观测；
+类别和应取回的实际工具见交接说明，不新增阈值或生产诊断。完整 G6/G7 不关闭。
+
 ## 6. 生命周期与下一步
 
 `WP-RF-01` 的 Windows typecheck/test/package/smoke 已齐，因此关闭为 Done。
 UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 登记 Verification；
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
-G1 的验收口径已获用户确认，默认并行测试、恢复授权及打包查询预算阻断均已修复。剩余动作集中为 G6 的当前 Windows 人工矩阵与实际禁网旅程；
-G7 的调度修复后同源 packaged 基线与后台预算、Mac 样本及剩余适用 ADR 运行时测量。Mac 已完成的 UI 验收继续保留，
+G1 的验收口径已获用户确认，默认并行测试、恢复授权及打包查询预算阻断均已修复。剩余动作集中为 G6 的用户已确认真人验收的制品关联补录、实际禁网旅程及失败 artifact；
+G7 的 Windows 最终同源普通端点、双平台后台预算及剩余适用 ADR 运行时测量。本次 Mac 普通端点已补齐；Mac 已完成的 UI 验收继续保留，
 新增内核代码仅需补其相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。
