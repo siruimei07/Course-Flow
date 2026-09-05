@@ -1,6 +1,6 @@
 import type { StoreContext } from '../context';
 import { readMeetingSeriesDetail } from './meeting';
-import { readTaskSeriesDetail } from './task';
+import { createTaskSeriesDetailReader } from './task';
 import type { ReadSnapshotOptions } from '../types';
 import { planOccurrenceWindows } from '../../../plan/anchors';
 import type { HolidayRangeProjection } from '../../../shared/workspace-holiday-contract';
@@ -74,9 +74,10 @@ export function readPlanProjectionSource(ctx: StoreContext, options: ReadSnapsho
         }>;
         const taskSources: PlanTaskSource[] = [];
         const seenTaskOccurrences = new Set<string>();
+        const readTaskSeriesDetail = createTaskSeriesDetailReader(ctx);
         for (const row of taskSeriesRows) {
             for (const requestedWindow of requestedWindows) {
-                const detail = readTaskSeriesDetail(ctx, row.task_series_id, requestedWindow);
+                const detail = readTaskSeriesDetail(row.task_series_id, requestedWindow);
                 for (const occurrence of detail.occurrences) {
                     const identity = `${occurrence.occurrenceId.taskSeriesId}\u0000`
                         + occurrence.occurrenceId.originalLogicalAnchor;

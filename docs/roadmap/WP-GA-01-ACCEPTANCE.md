@@ -23,6 +23,7 @@
 | 恢复后目录授权修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 755 = 754 pass / 0 fail / 1 skip，48099.3505 ms；新增成功恢复必须重新授权的回归与既有双次恢复、rollback/receipt 测试通过；日志 `_scratch/r7-prereq-test-restore-final.log` |
 | 打包查询 Task 时区修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 756 = 755 pass / 0 fail / 1 skip，71069.2488 ms；别名/混合时区/非法输入构造计数 RED→GREEN，全部严格校验保留；日志 `_scratch/r7-prereq-test-task-zone.log` |
 | 后台调度修复复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 758 = 757 pass / 0 fail / 1 skip，42966.1254 ms；排队读取及只读插队停止删除回归均 RED→GREEN，保护定向 138/138；日志 `_scratch/r7-prereq-test-retention-yield.log` |
+| Task SQL 准备复用复验 | `pnpm typecheck` PASS；默认并行必需浏览器全套 759 = 758 pass / 0 fail / 1 skip，49778.2448 ms；相关 DATA/PLAN 190/190，通过不同 Task、提交后新状态、另一 DATA 与关闭重开回归；日志 `_scratch/r7-prereq-test-task-statements.log` |
 
 Windows 日志保存在仓库外工作区 `_scratch/`：
 `wp-ga-01-package-b39124d.log`、`wp-ga-01-smoke-b39124d.log`、
@@ -43,8 +44,8 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类按 G1 已确认范围留到后续工作包；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 758 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | e2ea721 Windows 无备份启动/查询/提交通过，但完整真实后台预算失败；调度修复已通过自动化，尚待 clean packaged 原预算复测。Mac 同源与剩余适用 ADR 证据继续保留，见第 5 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 759 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
+| G7 性能基线 | 尚未通过 | 23313c2 Windows 前台普通端点通过，后台延迟已下降，但同观测月份对照 p95 105.2 ms 仍超标；重复 SQL 准备开销已修复并通过完整测试，待新包按原预算复测。Mac 同源及适用 ADR 证据见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -336,6 +337,34 @@ Mac 同源结果及剩余适用 ADR 内部阶段仍须另有证据。
 恢复执行先检查 DATA 可写，禁止普通提交变成 read-only 后继续删除剩余成员。
 两个回归、138 项保护定向和官方全套 758 项已通过，打包预算复测另记；不以单元 GREEN 代替原预算。
 新增 yield 后，跨阶段的长区间不再称为同步 CPU 段；复测观察器须定位不含 await 的实际同步调用边界。
+
+### 调度修复后的前台与后台实测
+
+clean `23313c28003cfdf80a96ba239a8c6669d391fbd4` 的 package 成功。首次普通测量的默认/月查询
+p95 129.8/131.6 ms 失败，保留 `_scratch/ga-pkg-23313c2`。此轮没有逐请求焦点与同期负载，
+不能推断唯一原因。随后固定诊断保留 200 次查询及状态/负载，实际发生失焦；诊断不充当正式通过记录。
+
+用户提供前台测量窗口后，同包使用相同输入和端点重新完整测量；每组前通过 Main 置前，动作在请求计时外。
+全部 200 次查询前后均 visible/focused，整个请求阶段无焦点/可见性变化；20 次应用均正常关闭。
+启动/默认查询/月查询/提交 p95 分别为 669.725/76.4/77.3/4.0 ms，原始样本 N=20/100/100/40，
+不删除任何慢样本。同期 Silent 电源计划不变，整机忙碌率约 18.3%–28.5%。
+原始及低频负载为 `_scratch/ga-pkg-23313c2-foreground`；旧 Razer Cortex 设备档案仍保留其日期。
+
+其后同观测 v2 对照与真实后台组都完成，全部请求前后可见且有焦点、0 Debugger.paused，
+两个应用均正常关闭，真实后台最终 current/水位 393。此组未测同期系统负载，不以环境解释失败。
+
+| 端点 | 对照 p95 ms | 严格同步重叠 p95 ms | 增量 ms | 重叠样本/总尝试 |
+|---|---:|---:|---:|---:|
+| 默认 PLAN | 80.5 | 100.6 | 20.1 | 20/22 |
+| 月窗口 PLAN | 105.2 | 98.6 | -6.6 | 20/20 |
+| Task 正式提交 | 5.1 | 17.7 | 12.6 | 20/27 |
+
+9 次非完整包含尝试全部保留；同步片段不跨越新增 await。后台绝对/增量预算满足，但月份对照
+超过原 100 ms 门槛，因此两份 driver 仍如实 exit 1，不能关闭完整后台预算。
+原始为 `_scratch/ga-backup-control-23313c2-v2`、`ga-backup-overlap-23313c2-v2`。
+独立 CPU profile 定位到每次 Task 读取重复准备四条相同 SQL；现已在单次 PLAN 读取内复用语句，
+查询结果、参数绑定、事务及校验仍每次执行。回归的四次读取准备次数从 8/8/4/8 降为 4/4/4/4，
+全部行为断言保留；相关 190 项、typecheck 和官方完整 759 项通过。新包仍须按原预算完整采样。
 
 ### 真实旧版迁移与打包恢复的补充观测
 

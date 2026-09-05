@@ -1,3 +1,5 @@
+import type { StatementSync } from 'node:sqlite';
+
 import { readActiveHolidayRanges } from '../conflict-reads';
 import { currentVersions } from '../context';
 import type { StoreContext } from '../context';
@@ -10,6 +12,29 @@ import { INTL_ZONE_RULES } from '../../../shared/meeting-time';
 import { isCanonicalUuid } from '../../../shared/workspace-data-contract';
 import { TaskOccurrenceImpactDraft, TaskOccurrenceWindow, deriveTaskOccurrenceId, normalizeTaskOccurrenceImpactDraft, normalizeTaskOccurrenceWindow } from '../../../shared/workspace-task-contract';
 import type { OnceTaskOccurrenceProjection, TaskOccurrenceImpactProjection, TaskOccurrenceProjection, TaskSeriesDetailProjection, WeeklyTaskOccurrenceProjection } from '../../../shared/workspace-task-contract';
+
+type TaskSeriesDetailStatements = {
+    series?: StatementSync;
+    segments?: StatementSync;
+    overrides?: StatementSync;
+    states?: StatementSync;
+};
+
+/**
+ * Reuses four lazily prepared statements during one synchronous PLAN read.
+ * @param {StoreContext} ctx - Exact DATA connection owned by that read.
+ * @return {Function} Task reader whose statement lifetime ends with its caller's read scope.
+ */
+export function createTaskSeriesDetailReader(ctx: StoreContext): (
+    taskSeriesId: string,
+    candidateWindow: TaskOccurrenceWindow,
+) => TaskSeriesDetailProjection {
+    const statements: TaskSeriesDetailStatements = {};
+    return (taskSeriesId, candidateWindow) => readTaskSeriesDetailWithStatements(
+        ctx, taskSeriesId, candidateWindow, statements,
+    );
+}
+
 /**
  * Reads one bounded Task series projection without storing ordinary weekly occurrences.
  * @param {string} taskSeriesId - Stable Task series identity.
@@ -20,6 +45,23 @@ export function readTaskSeriesDetail(ctx: StoreContext,
     taskSeriesId: string,
     candidateWindow: TaskOccurrenceWindow,
 ): TaskSeriesDetailProjection {
+    return readTaskSeriesDetailWithStatements(ctx, taskSeriesId, candidateWindow, {});
+}
+
+/**
+ * Reads fresh bound rows while retaining the caller's connection-local prepared statements.
+ * @param {StoreContext} ctx - DATA owner for the existing savepoint and validation boundaries.
+ * @param {string} taskSeriesId - Stable Task series identity.
+ * @param {TaskOccurrenceWindow} candidateWindow - Requested inclusive LocalDate window.
+ * @param {TaskSeriesDetailStatements} statements - Statements owned by this synchronous read scope.
+ * @return {TaskSeriesDetailProjection} Fresh revision-bound Task facts and derived occurrences.
+ */
+function readTaskSeriesDetailWithStatements(
+    ctx: StoreContext,
+    taskSeriesId: string,
+    candidateWindow: TaskOccurrenceWindow,
+    statements: TaskSeriesDetailStatements,
+): TaskSeriesDetailProjection {
     ctx.requireOpen();
     if (!isCanonicalUuid(taskSeriesId)) {
         throw new TypeError('TaskSeriesId must be a canonical UUID');
@@ -28,7 +70,7 @@ export function readTaskSeriesDetail(ctx: StoreContext,
 
     try {
         ctx.database.exec('SAVEPOINT read_task_series_detail');
-        const seriesStatement = ctx.database.prepare(`
+        const seriesStatement = statements.series ??= ctx.database.prepare(`
                 SELECT
                     task_series.course_id,
                     task_series.entity_version,
@@ -56,7 +98,7 @@ export function readTaskSeriesDetail(ctx: StoreContext,
             throw new TypeError('Task series does not exist');
         }
 
-        const segmentStatement = ctx.database.prepare(`
+        const segmentStatement = statements.segments ??= ctx.database.prepare(`
                 SELECT
                     task_segment_id,
                     title,
@@ -83,7 +125,7 @@ export function readTaskSeriesDetail(ctx: StoreContext,
         if (!latestSegment) {
             throw new Error('Task series has no segment');
         }
-        const overrideStatement = ctx.database.prepare(`
+        const overrideStatement = statements.overrides ??= ctx.database.prepare(`
                 SELECT
                     original_logical_anchor,
                     override_kind,
@@ -100,7 +142,7 @@ export function readTaskSeriesDetail(ctx: StoreContext,
             `);
         overrideStatement.setReadBigInts(true);
         const overrideRows = overrideStatement.all(taskSeriesId) as StoredTaskOccurrenceOverride[];
-        const stateStatement = ctx.database.prepare(`
+        const stateStatement = statements.states ??= ctx.database.prepare(`
                 SELECT
                     original_logical_anchor,
                     status,

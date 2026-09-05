@@ -3,9 +3,9 @@
  */
 
 import assert from 'node:assert/strict';
-import {execFileSync} from 'node:child_process';
+import childProcess, {execFileSync} from 'node:child_process';
 import {existsSync, mkdtempSync, readFileSync, rmdirSync, unlinkSync, writeFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
+import {createRequire, syncBuiltinESMExports} from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import {performance} from 'node:perf_hooks';
@@ -56,9 +56,10 @@ function summarize(samples, budget) {
 /**
  * Connects to one local DevTools endpoint with bounded requests and no browser dependency.
  * @param {string} url WebSocket URL returned by the isolated wrapper.
+ * @param {boolean} awaitPromise Renderer awaits API responses; Main only evaluates synchronous preparation.
  * @return {Promise<object>} Protocol connection and page evaluation helper.
  */
-async function connect(url) {
+async function connect(url, awaitPromise = true) {
     const socket = new WebSocket(url);
     const pending = new Map();
     let nextId = 0;
@@ -123,7 +124,7 @@ async function connect(url) {
             socket.send(JSON.stringify({id: ++nextId, method: 'Browser.close'}));
         },
         async evaluate(expression) {
-            const result = await send('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true});
+            const result = await send('Runtime.evaluate', {expression, awaitPromise, returnByValue: true});
             assert.equal(result.exceptionDetails, undefined, JSON.stringify(result.exceptionDetails));
             return result.result.value;
         },
@@ -272,6 +273,8 @@ async function main() {
             startupOverhead: 'Includes spawn, DevTools discovery/connection/front activation/polling and frame wait',
             queryAndCommit: 'Renderer performance.now around formal preload API await; includes Main/Workspace IPC',
             excludedFromRequestTiming: 'External CDP, assertion/serialization, and setup version query before a commit',
+            foreground: 'Main inspector without pause on last process; show/focus before each request group; '
+                + 'per-request visibility/focus and window events retained outside timing; no retries',
             clock: 'Actual packaged system clock; differs from the fixed host-kernel 2026-09-10T13:30:00.000Z clock',
             backup: 'Reference remains unconfigured; no background-overlap claim',
             completeG7: false,
@@ -313,13 +316,44 @@ async function main() {
             const round = {index, startedAt: new Date().toISOString(), status: 'running'};
             report.startupRounds.push(round);
             let page;
+            let ownerMain;
+            let mainUrl;
+            let mainStderr = '';
             let browserUrl;
             const started = performance.now();
-            const lifetime = runBoundedProcess(wrapper, ['--remote-debugging-port=0'], {
-                timeoutMilliseconds: index === 19 ? 120_000 : 30_000,
-                description: `packaged round ${index + 1}`,
-                windowsHide: false,
-            });
+            const originalSpawn = childProcess.spawn;
+            let lifetime;
+            try {
+                if (index === 19) {
+                    // Observe this owned child's inspector endpoint without changing the shared runner's API.
+                    childProcess.spawn = (command, args, options) => {
+                        const child = originalSpawn(command, args, options);
+                        if (command === wrapper) {
+                            round.rootPid = child.pid;
+                            child.stderr.on('data', chunk => {
+                                mainStderr += chunk.toString();
+                                const match = mainStderr.match(
+                                    /Debugger listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/,
+                                );
+                                mainUrl = match?.[1];
+                            });
+                        }
+                        return child;
+                    };
+                    syncBuiltinESMExports();
+                }
+                lifetime = runBoundedProcess(wrapper, [
+                    '--remote-debugging-port=0',
+                    ...(index === 19 ? ['--inspect=127.0.0.1:0'] : []),
+                ], {
+                    timeoutMilliseconds: index === 19 ? 120_000 : 30_000,
+                    description: `packaged round ${index + 1}`,
+                    windowsHide: false,
+                });
+            } finally {
+                childProcess.spawn = originalSpawn;
+                syncBuiltinESMExports();
+            }
             // Attach immediately so a spawn/timeout failure cannot become an unhandled rejection.
             const exited = lifetime.then(result => ({result}), error => ({error}));
             try {
@@ -367,6 +401,9 @@ async function main() {
                 assert.equal(bootstrap.value.workspaceData.revision, reference.workspaceRevision);
                 report.appBuildId = bootstrap.value.appBuildId;
                 if (index === 19) {
+                    assert.ok(mainUrl, 'Missing owned Main inspector endpoint');
+                    ownerMain = await connect(mainUrl, false);
+                    assert.equal(await ownerMain.evaluate('process.pid'), round.rootPid);
                     round.phase = 'formal-request-samples';
                     const browser = await connect(browserUrl);
                     try {
@@ -384,7 +421,7 @@ async function main() {
                         'workspace.data-protection-projection',
                     ).projection;
                     assert.equal(report.initialProtection.configuration.kind, 'unconfigured');
-                    await measureRequests(page, report, reference);
+                    await measureRequests(page, ownerMain, report, reference);
                     report.finalProtection = formalValue(
                         await page.evaluate('window.courseFlow.queryDataProtection()'),
                         'workspace.data-protection-projection',
@@ -422,6 +459,7 @@ async function main() {
                     closeError = error;
                     round.closeError = error.stack ?? String(error);
                 } finally {
+                    ownerMain?.close();
                     page?.close();
                 }
                 const closed = await exited;
@@ -444,8 +482,14 @@ async function main() {
         }
         report.observations.commit = summarize(report.commitSamples.map(sample => sample.milliseconds), 200);
         const passed = Object.values(report.observations).every(observation => observation.passed);
-        report.status = passed ? 'measured-endpoints-pass-not-complete-g7' : 'measured-endpoint-budget-failed';
-        process.exitCode = passed ? 0 : 1;
+        const timedSamples = [...report.queryGroups.flatMap(group => group.samples), ...report.commitSamples];
+        report.focusComplete = timedSamples.every(sample => (
+            sample.beforeState.visibility === 'visible' && sample.afterState.visibility === 'visible'
+            && sample.beforeState.focus && sample.afterState.focus
+        )) && report.stateEvents.every(event => event.visibility === 'visible' && event.focus);
+        report.status = !report.focusComplete ? 'measured-foreground-evidence-incomplete'
+            : passed ? 'measured-endpoints-pass-not-complete-g7' : 'measured-endpoint-budget-failed';
+        process.exitCode = passed && report.focusComplete ? 0 : 1;
     } catch (error) {
         report.status = 'failed';
         report.error = error.stack ?? String(error);
@@ -465,11 +509,32 @@ async function main() {
 /**
  * Samples formal requests inside the Renderer, excluding the external measurement transport.
  * @param {object} page Connected packaged Renderer.
+ * @param {object} ownerMain Owned Main connection for foreground preparation outside request timing.
  * @param {object} report Report retaining each attempted request.
  * @param {object} reference Original formally seeded setup projection.
  * @return {Promise<void>} Completed baseline query and commit series.
  */
-async function measureRequests(page, report, reference) {
+async function measureRequests(page, ownerMain, report, reference) {
+    await page.evaluate(`(() => {
+        globalThis.__gaStateEvents = [];
+        const record = event => globalThis.__gaStateEvents.push({type: event.type,
+            visibility: document.visibilityState, focus: document.hasFocus(), epochMilliseconds: Date.now()});
+        window.addEventListener('focus', record);
+        window.addEventListener('blur', record);
+        document.addEventListener('visibilitychange', record);
+        return true;
+    })()`);
+    const foreground = async () => {
+        const state = await ownerMain.evaluate(`(() => {
+            const windows = process.mainModule.require('electron').BrowserWindow.getAllWindows();
+            if (windows.length !== 1) { throw new Error('Expected one packaged window'); }
+            windows[0].show();
+            windows[0].focus();
+            return {visible: windows[0].isVisible(), focused: windows[0].isFocused()};
+        })()`);
+        await page.send('Page.bringToFront');
+        return state;
+    };
     for (const requestedWindow of [null, {startDate: '2026-09-01', endDate: '2026-09-30'}]) {
         const group = {
             name: requestedWindow ? 'monthQuery' : 'defaultQuery',
@@ -478,16 +543,21 @@ async function measureRequests(page, report, reference) {
             samples: [],
         };
         report.queryGroups.push(group);
+        group.foregroundPreparation = await foreground();
         for (let index = 0; index < 110; index += 1) {
             const sample = await page.evaluate(`(async () => {
                 const requested = ${JSON.stringify(requestedWindow)};
+                const beforeState = {visibility: document.visibilityState, focus: document.hasFocus(),
+                    epochMilliseconds: performance.timeOrigin + performance.now()};
                 const started = performance.now();
                 const outcome = await window.courseFlow.queryPlan(requested ?? undefined);
                 const milliseconds = performance.now() - started;
-                if (!outcome.ok) { return {milliseconds, outcome}; }
+                const afterState = {visibility: document.visibilityState, focus: document.hasFocus(),
+                    epochMilliseconds: performance.timeOrigin + performance.now()};
+                if (!outcome.ok) { return {milliseconds, beforeState, afterState, outcome}; }
                 const value = outcome.value;
                 const projection = value.projection;
-                return {milliseconds, outcome: {ok: true, value: {
+                return {milliseconds, beforeState, afterState, outcome: {ok: true, value: {
                     kind: value.kind, appBuildId: value.appBuildId,
                     projection: {workspaceRevision: projection.workspaceRevision, term: projection.term.name,
                         evaluationContext: projection.evaluationContext},
@@ -502,6 +572,7 @@ async function measureRequests(page, report, reference) {
     }
     const task = reference.tasks.find(item => item.title === 'GA Task 000');
     assert.ok(task?.occurrenceId?.originalLogicalAnchor === 'once');
+    report.commitForegroundPreparation = await foreground();
     for (let index = 0; index < 40; index += 1) {
         const status = index % 2 === 0 ? 'completed' : 'pending';
         const sample = await page.evaluate(`(async () => {
@@ -517,10 +588,14 @@ async function measureRequests(page, report, reference) {
                 intent: {kind: 'plan.set-task-occurrence-status', intentSchemaVersion: 2,
                     payload: {taskSeriesId: task.taskSeriesId, originalLogicalAnchor: 'once', status: '${status}'}},
             };
+            const beforeState = {visibility: document.visibilityState, focus: document.hasFocus(),
+                epochMilliseconds: performance.timeOrigin + performance.now()};
             const started = performance.now();
             const outcome = await window.courseFlow.setTaskOccurrenceStatus(command);
             const milliseconds = performance.now() - started;
-            return {milliseconds, command, outcome};
+            const afterState = {visibility: document.visibilityState, focus: document.hasFocus(),
+                epochMilliseconds: performance.timeOrigin + performance.now()};
+            return {milliseconds, beforeState, afterState, command, outcome};
         })()`);
         report.commitSamples.push(sample);
         const value = formalValue(sample.outcome, 'workspace.command-outcome');
@@ -532,6 +607,7 @@ async function measureRequests(page, report, reference) {
     assert.equal(final.projection.tasks.find(item => item.taskSeriesId === task.taskSeriesId).status, 'pending');
     assert.equal(final.projection.tasks.length, 200);
     report.finalRevision = final.projection.workspaceRevision;
+    report.stateEvents = await page.evaluate('globalThis.__gaStateEvents');
 }
 
 if (process.argv.length === 3 && process.argv[2] === '--self-check') {

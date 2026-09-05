@@ -3,13 +3,16 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 
 import {
     initializeWorkspaceData,
+    openWorkspaceData,
     type SqliteDataStore,
 } from '../../src/data/sqlite-data-store';
 import { normalizeCreateCourseWithMeetingCommand } from '../../src/shared/workspace-course-contract';
@@ -18,7 +21,11 @@ import {
     buildPlanProjection,
     createPlanEvaluationContext,
 } from '../../src/shared/workspace-plan-contract';
-import { normalizeCreateTaskCommand, type TaskSchedule } from '../../src/shared/workspace-task-contract';
+import {
+    normalizeCreateTaskCommand,
+    normalizeSetTaskOccurrenceStatusCommand,
+    type TaskSchedule,
+} from '../../src/shared/workspace-task-contract';
 import { normalizeCreateTermCommand } from '../../src/shared/workspace-term-contract';
 
 const WORKSPACE_ID = '11111111-1111-4111-8111-111111111111';
@@ -295,4 +302,85 @@ test('TEST-WORKSPACE-001: PLAN source composes one revision and EvaluationContex
     assert.equal(afterQueuedCommit.workspaceRevision, '7');
     assert.equal(afterQueuedCommit.taskSources.length, 4);
     await store.close();
+});
+
+test('PLAN Task statements bind fresh rows within one read and never survive its DATA connection', async t => {
+    const root = createTempDataSlots(t);
+    const store = initializeWorkspaceData(root, WORKSPACE_ID);
+    const { courseId } = await createCurrentPlan(store);
+    const firstTask = await createTask(store, {
+        commandId: randomUUID(), followUpId: randomUUID(), courseId,
+        title: 'First task', size: 'small', expectedRevision: '2',
+        schedule: { kind: 'once', deadline: { kind: 'date-only', date: '2026-09-10' } },
+    });
+    const secondTask = await createTask(store, {
+        commandId: randomUUID(), followUpId: randomUUID(), courseId,
+        title: 'Second task', size: 'large', expectedRevision: '3',
+        schedule: { kind: 'once', deadline: { kind: 'date-only', date: '2026-09-11' } },
+    });
+    const counts: Array<{ prepared: number; distinct: number }> = [];
+    const originalPrepare = DatabaseSync.prototype.prepare;
+    const read = (currentStore: SqliteDataStore) => {
+        const prepared: string[] = [];
+        const prepare = t.mock.method(DatabaseSync.prototype, 'prepare', function (this: DatabaseSync, sql: string) {
+            if ((sql.includes('FROM task_series') && sql.includes('task_series.entity_version'))
+                || /FROM task_(segments|occurrence_overrides|occurrence_states)\s+WHERE task_series_id = \?/.test(
+                    sql,
+                )) {
+                prepared.push(sql);
+            }
+            return originalPrepare.call(this, sql);
+        });
+        try {
+            return currentStore.readPlanProjectionSource();
+        }
+        finally {
+            prepare.mock.restore();
+            counts.push({ prepared: prepared.length, distinct: new Set(prepared).size });
+        }
+    };
+    const initial = read(store);
+    assert.equal(initial.workspaceRevision, '4');
+    assert.deepEqual(initial.taskSources.map(task => task.occurrence.title).sort(), ['First task', 'Second task']);
+    const completed = await store.commit(normalizeSetTaskOccurrenceStatusCommand({
+        commandId: randomUUID(), followUpId: randomUUID(),
+        expectedRevision: '4', expectedPlanVersion: '4', expectedTaskSeriesVersion: '1',
+        intent: {
+            kind: 'plan.set-task-occurrence-status', intentSchemaVersion: 2,
+            payload: { taskSeriesId: firstTask, originalLogicalAnchor: 'once', status: 'completed' },
+        },
+    }));
+    assert.equal(completed.ok, true);
+    const afterCommit = read(store);
+    assert.equal(afterCommit.workspaceRevision, '5');
+    assert.equal(afterCommit.taskSources.find(task => (
+        task.occurrence.occurrenceId.taskSeriesId === firstTask
+    ))?.occurrence.status, 'completed');
+    assert.equal(afterCommit.taskSources.find(task => (
+        task.occurrence.occurrenceId.taskSeriesId === secondTask
+    ))?.occurrence.status, 'pending');
+
+    const otherRoot = createTempDataSlots(t);
+    const otherStore = initializeWorkspaceData(otherRoot, WORKSPACE_ID);
+    const otherPlan = await createCurrentPlan(otherStore);
+    await createTask(otherStore, {
+        commandId: randomUUID(), followUpId: randomUUID(), courseId: otherPlan.courseId,
+        title: 'Other DATA task', size: 'small', expectedRevision: '2',
+        schedule: { kind: 'once', deadline: { kind: 'tba' } },
+    });
+    const other = read(otherStore);
+    assert.equal(other.workspaceRevision, '3');
+    assert.deepEqual(other.taskSources.map(task => task.occurrence.title), ['Other DATA task']);
+    await otherStore.close();
+    await store.close();
+    const reopened = openWorkspaceData(root);
+    assert.equal(reopened.kind, 'ready');
+    if (reopened.kind !== 'ready') {
+        throw new Error('Expected reopened DATA');
+    }
+    assert.deepEqual(read(reopened.store), afterCommit);
+    await reopened.store.close();
+    t.diagnostic(`Task SQL prepare counts by PLAN read: ${JSON.stringify(counts)}`);
+    assert.ok(counts.every(count => count.distinct > 0 && count.prepared === count.distinct),
+        'One PLAN read must prepare each Task SQL once across its Task series');
 });

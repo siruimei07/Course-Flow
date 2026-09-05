@@ -55,6 +55,11 @@ WorkspaceId、前后 revision 和备份水位；不得删除慢样本、测后�
 大于等于 100 个样本才报告 p99；少于 100 个时记为未报告，没有 p99 门槛。
 后台状态 `pending` 只证明尚有备份需求，不能单独证明计时区间内发生 CPU/I/O 重叠。
 
+`scripts/measure-ga-packaged.mjs` 在请求组开始前经 Main 将唯一测试窗口置前；该准备不计入请求耗时。
+请求前后的可见性/焦点及窗口事件留在原始报告中。失焦样本仍保留原始耗时与预算判定，
+但报告不得以缺少前台证据的分布充当完整前台参考；不按耗时或焦点重试、筛选样本。
+Main inspector 仅用于最后一个进程的同步置前准备，不暂停应用，不改变批准的端点、样本数或预算。
+
 ## 4. 可复用的 host kernel 工具
 
 入口：[scripts/measure-ga-reference.mjs](../../scripts/measure-ga-reference.mjs)。
@@ -99,6 +104,10 @@ reopen 保留同一进程的模块/OS 缓存且不包含后续 bootstrap，不�
 |---|---|---|
 | Windows | 2026-09-04：ROG Strix G16 G615LP；Windows 11 Home China 25H2 `26200.9168` / x64；Core Ultra 9 275HX、24 logical processors、33,693,310,976 bytes RAM；E 盘 Samsung 990 PRO 2TB / NVMe / NTFS，约 1.15 TB 空闲；当前 Razer Cortex Power Plan；host Node 24.19.0、SQLite 3.53.3 | 每次记录电源/负载变化；packaged Electron/Node/SQLite、显示/DPR与进程树资源。只读设备原始记录为工作区 `_scratch/wp-ga-01-device-windows.json` |
 | macOS | [BACKLOG 原生复验台账](./BACKLOG.md)：MacBook Air `Mac15,12` / Apple M3 / 16 GB；macOS 26.5.2 build 25F84 / arm64 | 在真实设备刷新上述字段、存储/文件系统、电源与负载；保存同一最终源码的原始数组及 packaged runtime 身份，现有 UI 复验不提供这些数值 |
+
+2026-09-05 的 `23313c2` 前台实测使用 Silent 电源计划，未修改系统计划或停止用户进程；
+同期低频整机忙碌率为 18.3%–28.5%。旧 Razer Cortex 档案保留其日期；不能把事后负载快照
+当作早先失败轮的同期负载，也不能把前台普通测量的负载套到其后的后台实验。
 
 本轮时间格式化与 Windows SQLite 路径边界修复属于新的源码状态。
 旧 `b39124d3d83e887ee6a142c416a41654c304ab57` 的 macOS 原生验收继续保留其真实身份；

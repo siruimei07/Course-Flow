@@ -882,6 +882,31 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   `r7-prereq-typecheck-retention-yield.log`、`r7-prereq-test-retention-yield.log`。
 - 修复后的 clean package 与原预算复测尚未完成；Mac 须使用最终同源包。G-A/UI/RF-02 仍为 Verification。
 
+`WP-GA-01` 调度修复后的正式打包复测（2026-09-05）：
+
+- clean `23313c28003cfdf80a96ba239a8c6669d391fbd4` package 成功。首次普通查询 p95
+  129.8/131.6 ms 失败，原始 `_scratch/ga-pkg-23313c2` 保留；该轮缺少逐请求焦点/同期负载，
+  不推断唯一原因。后续状态诊断发生实际失焦，记录独立保留，不改标签作通过证据。
+- 用户提供前台测量窗口后，同包的固定完整普通采样通过：启动/默认查询/月查询/提交 p95
+  669.725/76.4/77.3/4.0 ms，N=20/100/100/40；200 次查询前后均 visible/focused，
+  请求期间无焦点变化，20 次应用正常关闭。原始 `_scratch/ga-pkg-23313c2-foreground`；
+  Silent 电源计划保持不变，低频整机忙碌率 18.3%–28.5%，不改写旧 Razer Cortex 档案。
+- v2 同观测对照与真实后台采样完成，所有请求前后 visible/focused、0 Debugger.paused。
+  对照 p95 80.5/105.2/5.1 ms；后台各 20 个严格同步重叠样本，p95 100.6/98.6/17.7 ms，
+  增量 20.1/-6.6/12.6 ms，最终 current/水位 393。9 个非完整包含尝试保留，没有重采。
+  月份对照仍超原 100 ms 门槛，整体继续 FAIL；此组没有同期负载，不能作环境归因。
+  原始 `_scratch/ga-backup-control-23313c2-v2`、`ga-backup-overlap-23313c2-v2`。
+- CPU profile 已定位每次 Task 读取重复准备四条 SQL，现已只在单次 PLAN 读取作用域复用
+  Statement，保留新鲜参数/结果、事务及全部校验。不同 Task、提交后读取、另一 DATA 与关闭重开
+  的真实回归保持正确，准备次数 RED 8/8/4/8 → GREEN 4/4/4/4；相关 DATA/PLAN 190/190。
+  typecheck PASS；官方必需浏览器全套 759 = 758 pass / 0 fail / 1 skip，49778.2448 ms，
+  原始日志 `_scratch/task-reader-red.log`、`task-reader-green.log`、`task-reader-data-green.log`、
+  `r7-prereq-typecheck-task-statements.log`、`r7-prereq-test-task-statements.log`。
+  普通 packaged driver 同步置前/逐请求状态观察，原样保留失焦及慢样本。
+  最终同源 package 与原预算通过前不关闭 G7。
+  23313c2 的单轮恢复 v2 探针验证了 14 个实际内部阶段，未计入最终源码的正常 20 轮。
+- G-A/UI/RF-02 保持 Verification，R7 尚未领取。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
