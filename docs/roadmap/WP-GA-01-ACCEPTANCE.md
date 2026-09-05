@@ -42,8 +42,8 @@ Windows 日志保存在仓库外工作区 `_scratch/`：
 | G3 语义 | 已交付 A-only 内核 PASS | `meeting-occurrence-store` 的稳定实例/规则分段，`holiday-range-store`/`weekly-task-store` 的假期边界，`meeting-time` 的跨日/DST，`workspace-plan-contract` 的未知 deadline、排序、同 revision 与跨视图。Task 新分类按 G1 已确认范围留到后续工作包；Attendance/Grade 公式不属于此内部剖面 |
 | G4 恢复 | A-only failpoint 内核 PASS | `sqlite-data-store` 的真实子进程提交中断；`durable-backup` 发布/保留失败；`restore-session` 的 checkpoint/forward/rollback/receipt；`schema` 与 `migration-rollback-handoff` 的迁移安全副本、绑定版本、重启/冲突。Library-present 完整闭包属于 R11 |
 | G5 隔离 | 已交付 A-only 内核 PASS | 本次补强 `tests/workspace-protection.test.ts`：真实备份 failpoint 后保持 PROTECT degraded，继续提交 Term、Course/Meeting、Task，查询 PLAN，并重启比较完整投影；6/6 定向与完整套件通过。`workspace-lifecycle`/`workspace-plan` 继续覆盖未交付外围的 unavailable capability/projection |
-| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 754 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
-| G7 性能基线 | 尚未通过 | 参考规模与 p95 预算已批准并版本化；最终 Windows host 内核 query p95 为 45.28/48.93 ms，长路径备份已恢复；仍缺双平台 packaged 端点、真实后台重叠及适用 ADR 测量，见第 5 节 |
+| G6 产品环境 | 部分通过，尚未全门通过 | 既有同源双平台 package/smoke、源边界及焦点/ARIA/布局通过；最新默认并行全套 756 项无失败。人工、实际禁网／失败旅程、实际权限及自有 artifact 的范围须分别保留，见第 4 节 |
+| G7 性能基线 | 尚未通过 | 参考规模与 p95 预算已批准并版本化；最终 Windows packaged 启动/查询/提交已达标（查询 p95 95.00/98.10 ms），Main/Renderer 及 host ADR 部分观测已归档；仍缺 Mac 同源、真实后台重叠及剩余适用 ADR 运行时测量，见第 5 节 |
 
 G4 的精确旧/新/兼容 build 独立 package 和跨进程回退来自既有 R6 台账；本轮未重跑该独立 runner。
 `tests/scripts/development-build-fixture.test.ts` 只核对 descriptor/参数，不能冒充独立制品执行。
@@ -277,13 +277,49 @@ host kernel 测量：每窗口 100 次的默认/月窗口 p95 为 103.66/114.00 
 `wp-ga-01-measure-df9841e.log`。该源码随后独立完成 Windows package/smoke，身份见第 1 节；
 最终证据归档提交只修改文档，不把文档提交身份写成实测制品身份。
 
+### R7 前置收口的最终 Windows 打包结果
+
+干净源码 `e2ea721f68530a42df5afdda8893156718c7d001` 的 `pnpm package` 与隔离 packaged smoke
+均 exit 0，AppBuildId 精确匹配，SQLite 3.53.1、verified-local。20 轮均可见、有焦点、正常关闭；
+使用批准的 v1 参考输入、真实 packaged 时钟与正式 preload/IPC 端点，revision 256 → 296。
+启动包括发现调试端点、置前、PLAN 可操作与双 animation-frame 等待，不扣除开销。
+
+| 正式端点 | N | p50 ms | p95 ms | 预算 ms | 结果 |
+|---|---:|---:|---:|---:|---|
+| process-cold 启动 | 20 | 656.30 | 693.55 | 3000 | PASS |
+| 默认 PLAN | 100 | 78.40 | 95.00 | 100 | PASS |
+| 9 月窗口 PLAN | 100 | 91.30 | 98.10 | 100 | PASS |
+| Task 正式提交 | 40 | 3.50 | 4.90 | 200 | PASS |
+
+原始数组在 `_scratch/ga-pkg-e2ea721/packaged-measurements.json`。查询 p99 为 95.80/101.80 ms，
+月窗口最大 103.10 ms；p99 没有批准阈值。p95 已接近 100 ms，不隐去慢样本或重采挑选更好结果。
+此前 `4da47df` 的查询 p95 163.30/205.20 ms 失败与 CPU profile 均保留；改动及回归见 Backlog。
+
+同源码的独立运行时观察在 `_scratch/ga-observe-e2ea721-sync/packaged-observations.json`，exit 0。
+每窗口 20 条正式请求仅作诊断；Main 启用 10 ms 原生 event-loop histogram，Renderer 保存全部 10 ms
+timer 回调超期样本，app.getAppMetrics 保留自有进程 CPU/内存前后原值。Main histogram p95
+31.72/38.17 ms 包含分辨率，不能与 Renderer 扣除间隔后的超期量直接比较。该组含 inspector/观察开销，
+首组资源还可能包含 GUI 启动工作，不并入上表，也不作每请求 CPU 或同时进程树峰值归因。
+首次观察脚本的同步 Main awaitPromise 错误保留在 `_scratch/ga-observe-e2ea721`，没有冒充产品失败。
+
+同源码 host ADR 实验完成 5239 次 owner 观测、2773 个 hook，意外失败 0；20 次恢复均成功、
+unconfigured/healthy 且无旧队列调度，21 次显式授权形成不同的新 BackupSet 并追平 current，rollback 保留原配置。
+21 次 WAL checkpoint 后均为 0 bytes；host p95：backup copy 40.01 ms、integrity 1.13 ms、FK 0.29 ms、
+WAL checkpoint 3.91 ms、restore resume/reopen 743.02 ms。原始/派生结果为
+`_scratch/r7-prereq-adr-measure/raw-win32-e2ea721.json`、`derived-win32-e2ea721.json`。
+这是 host 内部阶段证据；不得改写成 packaged utility、迁移、真实掉电、精确资源峰值或另一平台结果。
+
+Windows 四个已测端点通过不等于完整 G7：Mac 同源结果、双平台实际备份重叠及其增量预算，
+Workspace utility event-loop 和尚缺的适用 ADR 打包内部阶段观测继续未测。
+用户会在 Mac 运行[交接命令](./WP-GA-01-HANDOFF.md)，本次没有代填 Mac 数据。
+
 ## 6. 生命周期与下一步
 
 `WP-RF-01` 的 Windows typecheck/test/package/smoke 已齐，因此关闭为 Done。
 UI 实现已完成而当前制品验证仍在进行，`WP-UI-01` 与 `WP-GA-01` 登记 Verification；
 `WP-RF-02` 保持 Verification。当前尚不能领取以 G-A Done 为硬依赖的 R7。
 
-G1 的验收口径已获用户确认，默认并行测试阻断已修复并完整通过。剩余动作集中为 G6 的当前 Windows 人工矩阵与禁网/失败旅程；
-G7 的双平台 packaged 启动/IPC、实际后台重叠及适用 ADR 测量。Mac 已完成的 UI 验收继续保留，
+G1 的验收口径已获用户确认，默认并行测试、恢复授权及打包查询预算阻断均已修复。剩余动作集中为 G6 的当前 Windows 人工矩阵与实际禁网旅程；
+G7 的 Mac 同源 packaged 样本、双平台实际后台重叠及剩余适用 ADR 运行时测量。Mac 已完成的 UI 验收继续保留，
 新增内核代码仅需补其相关自动化和性能证据。
 只有这些项目逐一满足后，才同步关闭 UI/RF/GA；不再重做已实现的两个窗口布局切片。

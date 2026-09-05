@@ -3,6 +3,12 @@
 状态与已完成证据以 [Backlog](./BACKLOG.md) 和 [验收记录](./WP-GA-01-ACCEPTANCE.md) 为准。
 G1 已由用户确认按已交付 A-only 模型验收；新模型另行登记。R7 必须等 `WP-GA-01` 为 Done。
 
+本次已验证源码为 `e2ea721f68530a42df5afdda8893156718c7d001`；后续证据归档提交不改变实测制品身份。
+工作区 `_scratch/r7-prereq-handoff/` 提供 Git bundle 与 `verify-macos.sh`，无需推送远程：
+把该目录复制到 Mac 后执行 `bash verify-macos.sh`。它在 `/private/tmp` 创建独立 checkout，
+锁定上述源码，保留安装/类型检查/测试/打包/正式样本、独立运行时观察及 host ADR 的输出。
+任一步失败即停止；成功也不关闭仍缺真实备份重叠和内部运行时证据的完整 G7。
+
 ## 1. macOS 打包性能验证
 
 用户已确认会在 Mac 上执行。使用与 Windows 验证相同的源码提交，在仓库根目录执行；
@@ -18,7 +24,7 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 COURSEFLOW_REQUIRE_BROWSER=1 pnpm test
 pnpm package
-gaParent="$(mktemp -d /tmp/courseflow-ga.XXXXXX)"
+gaParent="$(mktemp -d /private/tmp/courseflow-ga.XXXXXX)"
 node scripts/measure-ga-packaged.mjs --output "$gaParent/result"
 )
 ```

@@ -853,6 +853,19 @@ macOS 最终 clean 制品原生复验（2026-09-04，本提交）：
   日志 `_scratch/r7-prereq-task-zone-20260905` 与 `_scratch/r7-prereq-test-task-zone.log`。
   新干净 package 性能结果另记，不凭定向回归宣布查询达标。
 
+`WP-GA-01` 最终 Windows 性能与 Mac 交接（2026-09-04，本提交）：
+
+- clean `e2ea721f68530a42df5afdda8893156718c7d001` package/隔离 smoke 均 exit 0；完整正常 packaged
+  启动 20 次 p95 693.55 ms、默认/月窗口查询各 100 次 p95 95.00/98.10 ms、提交 40 次 p95 4.90 ms，
+  均满足已批准预算。原始数组 `_scratch/ga-pkg-e2ea721`；保留临界值及全部此前失败。
+- 同包独立 Main/Renderer loop 与进程资源观察通过；同源码 host ADR 5239 次观测、0 意外 owner 失败，
+  20 次恢复失效授权、21 个新 BackupSet/current、rollback 保留原配置均通过。两类观测的计时与边界
+  见 [G-A 验收记录](./WP-GA-01-ACCEPTANCE.md)，不将 host/诊断数据混入正常 packaged 预算。
+- 用户会在 Mac 执行本次便携 Git bundle 的验证脚本，锁定同一 e2ea721 源码；命令和所需回传文件
+  见 [交接说明](./WP-GA-01-HANDOFF.md)。本提交只归档证据，不能取代实测 AppBuildId。
+- `WP-GA-01`、`WP-UI-01`、`WP-RF-02` 保持 Verification，R7 尚未领取。
+  仍缺 Windows 真人/实际禁网、Mac 同源性能、真实后台备份重叠和剩余适用 ADR 打包运行时观测。
+
 ## 7. 拆包与变更规则
 
 - 工作包过大时可以拆成带稳定后缀的子包，但父包在全部子包 `Done` 前不得 `Done`，且 Requirement/TEST 主所有权必须保持唯一。
